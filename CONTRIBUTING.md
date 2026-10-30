@@ -4,7 +4,7 @@ Thank you for helping improve `cdid`.
 
 ## Ask a question
 
-Use [Discussions](https://github.com/dvbn/cdid/discussions) for installation help, examples and questions about assumptions or method choices. Include the package version and a small example when useful.
+Use [Issues](https://github.com/dvbn/cdid/issues) for installation help, examples and questions about assumptions or method choices. Include the package version and a small example when useful.
 
 ## Report a bug
 
