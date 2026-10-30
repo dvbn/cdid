@@ -113,6 +113,10 @@ Use [Discussions](https://github.com/dvbn/cdid/discussions) for questions about 
 
 See [Contributing](https://github.com/dvbn/cdid/blob/main/CONTRIBUTING.md) to suggest a change.
 
+## Contributing
+
+Have spare Codex subscription capacity and want to support cdid? Use your own account to complete a [scoped contributor task](contributing/TASKS.md), then return your code, checks or findings for review. We provide [public instructions](AGENTS.md) and a [reusable skill](.agents/skills/cdid-contribution/SKILL.md). You choose your time and usage budget and keep your credentials private. Contributions without coding agents are equally welcome. See [Contributing](CONTRIBUTING.md) to get started.
+
 ## Support the project
 
 If cdid is useful to your work, you can [buy me a coffee](https://buymeacoffee.com/dvbn).
