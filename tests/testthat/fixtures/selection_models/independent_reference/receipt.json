@@ -1,0 +1,32 @@
+{
+  "status": "FROZEN_INDEPENDENT_REFERENCE_READY",
+  "timestamp_utc": "2026-10-20T20:51:50.394505+00:00",
+  "independence": "Derived and frozen before reading production date-model outputs or source.",
+  "scope": "Three explicit fixed-atom weighted-law fits and original-unit finite derivatives only; no RNG, DGP draws, Monte Carlo, package code or downstream outcome fits.",
+  "records_per_case": 32,
+  "cases": [
+    "within_cohort",
+    "across_cohorts",
+    "date_only"
+  ],
+  "max_derivative_error": 5.7729838687237134e-08,
+  "derivative_tolerance": 3e-07,
+  "source_hashes": {
+    "AGENTS.md": "410efcc9ed27bb240b8b622a831cfe6387b266983c77f51eae3de18d87a26a57",
+    "plan/DECISIONS.md": "daa157f98005a5ba1fcc6b123f025edbf05149244bd27b6b15eda564fe221f9a",
+    "docs/theory/cp04_logit_if.tex": "4bdaec14cd8df3f4423c112701502de16c36302340102fbfcd5acffd8147193b",
+    "docs/theory/cp04_retained_fitting_universes.tex": "2a062fa1289f7372146983cd5c06d4ffa293f4acff3f4aaebad436b7fcd18b46"
+  },
+  "output_hashes": {
+    "REFERENCE.md": "cee068f3edf4675e5ed37372fbc24f2327138e844f96f879b7049c6a85bacc78",
+    "across_cohorts_if.csv": "085eb4b173f49fac6c714fbafb51a2eaf4cfefa3c8299c9baa793cc4b5a9cc13",
+    "atoms.csv": "11cbc9c7fc2a3e90335a83c52e1af72164215a48fd5e1fe41a60790b2fc21bfe",
+    "date_only_if.csv": "60f1327dcf0eaf885d866a30865abb3e3ff162e892b345dcc21e49ce627bbecb",
+    "reference.py": "c4e1c11fa463575ffae5b166e979a64603e28e3f7b0a9f5ef080c9aa0f40cc67",
+    "results.json": "f59507a8615d1b0cdb1e311d385d6fb3a872bcd6116b3bbbfdb35fcbae447c77",
+    "stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout.txt": "073d001a98112b9bc0934a96e05b3d0c5be26f83529aecfc341459b5aecd10e0",
+    "within_cohort_if.csv": "b41c0b9081a83c4e985b7f896af74f25947ab51e00ef858bce3c8b9fb292bb97"
+  },
+  "limitations": "Finite deterministic weighted-functional checks, not identification, assumption validation for arbitrary data, asymptotic or coverage evidence."
+}

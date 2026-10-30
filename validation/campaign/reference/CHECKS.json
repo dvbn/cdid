@@ -1,0 +1,21 @@
+{
+  "no_RNG_or_fit": true,
+  "checks": [
+    {
+      "family": "adjacent",
+      "finite_states": 64,
+      "conditional_pair_change_equalities": 32,
+      "total_mass": "1",
+      "minimum_pattern_probability": "1/10"
+    },
+    {
+      "family": "all_pairs",
+      "finite_states": 160,
+      "conditional_pair_change_equalities": 80,
+      "total_mass": "1",
+      "minimum_pattern_probability": "1/25"
+    }
+  ],
+  "cells": 24,
+  "limitation": "Finite first-moment enumeration for proposed primary designs, not a code/inference/Monte-Carlo validity claim."
+}

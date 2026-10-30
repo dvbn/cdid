@@ -1,0 +1,23 @@
+{
+  "scope": "eight prespecified accepted fixtures evaluated at actual binary64 observed-level differences",
+  "source_generator_sha256": "7cb9f66c9ed6d250c734796508c18eedee6d8aca328614ed6751e20190c98282",
+  "source_atoms_sha256": "f6869b76895e3c0c91b8d7152bf38f6dbff65ab5400f033c07730c378a03d8d1",
+  "accepted_inputs_mutated": false,
+  "original_Delta_reference_replaced": false,
+  "main_generator_calls": 0,
+  "finite_difference_calls": 0,
+  "RNG_draws": 0,
+  "production_imports_or_fits": 0,
+  "functional_evaluations": 8,
+  "compute_seconds": 0.0877260830020532,
+  "numpy": "2.4.4",
+  "dtype": "binary128 with binary64 atom inputs and binary64 observed-level subtraction",
+  "longdouble_epsilon": "1.9259299443872358530559779425849273e-34",
+  "maximum_observed_input_difference": 1.00000003833145e-08,
+  "rows": 9514,
+  "values_sha256": "fde063b70d13df454b0581bc87885e23e3a986a731a5bf714704957217414d97",
+  "accepted_reference_directory": "validation/reference/dr_finite_v1",
+  "original_reference_targets_unchanged": true,
+  "reviewer_wrapper_attempt1_failure": "cohort-keyed tau/eta dictionaries required explicit column stacking; first partial F1 evaluation retained, no scientific change",
+  "total_functional_calls_including_partial_wrapper_failure": 9
+}

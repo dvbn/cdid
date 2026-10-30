@@ -1,0 +1,62 @@
+{
+  "status": "FROZEN_PAIR_POOLING_ADDENDUM_AND_MISSING_SEPARATE_DATE_BRANCH_READY",
+  "timestamp_utc": "2026-10-20T21:12:44.723843+00:00",
+  "scope": "Pooled direct-pair score and influence functions, with the separate-date finite branch, on fixed inputs.",
+  "records_per_case": 32,
+  "pair_cases": 9,
+  "pair_modes": [
+    "separate",
+    "within_cohort",
+    "across_cohorts"
+  ],
+  "pair_universes": [
+    "F",
+    "B",
+    "A"
+  ],
+  "supplemental_date_cases": 1,
+  "max_pair_derivative_error": 9.21868874570464e-08,
+  "max_separate_date_derivative_error": 9.392843480782176e-08,
+  "unchanged_derivative_tolerance": 3e-07,
+  "unchanged_root_tolerance": 2e-11,
+  "original_date_reference_all_hashes_unchanged": true,
+  "retained_prediction_failure": "initial_A_covariance_prediction_failure.txt: constructed A law has pairwise-independent pair indicators; truthful zero covariance-copy loss now explicitly checked under unchanged atoms/models/tolerances.",
+  "source_hashes": {
+    "AGENTS.md": "a38a6e137655964e690e3073d64806619819a109f85a0e53fa1baaeb5956d41a",
+    "plan/DECISIONS.md": "355ce5ba66a9f341859af6942cf77c171209f01589d867a10563daeeaf47dde7",
+    "docs/theory/cp04_logit_if.tex": "4bdaec14cd8df3f4423c112701502de16c36302340102fbfcd5acffd8147193b",
+    "docs/theory/cp04_retained_fitting_universes.tex": "2a062fa1289f7372146983cd5c06d4ffa293f4acff3f4aaebad436b7fcd18b46",
+    ".runtime/cp06-date-model/independent_reference/reference.py": "c4e1c11fa463575ffae5b166e979a64603e28e3f7b0a9f5ef080c9aa0f40cc67",
+    ".runtime/cp06-date-model/independent_reference/receipt.json": "464bb190b35c0e5b574d02132fd2c520bdb012328e035cb48c9c3b92ffa700ce"
+  },
+  "limitations": [
+    "Fixed constructed weighted-law functional evidence, not MC/DGP or coverage claim.",
+    "History-dependent fixed weights explicitly encode P; no general survey-design claim.",
+    "F pooling correctness does not imply A/B pooling correctness in general; this specific table constructs all nine correctly.",
+    "No downstream outcome/GMM, package execution, installation or compilation evidence."
+  ],
+  "output_hashes": {
+    "PAIR_POOLING_ADDENDUM.md": "aaf432d276ecc207ed112da51e189233f422c732e705a1ecf9ec1ef09b784e35",
+    "across_cohorts_A_if.csv": "e4341a98f1cc062fde16d1be21146b9744f7c4a91dd93187895e8ee32c030c0b",
+    "across_cohorts_B_if.csv": "a29ee078a30fc4d97b9a814b0e648c74f10554686e75422f0b3f1c3743674725",
+    "across_cohorts_F_if.csv": "701712e6669524b62322b94ab0ec18520b98e890cb5213891f77eacaec249b51",
+    "atoms.csv": "db742216b3d5cd29f56afe7dde5e7c2427bb03576f43b0d3803f564bd25f383c",
+    "initial_A_covariance_prediction_failure.txt": "83784f1641d642ccdafd54fff59846780239cff8096783daccca4c72de47f79a",
+    "reference.py": "395a1c79b96778067bef5d67253f7081d7909551a42f6f14fda7c3257b2b8ba5",
+    "results.json": "8f03dd10ff133185b36bc971243de5b8d601b01a0e98a3b6ce190cb8328951ad",
+    "separate_A_if.csv": "abf8d20616a75ce3748673b3e422eec3752ac349cbd7785b922c117684899ea0",
+    "separate_B_if.csv": "7a10e682306c899f95ff0177426dfb8b25fe12cda89944d03734910a25b610bd",
+    "separate_F_if.csv": "9720ae0d78f2677e799fde81e6c123af35cb96d31acbe51c042f6e04f2ee3576",
+    "separate_date_F_if.csv": "3ff036eb9a7c3aa3b28a07189067f7553bfa9862e7051086d3665cdc81411b10",
+    "separate_date_atoms.csv": "9cd6628756fabff2b4638af6748987f7874c25686ebde892b274b9a6d1ab5e13",
+    "separate_date_reference.py": "251bc0580f6b7d300894254ec317c41efbcd9eab364a80022572a54007deff97",
+    "separate_date_results.json": "4b27596fbfc7a15a9a2d704f88caf7db919f3f627c3d0124678aba519564f538",
+    "separate_date_stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "separate_date_stdout.txt": "72268eceeb59bc07c492f5c25cf876e3b3135231883c40484ac6cdc29d4c46b9",
+    "stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout.txt": "b8e5e84e0755ba076c636f7733c26e20889102b897a1b9f8da706f7d12270fdc",
+    "within_cohort_A_if.csv": "cde749f08a57440b1fcb713ca5e1bb2e67204b115d7b166e739165e16292836f",
+    "within_cohort_B_if.csv": "2590540db667e1eb539d85c77c01c69bf55f03a29c55f55ffc5ea99e3520190d",
+    "within_cohort_F_if.csv": "a165064137da37fd291cb95b591905c9198143a694fa3cd260866322e21beaba"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "calibration_draws": 0,
+  "counts": {
+    "exact_checks": 91,
+    "fits": 0,
+    "outer_calibration_draws": 0,
+    "rejecting_controls": 17,
+    "status": "PASS"
+  },
+  "fits": 0,
+  "manifest_sha256": "52ebb78d0823a73f159719246b5c57f53648ec6741aa87646bdb579bcf7dd930",
+  "output_sha256": "ca8ed34893a11d55c94f64741bdef5ecb448b4aae0358ae3004a1f28b84b22a6",
+  "status": "PASS"
+}

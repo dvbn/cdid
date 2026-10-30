@@ -1,0 +1,196 @@
+{
+  "FD": {
+    "epsilon": "9.9999999999999999999999999999999993e-07",
+    "stencil": "two-point symmetric full refit, all N original identities",
+    "target": "1.0000000000000000000000000000000000e-08"
+  },
+  "M": "H(c*w*I_k*a_k*h)",
+  "N": 36,
+  "OR_design": "local intercept per deduplicated block iff intercept; shared index-duration slope",
+  "OR_root": "sum_unique_b sum_K H(c*w*I_k*a_k*D_b*(jhat_ke-D_b theta))=0",
+  "Y": "H(c*w*I_k*a_k*jhat_ke*h)",
+  "a_root": "a_k=H(c*w*I_k*A)/H(c*w*I_k)",
+  "actual_cells": [
+    [
+      0,
+      0
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      2005,
+      0
+    ],
+    [
+      2005,
+      1
+    ],
+    [
+      2005,
+      2
+    ],
+    [
+      2010,
+      0
+    ],
+    [
+      2010,
+      1
+    ],
+    [
+      2010,
+      2
+    ]
+  ],
+  "actual_prediction": "J_ke(X)lambda on EVERY cell roster row, observed and missing alike",
+  "actual_root": "sum_observed_pairs c_i*w_i*J_ke(X_i)*(Delta_ie-J_ke(X_i)lambda)=0; joint by declared pool",
+  "analytic_rows": {
+    "M_h": "w I a h + H(w I h) xi_a + H(w I a dh)",
+    "Y_h": "w I a j h + H(w I j h) xi_a + H(w I a h dj) + H(w I a j dh)",
+    "a": "w I_k (A-a_k)/H(w I_k)",
+    "gamma": "J_gamma^-1[unit score + sum_k H(w I_k (I[k=g]-p) X) xi_a_k]",
+    "lambda": "G_j^-1 sum_active_cells w I_k S_e J_ke (Delta_e-j_ke)",
+    "ratio": "(xi_numerator-ratio*xi_denominator)/denominator",
+    "theta": "G_OR^-1 sum_bk[unit w I a D(j-b) + H(w I D(j-b))xi_a + H(w I a D dj)]"
+  },
+  "calendar": [
+    2000,
+    2002,
+    2005,
+    2010
+  ],
+  "caseweight_convention": "H_N^c=N^-1 sum_i c_i f_i, N fixed; psi=N*d/dc_i at c=1",
+  "command": "/opt/tools/python-venv/bin/python3 reference/generate_reference.py",
+  "core": "phi_core=(raw nA/N)*psi_F on every original F identity, normalized by raw nA",
+  "covariance": "N^-2 sum_cluster (sum_original_units psi_i)(sum_original_units psi_i)prime; no small sample factor",
+  "fixed_projection": "D=[[1,0],[0,1],[1,1],[1,-1]], W=diag(1,2,3,4), L=(Dprime W D)^-1 Dprime W",
+  "homogeneity": "M/Y and numerator/denominator raw rows degree ONE; normalized quantities degree ZERO",
+  "imputation_design": "local cohort-pair intercept iff intercept; separate/within_cohort/across_cohorts slopes",
+  "index_durations": [
+    1,
+    1,
+    2
+  ],
+  "input_sha256": {
+    "ACCEPTED_OLD_REFERENCE_LIMITS.md": "f37cb313f087eb07393111d41d0b7651a32fafc19f8fb528a83ccd4262657014",
+    "DR_SPEC.md": "d7cbc4e648f1819ea3257072a0720e3367e0f411cd43a4a16d458abb39d29d7a",
+    "TASK_RULES.md": "34820a85f98356e34d24f7e3a46e9c4db0d7fd0e916c87d0ca6c247ea4769dcf",
+    "TWO_AXIS_IMPLEMENTATION_DECISIONS.md": "74f65448ab9dd165d4526696cebf1159c8f98e03fbb8f71a14f86c7b49a62389",
+    "accepted_cp07_if_and_asymptotics_excerpt.tex": "5605e16b1f2696abb5582576b98f9fa9da32cde84b902ca2b499c921c9cddcf8",
+    "accepted_weighted_rate_excerpt.R": "7804ae26a0d00b7363b2fd616742eb99c936acb752329be7bc3611a86be715f5",
+    "atoms.csv": "bd67374134a87db27fb229d20528268c4146b5eda340001aa3bf9a94b1cc9b30",
+    "cp06_or_pooled_contract.tex": "009572001d84c0c6ddf49a7f1229f2472172f60f84783e51019dea71b93492f3"
+  },
+  "links": [
+    [
+      2005,
+      [
+        0
+      ],
+      0,
+      0
+    ],
+    [
+      2010,
+      [
+        0
+      ],
+      0,
+      0
+    ],
+    [
+      2005,
+      [
+        0,
+        2010
+      ],
+      1,
+      1
+    ],
+    [
+      2005,
+      [
+        0,
+        2010
+      ],
+      2,
+      2
+    ]
+  ],
+  "methods": [
+    "ipw",
+    "reg",
+    "dr"
+  ],
+  "nA_raw": 24,
+  "numpy": "2.4.4",
+  "original_full_atoms_manifest_available": false,
+  "pairs": [
+    "e12",
+    "e23",
+    "e13"
+  ],
+  "platform": "Linux-6.12.76-linuxkit-aarch64-with-glibc2.36",
+  "point": {
+    "Bg": "M_g(b)/M_g(1)",
+    "Bo": "sum_K M_k(ob)/sum_K M_k(o)",
+    "C": "sum_K Y_k(o)/sum_K M_k(o)",
+    "T": "Y_g(1)/M_g(1)",
+    "dr": "T-Bg-C+Bo",
+    "ipw": "T-C",
+    "reg": "T-Bg"
+  },
+  "precision": {
+    "calculation": "actual numpy longdouble + custom same-dtype pivot solve",
+    "dtype": "float128",
+    "epsilon": "1.9259299443872358530559779425849273e-34",
+    "explicit_mantissa_bits": 112,
+    "mpmath_executed": false,
+    "precision_decimal": 33
+  },
+  "probability_model_settings": "inactive",
+  "python": "3.11.2 (main, Apr 28 2025, 14:11:48) [GCC 12.2.0]",
+  "scope_limits": [
+    "no observation probability fit",
+    "no existing weighted method reruns",
+    "no causal ATT or population robustness inference",
+    "no estimated GMM weight derivative",
+    "no general asymptotic/efficiency proof",
+    "no package or public-input failure framework"
+  ],
+  "selection": "conditional_mtar",
+  "selection_est_method": "imputation",
+  "selection_est_method_public_default": "ipw",
+  "source_sha256": "7860b97257ecad09eabb858086e5d97cce8dfae8a3639319e22ac0c80c150e15",
+  "status": "candidate_independent_finite_reference_not_scientific_gate",
+  "survey_weights": "fixed",
+  "treatment_root": "sum_k H(c*w*I_k*a_k*(I[k=g]-expit(X gamma_l))*X)=0; k in {g} union K",
+  "unique_OR_blocks": [
+    [
+      [
+        0
+      ],
+      0
+    ],
+    [
+      [
+        0,
+        2010
+      ],
+      1
+    ],
+    [
+      [
+        0,
+        2010
+      ],
+      2
+    ]
+  ]
+}

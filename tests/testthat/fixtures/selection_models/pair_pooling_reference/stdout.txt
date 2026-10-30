@@ -1,0 +1,3 @@
+PASS: 32 fixed original units, 3 pair-pooling modes x F/B/A, 2 finite-difference steps.
+Max full-stack derivative error: 9.21868874570464e-08
+Separate modes reduce to CP04; dropped cross-pair scores fail in shared fits. Copy covariance fails on F/B; the constructed A law has truthful zero cross-pair covariance.

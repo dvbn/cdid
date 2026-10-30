@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1254" height="1254" viewBox="0 0 1254 1254" role="img" aria-labelledby="title desc">
+<title id="title">cdid: Chained DiD</title>
+<desc id="desc">White chained comparisons and an identical dashed mint parallel trend, on a uniform teal hexagon.</desc>
+<defs>
+ <g id="link" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M-10-18H-42A18 18 0 0 0-42 18H-10A18 18 0 0 0 8 0"/>
+  <path d="M10 18H42A18 18 0 0 0 42-18H10A18 18 0 0 0-8 0"/>
+ </g>
+ <g id="chain" fill="none" stroke="currentColor" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M0 0H180 M300 0H460 M580 0H760"/>
+  <use xlink:href="#link" transform="translate(240 0)"/>
+  <use xlink:href="#link" transform="translate(520 0)"/>
+  <circle cx="0" cy="0" r="14" fill="currentColor" stroke="none"/>
+  <circle cx="760" cy="0" r="14" fill="currentColor" stroke="none"/>
+ </g>
+</defs>
+<path d="M627 39 1137 333.5V920.5L627 1215 117 920.5V333.5Z" fill="#0F766E" stroke="#134E4A" stroke-width="35" stroke-linejoin="round"/>
+<text x="627" y="448" text-anchor="middle" fill="#FFFFFF" font-family="Helvetica, Arial, sans-serif" font-size="274" font-weight="700" letter-spacing="-9">cdid</text>
+<use xlink:href="#chain" transform="translate(267 725) rotate(-18)" color="#FFFFFF"/>
+<use xlink:href="#chain" transform="translate(267 910) rotate(-18)" color="#A7F3D0" stroke-dasharray="15 14"/>
+<text x="627" y="1052" text-anchor="middle" fill="#FFFFFF" font-family="Helvetica, Arial, sans-serif" font-size="66" font-weight="500">Chained DiD</text>
+</svg>

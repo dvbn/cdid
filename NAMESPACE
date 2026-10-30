@@ -1,0 +1,34 @@
+# Hand-maintained (no roxygen).
+
+export(aggte)
+export(att_gt)
+# cdid's own wrapper: chained conditional pretrend test by default for
+# panels; mode = "ordinary" delegates to did::conditional_did_pretest unchanged.
+export(conditional_did_pretest)
+# Re-exported unchanged from did so the familiar workflow works with
+# cdid:: qualification. Methods for did's MP/AGGTEobj classes stay registered
+# by did itself.
+export(ggdid)
+export(glance)
+export(tidy)
+importFrom(did, ggdid)
+importFrom(did, glance)
+importFrom(did, tidy)
+# Load the version-constrained namespace also used by did's ordinary estimators.
+importFrom(DRDID, drdid)
+importFrom(stats, setNames)
+useDynLib(cdid, .registration = TRUE)
+# Private chained result subclasses (R/chained_did_results.R). Registered only
+# for cdid_MP / cdid_AGGTEobj; did's MP / AGGTEobj methods are untouched.
+S3method(ggdid, cdid_AGGTEobj)
+S3method(ggdid, cdid_MP)
+S3method(glance, cdid_AGGTEobj)
+S3method(glance, cdid_MP)
+S3method(print, cdid_AGGTEobj)
+S3method(print, cdid_MP)
+S3method(print, cdid_MP.TEST)
+S3method(summary, cdid_AGGTEobj)
+S3method(summary, cdid_MP)
+S3method(summary, cdid_MP.TEST)
+S3method(tidy, cdid_AGGTEobj)
+S3method(tidy, cdid_MP)

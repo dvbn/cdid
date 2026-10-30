@@ -1,0 +1,136 @@
+name	index	hex	dim
+W_G	1	-0x1p+0	3x3
+W_G	2	0x0p+0	3x3
+W_G	3	0x0p+0	3x3
+W_G	4	0x1p+0	3x3
+W_G	5	0x1p+0	3x3
+W_G	6	-0x1p+0	3x3
+W_G	7	0x0p+0	3x3
+W_G	8	0x0p+0	3x3
+W_G	9	0x1p+0	3x3
+V_R	1	0x1p-5	3x3
+V_R	2	0x0p+0	3x3
+V_R	3	0x0p+0	3x3
+V_R	4	0x0p+0	3x3
+V_R	5	0x1p-5	3x3
+V_R	6	0x0p+0	3x3
+V_R	7	0x0p+0	3x3
+V_R	8	0x0p+0	3x3
+V_R	9	0x1p-5	3x3
+mhat_R	1	0x1p+2	
+mhat_R	2	0x1p+1	
+mhat_R	3	0x1.8p+1	
+theta	1	-0x1.ffffffffffffep+0	
+theta	2	0x1p+1	
+theta	3	0x1.4p+2	
+y	1	0x1.ffffffffffffep-47	
+y	2	0x0p+0	
+y	3	0x0p+0	
+C_gauge	1	0x1p+0	3x3
+C_gauge	2	0x0p+0	3x3
+C_gauge	3	0x0p+0	3x3
+C_gauge	4	0x0p+0	3x3
+C_gauge	5	0x1p+0	3x3
+C_gauge	6	0x0p+0	3x3
+C_gauge	7	0x0p+0	3x3
+C_gauge	8	0x0p+0	3x3
+C_gauge	9	0x1p+0	3x3
+Lambda	1	-0x1p+0	3x3
+Lambda	2	0x1p+0	3x3
+Lambda	3	0x1.212ac6e23f884p-54	3x3
+Lambda	4	-0x1.617c7a831fcdp-56	3x3
+Lambda	5	0x1p+0	3x3
+Lambda	6	-0x1.640446cb4eb7cp-54	3x3
+Lambda	7	-0x1.5700bde1a3203p-53	3x3
+Lambda	8	0x1.0000000000001p+0	3x3
+Lambda	9	0x1p+0	3x3
+Mc	1	0x1.0000000000001p-4	3x3
+Mc	2	0x1.0000000000001p-5	3x3
+Mc	3	0x1.0000000000002p-5	3x3
+Mc	4	0x1p-5	3x3
+Mc	5	0x1.0000000000001p-5	3x3
+Mc	6	0x1.0000000000001p-5	3x3
+Mc	7	0x1.0000000000002p-5	3x3
+Mc	8	0x1.0000000000002p-5	3x3
+Mc	9	0x1.0000000000002p-4	3x3
+Z1	1	-0x0p+0	3x3
+Z1	2	-0x1.bb67ae8584cabp-3	3x3
+Z1	3	0x1.0000000000001p-3	3x3
+Z1	4	-0x1.a20bd700c2c3fp-4	3x3
+Z1	5	-0x1.279a74590331cp-4	3x3
+Z1	6	0x1p-3	3x3
+Z1	7	-0x0p+0	3x3
+Z1	8	-0x0p+0	3x3
+Z1	9	0x1.0000000000001p-2	3x3
+R_chol	1	0x1.6a09e667f3bcdp-3	3x3
+R_chol	2	0x0p+0	3x3
+R_chol	3	0x0p+0	3x3
+R_chol	4	0x0p+0	3x3
+R_chol	5	0x1.6a09e667f3bcdp-3	3x3
+R_chol	6	0x0p+0	3x3
+R_chol	7	0x0p+0	3x3
+R_chol	8	0x0p+0	3x3
+R_chol	9	0x1.6a09e667f3bcdp-3	3x3
+A_whitened	1	-0x1.6a09e667f3bccp+2	3x3
+A_whitened	2	0x0p+0	3x3
+A_whitened	3	0x0p+0	3x3
+A_whitened	4	0x1.6a09e667f3bccp+2	3x3
+A_whitened	5	0x1.6a09e667f3bccp+2	3x3
+A_whitened	6	-0x1.6a09e667f3bccp+2	3x3
+A_whitened	7	0x0p+0	3x3
+A_whitened	8	0x0p+0	3x3
+A_whitened	9	0x1.6a09e667f3bccp+2	3x3
+U_qr	1	-0x1.3988e1409212ep+3	3x3
+U_qr	2	0x0p+0	3x3
+U_qr	3	0x0p+0	3x3
+U_qr	4	0x1.a20bd700c2c3dp+1	3x3
+U_qr	5	-0x1.279a74590331cp+2	3x3
+U_qr	6	0x0p+0	3x3
+U_qr	7	0x1.a20bd700c2c3dp+1	3x3
+U_qr	8	0x1.279a74590331cp+1	3x3
+U_qr	9	0x1.ffffffffffffep+1	3x3
+piv	1	0x1p+1	
+piv	2	0x1p+0	
+piv	3	0x1.8p+1	
+norm_W	1	0x1.1e3779b97f4a4p+1	
+norm_W	2	0x1.1e3779b97f4aep+1	
+norm_V	1	0x1.bb67ae8584ca5p-5	
+norm_V	2	0x1.bb67ae8584cb3p-5	
+r1_est	1	0x0p+0	
+r1_est	2	0x0p+0	
+r1_est	3	0x0p+0	
+r2_est	1	0x1.ffffffffffffep-47	
+r2_est	2	-0x1.ffffffffffffep-47	
+r2_est	3	-0x0p+0	
+r1_lo	1	-0x1.0000000000001p-49	
+r1_lo	2	-0x1.0000000000001p-51	
+r1_lo	3	-0x1.8000000000001p-50	
+r1_hi	1	0x1.8000000000001p-50	
+r1_hi	2	0x1.0000000000001p-52	
+r1_hi	3	0x1.0000000000001p-49	
+r2_lo	1	0x1.ffffffffffffdp-47	
+r2_lo	2	-0x1.fffffffffffffp-47	
+r2_lo	3	0x0p+0	
+r2_hi	1	0x1.fffffffffffffp-47	
+r2_hi	2	-0x1.ffffffffffffdp-47	
+r2_hi	3	0x0p+0	
+r1_abs_cert	1	0x1.0000000000001p-49	
+r1_abs_cert	2	0x1.0000000000001p-51	
+r1_abs_cert	3	0x1.0000000000001p-49	
+r2_abs_cert	1	0x1.fffffffffffffp-47	
+r2_abs_cert	2	0x1.fffffffffffffp-47	
+r2_abs_cert	3	0x0p+0	
+r_norm2_est	1	0x1.6a09e667f3bcbp-46	
+r_norm2_cert	1	0x1.6cf19eed7f5bdp-46	
+scale1_iv	1	0x1.23afb52b517dcp+4	
+scale1_iv	2	0x1.23afb52b517eep+4	
+scale2_iv	1	0x1.1e3779b97f49fp-45	
+scale2_iv	2	0x1.1e3779b97f4b2p-45	
+solve_rel_est	1	0x0p+0	
+solve_rel_cert	1	0x1.42abf056d7af7p-53	
+stat_rel_est	1	0x1.43d1362484903p-1	
+stat_rel_cert	1	0x1.43d136248491ep-1	
+kkt_rel_cert	1	0x1.43d136248491ep-1	
+kkt_inv_2norm_cert	1	0x1.00eed9eba161fp+5	
+sigma_min_A_star_cert	1	0x1.76cf5d0b098b9p+1	
+sigma_max_A_star_cert	1	0x1.5db3d742c266ap+3	

@@ -1,0 +1,233 @@
+{
+  "script": "spec/pt_all_reference.py",
+  "description": "Independent deterministic reference results for CP03 PT-all specification",
+  "production_source_used": false,
+  "fixture_1_restricted_gls_and_zero_row": {
+    "WH": [
+      [
+        "-1",
+        "0"
+      ],
+      [
+        "0",
+        "0"
+      ],
+      [
+        "0",
+        "1"
+      ]
+    ],
+    "zero_row_index_1based": 2,
+    "eta_hat_exact": [
+      "-5/3",
+      "8/3"
+    ],
+    "eta_hat_float": [
+      -1.6666666666666667,
+      2.6666666666666665
+    ],
+    "theta_sub_exact": [
+      "-5/3",
+      "0",
+      "8/3"
+    ],
+    "theta_lagrange_exact": [
+      "-5/3",
+      "0",
+      "8/3"
+    ],
+    "eta_schur_exact": [
+      "-5/3",
+      "8/3"
+    ],
+    "cov_eta_exact": [
+      [
+        "11/3",
+        "1/3"
+      ],
+      [
+        "1/3",
+        "5/3"
+      ]
+    ],
+    "cov_eta_float": [
+      [
+        3.6666666666666665,
+        0.3333333333333333
+      ],
+      [
+        0.3333333333333333,
+        1.6666666666666667
+      ]
+    ],
+    "Lambda_eta_exact": [
+      [
+        "-1",
+        "0"
+      ],
+      [
+        "-1/3",
+        "1/3"
+      ],
+      [
+        "0",
+        "1"
+      ]
+    ],
+    "zero_row_loading_on_beta1_and_tau4": [
+      "-1/3",
+      "1/3"
+    ],
+    "eta_drop_zero_row_exact": [
+      "-3/2",
+      "5/2"
+    ],
+    "cov_eta_drop_zero_row_exact": [
+      [
+        "4",
+        "0"
+      ],
+      [
+        "0",
+        "2"
+      ]
+    ],
+    "tau4_variance_full_exact": "5/3",
+    "tau4_variance_drop_exact": "2",
+    "tau4_variance_reduction_exact": "1/3",
+    "exact_lagrange_and_schur_match": true,
+    "max_float64_abs_diff": 4.440892098500626e-16
+  },
+  "fixture_2_multi_baseline_and_joint_gmm": {
+    "part_2a_single_att": {
+      "tau_star_exact": "28/25",
+      "tau_chain_exact": "28/25",
+      "var_star_exact": "7/5",
+      "var_chain_exact": "7/5",
+      "weights_star_exact": [
+        "1/5",
+        "2/5",
+        "2/5"
+      ],
+      "Lambda_chain_exact": [
+        "1/5",
+        "3/5",
+        "1"
+      ],
+      "exact_star_chain_equivalence": true,
+      "d28_Q_lambda_max_abs_diff": 5.762057497804562e-13,
+      "tau_tikhonov_full6_float": 1.1200017499343775,
+      "tau_exact_float": 1.12,
+      "tikhonov_abs_diff": 1.7499343774041165e-06
+    },
+    "part_2b_joint_vs_per_cell": {
+      "eta_joint_exact": [
+        "173/160",
+        "159/80"
+      ],
+      "cov_joint_exact": [
+        [
+          "35/16",
+          "9/8"
+        ],
+        [
+          "9/8",
+          "11/4"
+        ]
+      ],
+      "tau4_per_cell_exact": "27/25",
+      "var_tau4_per_cell_exact": "11/5",
+      "var_tau4_joint_exact": "35/16",
+      "tau5_per_cell_exact": "2",
+      "var_tau5_per_cell_exact": "4",
+      "var_tau5_joint_exact": "11/4",
+      "strict_joint_variance_dominance": true
+    }
+  },
+  "fixture_3_early_cancellation_bridge": {
+    "population_moments_exact": [
+      "3/2",
+      "1/2",
+      "7/2",
+      "0",
+      "3"
+    ],
+    "true_eta_exact": [
+      "-3/2",
+      "-1/2",
+      "3"
+    ],
+    "eta_correct_pop_exact": [
+      "-3/2",
+      "-1/2",
+      "3"
+    ],
+    "tau4_bias_correct_spec": "0",
+    "tau4_bias_if_zeroed_before_c": "7/18",
+    "tau4_bias_if_merged_operators_before_c": "1/34"
+  },
+  "fixture_4_anticipation_and_irregular_calendar": {
+    "calendar": [
+      2010,
+      2012,
+      2015,
+      2017,
+      2020
+    ],
+    "cohort_g": 2017,
+    "anticipation_delta": 2,
+    "reference_b_g": 2012,
+    "roles_pt_start_2010": {
+      "2010": "pre_pt_all_zero",
+      "2012": "reference",
+      "2015": "anticipation_conditional",
+      "2017": "post_conditional",
+      "2020": "post_conditional"
+    },
+    "roles_pt_start_2012_reduces_to_pt_post": {
+      "2010": "pre_private",
+      "2012": "reference",
+      "2015": "anticipation_conditional",
+      "2017": "post_conditional",
+      "2020": "post_conditional"
+    },
+    "roles_pt_start_2015_reduces_to_pt_post": {
+      "2010": "pre_private",
+      "2012": "reference",
+      "2015": "anticipation_conditional",
+      "2017": "post_conditional",
+      "2020": "post_conditional"
+    },
+    "anticipation_2015_preserved_nonzero_in_all_cases": true
+  },
+  "fixture_5_identification_vs_covariance_singularity": {
+    "rank_W_pt_post": 2,
+    "n_params_pt_post": 3,
+    "att4_identifiable_under_pt_post": false,
+    "rank_WH_pt_all_c2": 2,
+    "n_free_params_pt_all_c2": 2,
+    "att4_identifiable_under_pt_all_c2": true
+  },
+  "fixture_6_reporting_invariance_and_pretest": {
+    "tau4_hat_varying": 1.123943661971831,
+    "tau4_hat_universal": 1.123943661971831,
+    "se_tau4_varying": 0.29603535719125723,
+    "se_tau4_universal": 0.29603535719125723,
+    "post_if_max_abs_diff": 0.0,
+    "unrestricted_pre_estimates_varying": [
+      0.3,
+      0.2
+    ],
+    "unrestricted_pre_estimates_universal": [
+      -0.5,
+      -0.2
+    ],
+    "d21_wald_stat_varying": 0.7504225352112676,
+    "d21_wald_stat_universal": 0.7504225352112676,
+    "naive_restricted_pre_estimates": [
+      0.0,
+      0.0
+    ],
+    "naive_restricted_pre_vcov_rank": 0
+  }
+}

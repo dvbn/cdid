@@ -1,0 +1,151 @@
+# pkgdown configuration for a private local preview of the cdid guide.
+# build_site.R stages it next to the generated pages and passes the output
+# directory as an override. No `url` is set: the preview is private and the
+# final domain is not chosen. Theme settings follow did's site.
+
+title: cdid
+llm-docs: false
+development:
+  mode: release
+news:
+  one_page: true
+  cran_dates: false
+
+template:
+  bootstrap: 5
+  bootswatch: flatly
+  math-rendering: mathml
+  includes:
+    in_header: '<meta name="robots" content="noindex, nofollow">'
+
+# Repository link for the navbar icon. No `source` URL, because the staged
+# article sources do not exist in the repository.
+repo:
+  url:
+    home: https://github.com/dvbn/cdid/
+
+# Menus follow the numbered reading path in docs/README.md.
+navbar:
+  structure:
+    left: [start, examples, methods, guide_reference, help, news]
+    right: [search, github]
+  components:
+    start:
+      text: Get started
+      menu:
+      - text: Home
+        href: index.html
+      - text: Installation
+        href: articles/installation.html
+      - text: "1. Get started"
+        href: articles/get-started.html
+      - text: "2. Moving from did"
+        href: articles/from-did.html
+    examples:
+      text: Examples
+      menu:
+      - text: "3. Incomplete panels"
+        href: articles/examples/incomplete-panels.html
+      - text: "4. Identify effects when the observed units change composition"
+        href: articles/examples/identification.html
+      - text: "5. How to compare precision"
+        href: articles/examples/precision.html
+      - text: "8. Choose IPW, OR or DR in an incomplete panel"
+        href: articles/examples/treatment-choice.html
+      - text: "11. Choose an observation model"
+        href: articles/examples/observation-models.html
+      - text: "12. Impute actual changes"
+        href: articles/examples/change-imputation.html
+      - text: "14. Add PT-all restrictions"
+        href: articles/examples/pt-all-comparison.html
+      - text: "16. Robustness"
+        href: articles/examples/robustness.html
+      - text: "17. Inference"
+        href: articles/examples/inference.html
+    methods:
+      text: Methods
+      menu:
+      - text: "7. Treatment adjustment"
+        href: articles/methods/treatment.html
+      - text: "9. Handling missing outcomes"
+        href: articles/methods/missing-outcomes.html
+      - text: "10. Sampling information for the observation model"
+        href: articles/methods/sampling-information.html
+      - text: "13. Parallel trends"
+        href: articles/methods/parallel-trends.html
+      - text: "15. GMM weighting and covariance regularization"
+        href: articles/methods/gmm.html
+    guide_reference:
+      text: Reference
+      menu:
+      - text: "18. Options"
+        href: articles/reference/options.html
+      - text: "19. Results"
+        href: articles/reference/results.html
+      - text: Function help
+        href: reference/index.html
+    help:
+      text: Help
+      menu:
+      - text: "6. Prepare your panel and unit table"
+        href: articles/help/prepare-data.html
+      - text: Investigate missingness and data structure
+        href: articles/help/investigate-missingness.html
+      - text: "20. Diagnose errors and unavailable results"
+        href: articles/help/troubleshooting.html
+      - text: "---"
+      - text: All articles
+        href: articles/index.html
+    news:
+      text: News
+      href: news/index.html
+
+articles:
+- title: Get started
+  contents:
+  - installation
+  - get-started
+  - from-did
+- title: Examples
+  contents:
+  - examples/incomplete-panels
+  - examples/identification
+  - examples/precision
+  - examples/treatment-choice
+  - examples/observation-models
+  - examples/change-imputation
+  - examples/pt-all-comparison
+  - examples/robustness
+  - examples/inference
+- title: Methods
+  contents:
+  - methods/treatment
+  - methods/missing-outcomes
+  - methods/sampling-information
+  - methods/parallel-trends
+  - methods/gmm
+- title: Reference
+  contents:
+  - reference/options
+  - reference/results
+- title: Help
+  contents:
+  - help/prepare-data
+  - help/investigate-missingness
+  - help/troubleshooting
+
+# Section titles as in did's reference index.
+reference:
+- title: Difference-in-Differences Methods
+  contents:
+  - att_gt
+  - aggte
+- title: Pre-Testing
+  contents:
+  - conditional_did_pretest
+- title: Plotting and Summarizing
+  contents:
+  - reexports
+- title: Package Documentation
+  contents:
+  - cdid-package

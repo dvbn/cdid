@@ -1,0 +1,13 @@
+family,group,t,rational
+BASE,3,3,8/5
+BASE,3,4,21/10
+BASE,3,5,13/5
+BASE,4,4,13/5
+BASE,4,5,31/10
+BASE,5,5,21/10
+CAL,6,7,21/10
+CAL,6,9,31/10
+CAL,6,12,23/5
+CAL,10,12,18/5
+CAL,12,12,21/10
+CAL_anticipation,10,9,11/20

@@ -1,0 +1,144 @@
+{
+  "schema": "cp02_d12_packaged_test_reference_provenance_v1",
+  "extraction_script": "plan/evidence/cp02_d12_guard/scripts/extract_d12_test_references.py",
+  "source_pins": {
+    "reference/original/R/chained_gmm_core.R": {
+      "bytes": 118998,
+      "md5": "51773bf8a53099c49f3459667a7ad5f5",
+      "sha256": "4a6b9d10668ea8fdb0e5c8625296a9c96a533a476fd72c1b0709c5b6bce2014d"
+    },
+    "reference/zero_dual/stored_binary64.tsv": {
+      "bytes": 3556,
+      "md5": "784ef5f57589c7128d568f7da2985835",
+      "sha256": "a6dc503b6a552e4b8fd821219e17d5ce8f33ca27d498770445d225988cb3412d"
+    },
+    "reference/zero_dual/exact_output.json": {
+      "bytes": 1067,
+      "md5": "59d2d72149896eaecaf6e8146c749bc5",
+      "sha256": "80e9843d5125909ca793f10b44247ca1357ccd8a5564e35ca3365cbaa1aa8ed5"
+    },
+    "reference/zero_dual/typed_condition.txt": {
+      "bytes": 429,
+      "md5": "4fd1fb291d9486a5e61cdb64bbc6441e",
+      "sha256": "e78904cc1622724c4d05aeeb23bf039668145fe22f3fbdd9e8d1466e150d9443"
+    },
+    "reference/d12/root_exact_output.json": {
+      "bytes": 2640,
+      "md5": "e3df501a77eb6c5fb4b83162dca2dbdc",
+      "sha256": "965976d84923a9a23c2f4111e9347976d94edbaff252a4d3ddad7d5fef97d8e9"
+    }
+  },
+  "packaged_fixtures": {
+    "chained_gmm_core_original_pre_d12_reference.R": {
+      "copied_from": "reference/original/R/chained_gmm_core.R",
+      "bytes": 118998,
+      "md5": "51773bf8a53099c49f3459667a7ad5f5",
+      "sha256": "4a6b9d10668ea8fdb0e5c8625296a9c96a533a476fd72c1b0709c5b6bce2014d"
+    },
+    "zero_dual_stored_binary64.tsv": {
+      "copied_from": "reference/zero_dual/stored_binary64.tsv",
+      "bytes": 3556,
+      "md5": "784ef5f57589c7128d568f7da2985835",
+      "sha256": "a6dc503b6a552e4b8fd821219e17d5ce8f33ca27d498770445d225988cb3412d"
+    }
+  },
+  "zero_dual_exact_output": {
+    "status": "PASS",
+    "arithmetic": "exact Fraction of observed binary64 values",
+    "theta_error": [
+      "1/2251799813685248",
+      "0",
+      "0"
+    ],
+    "r1": [
+      "1/10141204801825835211973625643008",
+      "0",
+      "0"
+    ],
+    "r2": [
+      "4503599627370495/316912650057057350374175801344",
+      "-4503599627370495/316912650057057350374175801344",
+      "0"
+    ],
+    "stationarity_ratio_squared": "2/5",
+    "actual_residual_enclosed": true,
+    "target_error_bounds_l1_conservative": [
+      "1234128417991026607642557187314903185343066803011483885866742657/926336713898529563388567880069503262826159877325124512315660672063305037119488",
+      "205688069665186941112407924488208692456260393392197325078916997/231584178474632390847141970017375815706539969331281128078915168015826259279872",
+      "1645504557321624980774664400816421211837228556310838217410754845/1852673427797059126777135760139006525652319754650249024631321344126610074238976"
+    ],
+    "each_target_bound_lt": "1e-13",
+    "algebra_mutants_rejected": [
+      "wrong_calendar_post_sign",
+      "wrong_first_parameter"
+    ]
+  },
+  "zero_dual_typed_condition_dput": "structure(list(message = \"Certified primal/stationarity KKT residual exceeds caller threshold.\", \n    call = NULL, diagnostics = list(solve_rel_est = 0, solve_rel_cert = 1.39936515515697e-16, \n        stat_rel_est = 0.632455532033675, stat_rel_cert = 0.632455532033678, \n        kkt_rel_cert = 0.632455532033678)), class = c(\"cdid_gmm_accuracy_error\", \n\"cdid_gmm_refusal\", \"cdid_gmm_error\", \"cdid_error\", \"error\", \n\"condition\"))",
+  "d12_root_exact_output": {
+    "status": "PASS",
+    "fixtures": 3,
+    "exact_assertions": 39,
+    "witness_stationarity_ratio_squared": "2/5",
+    "frozen_witness": [
+      {
+        "target": 0,
+        "point_error": "1/2251799813685248",
+        "G_point_l1_conservative": "1234128417991026607642557187314903185343066803011483885866742657/926336713898529563388567880069503262826159877325124512315660672063305037119488",
+        "G_loading_l1_conservative": "423219384808212897094948324598721/91343852333181432387730302044767688728495783936"
+      },
+      {
+        "target": 1,
+        "point_error": "0",
+        "G_point_l1_conservative": "205688069665186941112407924488208692456260393392197325078916997/231584178474632390847141970017375815706539969331281128078915168015826259279872",
+        "G_loading_l1_conservative": "125624090990331018700017932968133/22835963083295358096932575511191922182123945984"
+      },
+      {
+        "target": 2,
+        "point_error": "0",
+        "G_point_l1_conservative": "1645504557321624980774664400816421211837228556310838217410754845/1852673427797059126777135760139006525652319754650249024631321344126610074238976",
+        "G_loading_l1_conservative": "1452217666557001438685905715351645/182687704666362864775460604089535377456991567872"
+      }
+    ],
+    "point_loading_counterexample": {
+      "point_error": "0",
+      "adjoint_s1": [
+        "0",
+        "0"
+      ],
+      "adjoint_s2": [
+        "-1/2"
+      ],
+      "loading_error_squared": "1/4",
+      "G_lambda": "1"
+    },
+    "inference_examples": [
+      {
+        "operator": "unit",
+        "true_variance": "1",
+        "stored_variance": "9/4",
+        "actual_IF_error_squared": "1/4",
+        "R_upper": "427419822500504607534271/302231454903657293676544",
+        "covariance_error_upper": "1140453698186668509550703312618512541349899573697/182687704666362864775460604089535377456991567872"
+      },
+      {
+        "operator": "declared_cluster",
+        "true_variance": "2",
+        "stored_variance": "9/2",
+        "actual_IF_error_squared": "1/2",
+        "R_upper": "427419822500504607534271/302231454903657293676544",
+        "covariance_error_upper": "1461501637330902918203685985400646643962908477257/182687704666362864775460604089535377456991567872"
+      }
+    ],
+    "mutants": [
+      "omit_adjoint_remainder",
+      "omit_loading_calibration_residual",
+      "point_only_certifies_loading",
+      "use_unit_operator_for_cluster_IF",
+      "criterion_SE_equals_inference_SE",
+      "omit_projection_evaluation_error",
+      "omit_quadratic_covariance_error"
+    ],
+    "projection_error_squared": "1/16",
+    "scope": "Finite stored-array arithmetic only. No fit, solver rerun, public acceptance, sampling law, threshold change or production implementation."
+  }
+}

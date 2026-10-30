@@ -1,0 +1,61 @@
+Record: summary
+Purpose: Independent finite reference for tests/testthat/test-cp02-gap-dgp.R (D27 eight gap laws).
+Method: Executes only the unchanged import/function definitions of check_finite.py (finite_catalog, rank) through its AST, never its file-writing footer, for the eight laws in both NT/NYT modes; endpoint coordinates come from the original row terms and coordinate availability from the same rank criterion as post_level_estimable. Rational truths are copied from the pinned finite_check.json and law_map.json. No RNG, R source or implementation output.
+Exporter: review/scripts/export_cp02_gap_fixtures.py (independent review job 20261018-004344-6ab1e6b1)
+Exporter-SHA256: 26c3922ee89e80f903b1bd8aadcece5cb2accacba203146202d161af8eec0f3e
+Integrity: Test recomputes MD5 of each fixture with CR bytes removed; LF files as exported.
+
+Record: source
+Path: reference/check_finite.py
+SHA256: d46672368a02f9d281de936aaa65f464fe223b6d166058d4bf078c9ffa239154
+Root-Replay-Path: plan/evidence/cp02_final_mc_packet/gaps/check_finite.py (reference/root_receipt.json)
+
+Record: source
+Path: reference/finite_check.json
+SHA256: 6f92698dda308717a64c033ddc881f3e69965aba74ece584a539661c437e60bd
+
+Record: source
+Path: reference/law_map.json
+SHA256: 2f1169a7224750e494df1fe0813461bf1b8356b2a00ebc0ab45909d6673d373d
+
+Record: fixture
+File: catalog.csv
+Rows: 16
+MD5: ef76d4f64964cc9b4da28c1bd567b4a7
+SHA256: 147efba65e76085f4db7d9181c8c86b19ef514eeb2d7382e56368e89bb8ee1e1
+
+Record: fixture
+File: rows.csv
+Rows: 416
+MD5: 47fe6f1c9049d775560118face080b7d
+SHA256: e9528278a3ce7df8e8f0813506ab395bdbd246cd4c63f4801247975d6705b037
+
+Record: fixture
+File: coordinates.csv
+Rows: 200
+MD5: f308db798d45b9365e94b9c1b019170d
+SHA256: a9d2f7529b150138852aab54625632a0d9f9718c628fd292354b599071458490
+
+Record: fixture
+File: targets.csv
+Rows: 92
+MD5: eb9beaadd236fa452c60e7929358f358
+SHA256: f1859e699bdef635e791c0606a99069a3a9b789466c34c01b586a392dc0cf4a3
+
+Record: fixture
+File: references.csv
+Rows: 48
+MD5: 1370f252ecfbfb1d638c9ef7267f5e34
+SHA256: d1e96ffdc1262f23c27d78bfd79ada1486ce26c945a7ceefd90df068cbf5c60b
+
+Record: fixture
+File: truth.csv
+Rows: 12
+MD5: 4c1d99030bc806e75abe05805121f3fc
+SHA256: 2daf8ac25153a5984632eb894fcf9e6d669df2ee20082d8ea73adc5af2a891c8
+
+Record: fixture
+File: restricted.csv
+Rows: 4
+MD5: ad81bed790619f68e7f91c87d35bf595
+SHA256: 1fbe641c50368ff884df1c2971dde7fa7e29f842b923fee59ca82d0286e5adfd

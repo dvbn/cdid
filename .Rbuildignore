@@ -1,0 +1,10 @@
+^(?!(DESCRIPTION|NAMESPACE|NEWS\.md|README\.md|R|man|inst|vignettes|build|tests|src)(/|$))
+(^|/)\.DS_Store$
+(^|/)\._
+(^|/)Thumbs\.db$
+(^|/)desktop\.ini$
+(^|/)\.Rhistory$
+(^|/)\.RData$
+(^|/)\.Rproj\.user$
+\.pdf$
+^tests/testthat/fixtures/selection_models/pair_pooling_reference/initial_A_covariance_prediction_failure\.txt$

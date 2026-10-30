@@ -1,0 +1,4 @@
+pair_id,reference_pair_index,s,t,modeled_transitions
+e1,0,2,5,1
+e2,1,5,29,2
+e3,2,2,29,3

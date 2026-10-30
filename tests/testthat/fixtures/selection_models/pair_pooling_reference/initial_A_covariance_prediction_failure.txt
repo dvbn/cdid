@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/Users/dvbn/Documents/ai/softwares/docker/projects/cdid-V2/cdid-next/.runtime/cp06-date-model/pair_pooling_reference/reference.py", line 177, in <module>
+    main()
+    ~~~~^^
+  File "/Users/dvbn/Documents/ai/softwares/docker/projects/cdid-V2/cdid-next/.runtime/cp06-date-model/pair_pooling_reference/reference.py", line 156, in main
+    cases={f'{mode}_{u}':check(mode,u) for mode in ('separate','within_cohort','across_cohorts') for u in ('F','B','A')}
+                         ~~~~~^^^^^^^^
+  File "/Users/dvbn/Documents/ai/softwares/docker/projects/cdid-V2/cdid-next/.runtime/cp06-date-model/pair_pooling_reference/reference.py", line 134, in check
+    assert covariance_loss>TOL
+           ^^^^^^^^^^^^^^^^^^^
+AssertionError

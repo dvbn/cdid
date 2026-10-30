@@ -1,0 +1,81 @@
+{
+  "scope": "Root independent finite metadata counts only, no estimator certificate",
+  "n_A": 24,
+  "n_observed": 52,
+  "n_unit_pairs": 32,
+  "occupancy": [
+    {
+      "cohort": 3,
+      "s": 1,
+      "t": 2,
+      "count": 4
+    },
+    {
+      "cohort": 3,
+      "s": 1,
+      "t": 4,
+      "count": 4
+    },
+    {
+      "cohort": 3,
+      "s": 2,
+      "t": 3,
+      "count": 2
+    },
+    {
+      "cohort": 3,
+      "s": 2,
+      "t": 4,
+      "count": 2
+    },
+    {
+      "cohort": 3,
+      "s": 3,
+      "t": 4,
+      "count": 2
+    },
+    {
+      "cohort": 3,
+      "s": 4,
+      "t": 5,
+      "count": 2
+    },
+    {
+      "cohort": "Inf",
+      "s": 1,
+      "t": 2,
+      "count": 4
+    },
+    {
+      "cohort": "Inf",
+      "s": 1,
+      "t": 4,
+      "count": 4
+    },
+    {
+      "cohort": "Inf",
+      "s": 2,
+      "t": 3,
+      "count": 2
+    },
+    {
+      "cohort": "Inf",
+      "s": 2,
+      "t": 4,
+      "count": 2
+    },
+    {
+      "cohort": "Inf",
+      "s": 3,
+      "t": 4,
+      "count": 2
+    },
+    {
+      "cohort": "Inf",
+      "s": 4,
+      "t": 5,
+      "count": 2
+    }
+  ],
+  "catalog_scope": "All6 originalNT rows for target cohort3/post3:5 under baseline2; no fixed-horizon-extra row is needed when there is one identical NT pool."
+}

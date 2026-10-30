@@ -1,0 +1,146 @@
+name: R package checks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-package-checks
+  cancel-in-progress: false
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  MAKEFLAGS: '-j2'
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: r-lib/actions/setup-pandoc@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+      - uses: r-lib/actions/setup-r@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+        with:
+          r-version: release
+          Ncpus: '2'
+      - uses: r-lib/actions/setup-r-dependencies@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+        with:
+          dependencies: '"all"'
+          install-quarto: false
+          cache: false
+      - name: Build one source archive
+        shell: Rscript {0}
+        run: |
+          log <- tempfile("cdid-build-", fileext = ".log")
+          status <- system2(file.path(R.home("bin"), "R"), c("CMD", "build", ".", "--no-manual"), stdout = log, stderr = log)
+          dir.create("source-archive")
+          stopifnot(file.copy(log, "source-archive/build.log"))
+          cat(readLines(log), sep = "\n")
+          stopifnot(identical(status, 0L))
+          archive <- list.files(pattern = "^cdid_.*[.]tar[.]gz$", full.names = TRUE)
+          stopifnot(length(archive) == 1L)
+          hash <- digest::digest(file = archive, algo = "sha256")
+          stopifnot(file.copy(archive, "source-archive"))
+          writeLines(paste(hash, basename(archive)), "source-archive/SHA256SUMS")
+          writeLines(Sys.getenv("GITHUB_SHA"), "source-archive/SOURCE_COMMIT")
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: source-archive
+          path: source-archive/
+          retention-days: 7
+          if-no-files-found: error
+
+  check:
+    needs: archive
+    runs-on: ${{ matrix.config.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        config:
+          - {os: ubuntu-latest, r: release}
+          - {os: ubuntu-latest, r: devel}
+          - {os: windows-latest, r: release}
+          - {os: macos-latest, r: release}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: r-lib/actions/setup-pandoc@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+      - uses: r-lib/actions/setup-r@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          Ncpus: '2'
+      - uses: r-lib/actions/setup-tinytex@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+      - uses: r-lib/actions/setup-r-dependencies@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+        with:
+          dependencies: '"all"'
+          extra-packages: any::rcmdcheck
+          install-quarto: false
+          cache: false
+      - name: Install font metrics used by the R help manual
+        shell: Rscript {0}
+        run: |
+          if (!requireNamespace("tinytex", quietly = TRUE)) {
+            install.packages("tinytex", repos = "https://cloud.r-project.org")
+          }
+          tinytex::tlmgr_install(c("courier", "makeindex"))
+          stopifnot(nzchar(Sys.which("makeindex")))
+          for (metric in c("pcrr8t.tfm", "pcrr8c.tfm")) {
+            path <- system2("kpsewhich", metric, stdout = TRUE)
+            stopifnot(is.null(attr(path, "status")), length(path) == 1L, file.exists(path))
+          }
+      - name: Install qpdf on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - name: Install qpdf on macOS
+        if: runner.os == 'macOS'
+        run: brew install qpdf
+      - name: Install qpdf on Windows
+        if: runner.os == 'Windows'
+        run: choco install qpdf -y --no-progress
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-archive
+          path: source-archive
+      - name: Check the identical archive, including its help manual
+        shell: Rscript {0}
+        env:
+          NOT_CRAN: 'true'
+          _R_CHECK_LIMIT_CORES_: 'true'
+        run: |
+          dir.create("check")
+          tryCatch({
+            archive <- list.files("source-archive", pattern = "[.]tar[.]gz$", full.names = TRUE)
+            stopifnot(length(archive) == 1L)
+            hash <- digest::digest(file = archive, algo = "sha256")
+            expected <- strsplit(readLines("source-archive/SHA256SUMS"), " ")[[1L]][1L]
+            stopifnot(identical(hash, expected))
+            writeLines(c(paste("Archive SHA256:", hash), paste("rcmdcheck version:", as.character(utils::packageVersion("rcmdcheck"))), capture.output(sessionInfo())), "check/environment.txt")
+            result <- rcmdcheck::rcmdcheck(path = archive, args = "--as-cran", check_dir = "check", timeout = 120 * 60, error_on = "never")
+            saveRDS(result, "check/result.rds")
+            writeLines(result$stdout, "check/stdout.txt")
+            writeLines(result$stderr, "check/stderr.txt")
+            writeLines(capture.output(print(result)), "check/summary.txt")
+            if (isTRUE(result$timeout) || result$status != 0L || length(result$errors) || length(result$warnings)) {
+              stop("R CMD check failed; see the retained logs and result.rds")
+            }
+          }, error = function(e) {
+            writeLines(conditionMessage(e), "check/exception.txt")
+            stop(e)
+          })
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: check-${{ matrix.config.os }}-${{ matrix.config.r }}
+          path: check/
+          retention-days: 7
+          if-no-files-found: warn

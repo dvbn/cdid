@@ -1,0 +1,144 @@
+---
+title: "Getting Started with cdid"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting Started with cdid}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  error = FALSE
+)
+```
+
+`cdid` estimates group-time average treatment effects (`att_gt()`) and their aggregations (`aggte()`) in panel data with missing outcomes using the chained difference-in-differences of Bellégo, Benatia and Dortet-Bernadet (2025) (<https://doi.org/10.1016/j.jeconom.2024.105783>). It builds on the `did` interface of Callaway and Sant'Anna (2021) and uses chained estimation by default for panel data (`mode = "chained"`), while `mode = "ordinary"` delegates unchanged to `did`.
+
+## 1. Synthetic incomplete panel and unit table
+
+We simulate a self-contained long panel in base R with $N = 900$ units across $T = 5$ periods (`1` to `5`), a binary covariate `x`, a never-treated control group (`g = 0`), and a cohort first treated in period `3` (`g = 3`). Treatment cohort membership depends on `x` through a binary logit, and the latent outcome combines a unit fixed effect $\alpha_i$, a common trend plus an `x`-specific trend, independent normal noise, and a homogeneous post-treatment effect $1 + 0.25(t - 3)$ for $g = 3$ at $t \ge 3$ (population target values `0` at pre-treatment period `2`, and `1.00`, `1.25`, `1.50` at periods `3`, `4`, `5`, with post-treatment average `1.25`).
+
+Each unit is randomly assigned, independently of `(g, x)` and outcome shocks, to one of four consecutive observation windows `{1, 2}`, `{2, 3}`, `{3, 4}`, or `{4, 5}`. Every unit therefore has two observed outcomes and three `NA` outcomes, and no unit is observed at all five dates. We retain all long panel rows (with `y = NA` outside the unit's window) and pass the full unit table `units` as `frame`.
+
+```{r simulate-panel}
+library(cdid)
+set.seed(20261029)
+
+n_units <- 900
+n_periods <- 5
+
+units <- data.frame(
+  id = seq_len(n_units),
+  x = rbinom(n_units, size = 1, prob = 0.5)
+)
+units$g <- ifelse(
+  runif(n_units) < plogis(-0.2 + 0.4 * units$x),
+  3,
+  0
+)
+unit_alpha <- rnorm(n_units)
+window_start <- sample.int(n_periods - 1L, size = n_units, replace = TRUE)
+
+panel_data <- data.frame(
+  id = rep(units$id, each = n_periods),
+  time = rep(seq_len(n_periods), times = n_units),
+  g = rep(units$g, each = n_periods),
+  x = rep(units$x, each = n_periods)
+)
+
+treated_post <- panel_data$g == 3 & panel_data$time >= 3
+true_effect <- ifelse(treated_post, 1 + 0.25 * (panel_data$time - 3), 0)
+y_latent <- rep(unit_alpha, each = n_periods) +
+  (0.4 + 0.2 * panel_data$x) * panel_data$time +
+  true_effect +
+  rnorm(nrow(panel_data), sd = 0.5)
+
+in_window <- panel_data$time == rep(window_start, each = n_periods) |
+  panel_data$time == rep(window_start + 1L, each = n_periods)
+panel_data$y <- ifelse(in_window, y_latent, NA_real_)
+```
+
+We verify that `(id, time)` pairs are unique and count observed outcomes per unit across the unit table `units`:
+
+```{r check-structure}
+stopifnot(!anyDuplicated(panel_data[c("id", "time")]))
+obs_per_unit <- tabulate(
+  match(panel_data$id[!is.na(panel_data$y)], units$id),
+  nbins = nrow(units)
+)
+table(cohort = units$g, observed_dates = obs_per_unit)
+```
+
+## 2. Data requirements and identification conditions
+
+In chained mode, `data` must have unique `(idname, tname)` rows, finite numeric calendar dates `tname`, numeric outcomes `yname` that are finite when observed and kept as `NA` when missing (never replaced by `0`), and a constant known treatment cohort `gname` per unit (`0` for never treated). No unit is required to have a complete history or an observed outcome at the cohort baseline date ($t = 2$). The unit table `frame` defines the study population $F$ of size $N = |F|$: units observed at two or more dates ($A$) supply within-unit changes $\Delta Y_{s,t} = Y_t - Y_s$, while singletons (one observed outcome) and units with no observed outcomes supply no differences but remain in $F$ for population counts, cohort shares, active selection or imputation models, and influence functions for all study units.
+
+With the default `selection = "none"`, no observation-probability or imputation model is fitted. Instead, for each cohort and each date pair $(s, t)$ used by the estimator, the subset of units observed at both $s$ and $t$ is assumed representative of its cohort in the study population with respect to the mean outcome change:
+$$E[Y_t - Y_s \mid G = g, S_{s,t} = 1] = E[Y_t - Y_s \mid G = g].$$
+This is a population expectation condition in the study population; it does not require individual units to have identical outcome changes, realized sample means to agree across observation windows, or arbitrary missingness patterns to identify every target. Observation may depend on the time-invariant unit fixed effect $\alpha_i$ removed by within-unit differencing, provided it does not select on the mean change.
+
+Identification and inference also require: no treatment anticipation before $g$ (`anticipation = 0`, so $t = 2$ is cohort 3's reference date); conditional parallel trends from the reference period (`pt_assumption = "post"`); overlap in the active comparison risk sets; for doubly robust estimation (`est_method = "dr"`), either a correctly specified treatment propensity logit or a correctly specified shared one-period control outcome-change regression given `xformla`; and catalog support connecting each target date to the reference date with eligible controls.
+
+In this design, the untreated conditional mean change from $s$ to $t$ is $(t - s)(0.4 + 0.2x)$ in both cohorts, so conditional parallel trends and the shared one-period control regression hold. The treatment logit is also correctly specified by `~ x`, and the independently assigned observation windows preserve the cohort mean changes in population.
+
+## 3. Estimating and inspecting group-time effects
+
+We fit chained doubly robust estimation with `xformla = ~ x` and `selection = "none"`, combining the overlapping adjacent-period comparisons by feasible two-step GMM (`gmm_weighting = "optimal"`). Here we set `bstrap = FALSE` and `cband = FALSE` to compute fast analytical standard errors and pointwise normal confidence intervals; by default (`bstrap = TRUE, cband = TRUE`), `cdid` computes multiplier-bootstrap standard errors and simultaneous confidence bands.
+
+```{r fit-att-gt}
+fit <- cdid::att_gt(
+  yname = "y",
+  tname = "time",
+  idname = "id",
+  gname = "g",
+  xformla = ~ x,
+  data = panel_data,
+  frame = units,
+  control_group = "nevertreated",
+  est_method = "dr",
+  mode = "chained",
+  selection = "none",
+  pt_assumption = "post",
+  bstrap = FALSE,
+  cband = FALSE
+)
+summary(fit)
+```
+
+Compare the estimates with the population targets: `0` for the pre-treatment comparison reported at period `2`, and `1.00`, `1.25`, `1.50` at periods `3`, `4`, `5`. Realized estimates vary across samples; one draw does not establish bias, coverage, or relative efficiency. `tidy()` exposes cell-level estimates, availability and support reasons; `glance()` gives a one-row fit summary:
+
+```{r inspect-tidy-glance}
+cells <- cdid::tidy(fit)
+cells[, c("target.id", "role", "estimate", "std.error",
+          "conf.low", "conf.high", "available",
+          "support.status", "support.reason")]
+cdid::glance(fit)
+```
+
+## 4. Aggregating effects and event-study plotting
+
+`cdid::aggte()` aggregates the retained `cdid_MP` result without refitting and inherits its inference settings unless overridden. We compute the overall post-treatment average (`type = "simple"`) and event-time estimates (`type = "dynamic"`), inspect the tidy dynamic table, and plot the event study with `cdid::ggdid()`:
+
+```{r aggregate-and-plot, fig.width = 6, fig.height = 3.5}
+agg_simple <- cdid::aggte(fit, type = "simple")
+agg_dynamic <- cdid::aggte(fit, type = "dynamic")
+
+summary(agg_simple)
+cdid::tidy(agg_dynamic)[, c("label", "estimate",
+                            "std.error", "conf.low", "conf.high",
+                            "available", "reason")]
+cdid::ggdid(agg_dynamic)
+```
+
+## 5. Advanced options and further documentation
+
+Beyond the baseline specification above, `cdid` supports:
+
+- **Treatment adjustment (`est_method`):** `"dr"` (default), `"reg"` (pooled control outcome-change regression), `"ipw"`, or custom `did`-style IPW callbacks.
+- **Covariate-dependent missingness (`selection = "conditional_mtar"`):** observation weighting (`selection_est_method = "ipw"` with `selection_model = "pair_logit"` or `"independent_period_logit"`), actual-change imputation (`selection_est_method = "imputation"`), or their augmented combination (`selection_est_method = "dr"` with `est_method = "dr"`), with configurable slope pooling (`selection_pooling`, `imputation_pooling`), separate selection formulas (`selection_xformla`), and subset fitting universes (`selection_universe`).
+- **Parallel trends, weights, clustering, and pretests:** additional untreated-trend restrictions from an explicit common start date (`pt_assumption = "all"` with `pt_start`), reference-date covariates and `fix_weights`, clustered inference (`clustervars`), and the chained conditional pretrend test (`cdid::conditional_did_pretest()`).
+
+See the installed help pages (`?cdid::att_gt`, `?cdid::aggte`, `?cdid::conditional_did_pretest`, `?cdid::reexports`) and the repository documentation at <https://github.com/dvbn/cdid>, especially `docs/help/prepare-data.md`, `docs/help/investigate-missingness.md`, `docs/methods/missing-outcomes.md`, and the companion notebook.

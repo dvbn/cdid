@@ -1,0 +1,44 @@
+bibentry(
+  bibtype = "Article",
+  header = paste("To cite the chained difference-in-differences estimator",
+                 "implemented by cdid, please use:"),
+  title = "The Chained Difference-in-Differences",
+  author = c(
+    person("Christophe", "Bellego"),
+    person("David", "Benatia"),
+    person("Vincent", "Dortet-Bernadet")
+  ),
+  year = "2025",
+  journal = "Journal of Econometrics",
+  volume = "248",
+  pages = "105783",
+  doi = "10.1016/j.jeconom.2024.105783",
+  textVersion = paste(
+    "Bellego C., Benatia D., and V. Dortet-Bernadet (2025).",
+    "\"The Chained Difference-in-Differences.\" Journal of Econometrics 248, 105783.",
+    "doi:10.1016/j.jeconom.2024.105783."
+  )
+)
+
+bibentry(
+  bibtype = "Article",
+  header = paste("Ordinary mode delegates to the did package; for those",
+                 "estimators please also cite:"),
+  title = "Difference-in-Differences with Multiple Time Periods",
+  author = c(
+    person("Brantly", "Callaway"),
+    person(c("Pedro", "H. C."), "Sant'Anna")
+  ),
+  year = "2021",
+  journal = "Journal of Econometrics",
+  volume = "225",
+  number = "2",
+  pages = "200--230",
+  doi = "10.1016/j.jeconom.2020.12.001",
+  textVersion = paste(
+    "Callaway B. and P. H. C. Sant'Anna (2021).",
+    "\"Difference-in-Differences with Multiple Time Periods.\"",
+    "Journal of Econometrics 225(2), 200-230.",
+    "doi:10.1016/j.jeconom.2020.12.001."
+  )
+)

@@ -1,0 +1,36 @@
+{
+  "status": "EXPORTED_MECHANICALLY_FROM_FROZEN_INDEPENDENT_REFERENCE",
+  "source_directory": "validation/reference/dr_finite_v1",
+  "output_directory": "tests/testthat/fixtures/dr_finite_v1",
+  "expected_values_from_production_backend": false,
+  "byte_identical_number_strings": true,
+  "n_fixtures": 8,
+  "n_units": 36,
+  "n_A": 24,
+  "input_hashes": {
+    "FIXED_CHECK_PLAN.md": "34a59ec3260b12d1d25ea6fac16d566372cc1620d6593b51d46225fc8173ba64",
+    "REFERENCE_REPORT.md": "f37cb313f087eb07393111d41d0b7651a32fafc19f8fb528a83ccd4262657014",
+    "atoms.csv": "f6869b76895e3c0c91b8d7152bf38f6dbff65ab5400f033c07730c378a03d8d1",
+    "backend_fixture.json": "e36b4575d97b52ac5a691de07f3b6439c403836d0dcff917ad1f15ae3bbaf928",
+    "check_results.json": "f0e4be45bf195823132ca09a5c48dd01fc284a018cbfe3ba0dfa610bf33d8a08",
+    "generate_dr_reference.py": "7cb9f66c9ed6d250c734796508c18eedee6d8aca328614ed6751e20190c98282",
+    "nuisance_if_rows.csv": "a607bf85c4603ef3ee0d276e4cb2e50c41bb0d5edc788b72de450ff44a68ad9b",
+    "population_examples.csv": "0378ee9ff9c5dc85794a4680eb272d3705c862779eb31ba9092c91728b27f770",
+    "unit_if_rows.csv": "aa5618592cd9bfa345c32cbd1b8af73a286c98e14bcd783778f592ead2356048"
+  },
+  "output_hashes": {
+    "atoms.csv": "f6869b76895e3c0c91b8d7152bf38f6dbff65ab5400f033c07730c378a03d8d1",
+    "calendar.csv": "77f699998e69567d62fb55d91e3813f53b39f3cd4ae1fbe9724f66012c2e0039",
+    "catalog_links.csv": "7c2ebe64591ba45cb471160833fa76477025dbd736874d83f8c58bd4ae00ab4e",
+    "cohorts.csv": "48b5310372a41bcbe3823488f14a3f52f1f8b3ceade74d7a97ea81482bb16129",
+    "covariances.csv": "a1a41cd389642acbe26555666be0d2111f0bd779b5f2b5f27038ce798d6f394d",
+    "fixture_specs.csv": "12e9bf775b9d3c775b03c3d6febdc95f4c82de7878c56895c0b36175fd565708",
+    "link_summaries.csv": "9e9c17f581148a2f89cbc72e707f43c4ec5a7ab14073843cf2be25a398824048",
+    "nuisance_if_rows.csv": "a607bf85c4603ef3ee0d276e4cb2e50c41bb0d5edc788b72de450ff44a68ad9b",
+    "or_blocks.csv": "c6b23b0ec1488ab9af4694dd73e047eb9afd85031b6bda51dde48b4ed75a02ae",
+    "points.csv": "96163dc9a4c8444d067191bad9f1cfcff473ebfa948c180d28a256b2688e9d0f",
+    "population_examples.csv": "0378ee9ff9c5dc85794a4680eb272d3705c862779eb31ba9092c91728b27f770",
+    "qualifications.csv": "99d3d573399124b8c6fcd77342c078f7281560c33afd0469708d5a26d858782d",
+    "unit_if_rows.csv": "aa5618592cd9bfa345c32cbd1b8af73a286c98e14bcd783778f592ead2356048"
+  }
+}

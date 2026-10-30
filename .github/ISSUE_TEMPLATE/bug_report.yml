@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a reproducible problem with cdid.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For help choosing a method or using the package, please use Discussions.
+        Use synthetic data in public examples. Remove credentials and identifying information.
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: Paste the result of packageVersion("cdid"). Include a commit or branch if you installed a development version.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the problem and the result you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Reproducible example
+      description: Provide the smallest R example that reproduces the problem, including synthetic data generation.
+      render: r
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or error message
+      description: Include the exact output, warnings or error message.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: R session information
+      description: Paste sessionInfo(). Remove any private paths or identifying information first.
+      render: text
+    validations:
+      required: true

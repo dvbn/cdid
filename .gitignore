@@ -1,0 +1,7 @@
+validation/.lib/
+validation/setup-receipts/
+.Rhistory
+.RData
+.Rproj.user/
+cdid_*.tar.gz
+cdid.Rcheck/

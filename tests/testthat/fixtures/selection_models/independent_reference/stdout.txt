@@ -1,0 +1,4 @@
+PASS: 3 fixed-atom models, 32 original units each, 2 finite-difference steps; no RNG.
+Maximum derivative error: 5.7729838687237134e-08
+All endpoint, date-copy score/covariance mutants fail; shared-nuisance off-pair date effect is correctly zero in date-only case.
+Conditioning witness: A marginals=3/4, joint=1/2, product=9/16.

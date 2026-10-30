@@ -1,0 +1,13 @@
+case,catalog,route,reader_universe,intercept,shared_slopes,unique_blocks,links,coordinates
+NT_baseline,NT,baseline,F,1,2,3,3,51
+NT_F,NT,F,F,1,2,3,3,79
+NT_B,NT,B,B,1,2,3,3,79
+NT_A,NT,A,A,1,2,3,3,79
+NYT_baseline,NYT,baseline,F,1,2,3,4,59
+NYT_F,NYT,F,F,1,2,3,4,87
+NYT_B,NYT,B,B,1,2,3,4,87
+NYT_A,NYT,A,A,1,2,3,4,87
+NYT_baseline_no_intercept,NYT,baseline,F,0,2,3,4,44
+NYT_F_no_intercept,NYT,F,F,0,2,3,4,72
+NYT_baseline_zero_slope,NYT,baseline,F,1,0,3,4,49
+NYT_F_zero_slope,NYT,F,F,1,0,3,4,77
