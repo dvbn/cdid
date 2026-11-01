@@ -9,10 +9,49 @@ which is being prepared for the next CRAN update.
 
 ## Installation
 
+Install directly from GitHub in a normal R session:
+
 ```r
-# install.packages("remotes")
+# Run once if remotes is not installed:
+install.packages("remotes")
 remotes::install_github("dvbn/cdid")
+library(cdid)
 ```
+
+You need **R 4.1.0 or later** and the official CRAN packages **did 2.5.1 or
+later** and **DRDID 1.3.0 or later**. `remotes` installs missing required
+dependencies and offers updates when needed. Allow updates to dependencies
+below these minimum versions. You do not need GitHub versions of `did` or
+`DRDID`.
+
+Installing from GitHub compiles `cdid`'s C code, so the usual tools for building
+R packages from source must be available:
+
+- **Windows:** [Rtools](https://cran.r-project.org/bin/windows/Rtools/)
+  matching your R version.
+- **macOS:** Xcode Command Line Tools; see the
+  [R for macOS tools](https://mac.r-project.org/tools/).
+- **Linux:** a C/C++ compiler and `make`, including tools needed by dependencies.
+
+No Docker, Homebrew installation of R, special project library or validation
+scripts are required. A standard CRAN installation of R is suitable.
+
+`cdid` 1.1.0.0 has been tested with `did` 2.5.1 and `DRDID` 1.3.0 under
+R 4.5.2. R 4.5.2 is a tested version, not an installation requirement. Later
+versions of these dependencies are accepted but have not been comprehensively
+tested; compatibility and identical results are not guaranteed. The optional
+[pinned validation setup](https://github.com/dvbn/cdid/blob/main/validation/SETUP.md#optional-pinned-validation-setup)
+reproduces the tested dependency versions for validation and development.
+
+If an error reports outdated `did` or `DRDID`, update them with
+`install.packages(c("did", "DRDID"))` and restart R before trying again.
+Modified forks of these packages may have different interfaces even when their
+version numbers exceed the minimum. An abrupt **"R session aborted"** can also
+come from incompatible local R installations and compiled packages. In that
+case, check [which R version RStudio uses](https://support.posit.co/hc/en-us/articles/200486138-Changing-R-versions-for-the-RStudio-Desktop-IDE)
+and reinstall affected dependencies with that R installation. For help, include
+`sessionInfo()` and installation output in an
+[issue](https://github.com/dvbn/cdid/issues).
 
 A short hands-on vignette covers an incomplete panel, estimation, diagnostics,
 aggregation and plotting. To include it when installing from GitHub, use
@@ -20,8 +59,6 @@ aggregation and plotting. To include it when installing from GitHub, use
 `rmarkdown` and Pandoc available. Open it with
 `vignette("cdid", package = "cdid")`. The [full user guide](https://github.com/dvbn/cdid/blob/main/docs/README.md)
 and [practical notebook](https://github.com/dvbn/cdid/blob/main/notebooks/cdid_practical_guide.qmd) provide more examples.
-
-`cdid` 1.1.0.0 requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.3.0 or later, and refuses to load with earlier versions of `did` or `DRDID`. If older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2. Later versions are accepted but have not been tested, so it is not guaranteed that everything works with them or that results are identical. Installation compiles the package's C/C++ code and therefore needs a compiler toolchain: Rtools on Windows, the command-line developer tools on macOS, or a C/C++ compiler and `make` on Linux. The optional [pinned validation setup](https://github.com/dvbn/cdid/blob/main/validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions, for example to reproduce the recorded results of this guide.
 
 ## What the package does
 
