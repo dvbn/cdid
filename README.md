@@ -2,7 +2,7 @@
 
 `cdid` estimates group time average treatment effects ATT(g,t) with chained difference in differences (chained DiD). It builds upon the [`did` package](https://bcallaway11.github.io/did/) and extends it to panels in which some outcomes may be missing, by using the outcome changes between the dates at which each unit is observed.
 
-[CRAN package page](https://cran.r-project.org/package=cdid)
+[CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://davidbenatia.com/research/)
 
 The current CRAN release is 0.1.1. This repository contains version 1.1.0.0,
 which is being prepared for the next CRAN update.
