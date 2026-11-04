@@ -240,7 +240,7 @@ or_baseline_native_kernel <- function(name) {
   arity <- c(C_gmm_cp08_support_chunk = 12L, C_gmm_cp08_pair_rows = 9L, C_gmm_cp08_fit_pass1 = 15L,
     C_gmm_cp08_fit_pass2 = 15L, C_gmm_cp08_or_if_chunk = 17L, C_gmm_cp08_dr_if_prepare = 14L,
     C_gmm_cp08_dr_if_assemble = 17L, C_gmm_cp08_dr_treatment_batch = 19L,
-    C_gmm_separate_complete_if = 12L)
+    C_gmm_separate_complete_if = 12L, C_gmm_or_sparse_if = 11L)
   syms <- gmm_require_native_dll()
   owner <- environment(sys.function())
   cache <- get0("or_baseline_native_cache", envir = owner, mode = "environment", inherits = FALSE)
@@ -1148,7 +1148,7 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
     "baseline OR pipeline fit work")
   bound <- metadata + charges$models
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline OR fits")
-  qr_buffer <- if (separate && automatic_chunk_rows && is.null(reference) && is.null(complete) && is.null(fixed))
+  qr_buffer <- if (automatic_chunk_rows && is.null(reference) && is.null(complete) && is.null(fixed))
     or_baseline_qr_buffer_plan(ctrl, base, bound, scratch, p, st$n_A) else NULL
   if (!is.null(qr_buffer)) {
     scratch <- ipw_owner_safe_sum(c(scratch, qr_buffer$extra), ctrl$max_matrix_entries, "baseline OR buffered QR scratch")
@@ -1335,6 +1335,8 @@ evaluate_or_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
   # requests keep the route below.
   if (!or_baseline_separate(backend) && !details && !is.null(backend$complete_support))
     return(or_baseline_native_if_chunk(backend, reader, rows, links, scale, pre, plan))
+  if (!details && !is.null(plan) && is.null(backend$reference_ref))
+    return(or_sparse_native_if(backend, reader, rows, links, scale, pre, plan))
   B <- length(rows); frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   separate <- or_baseline_separate(backend)
   kept <- if (separate) backend$outcome_recipe$slope_index else

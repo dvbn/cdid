@@ -4679,7 +4679,249 @@ SEXP C_gmm_separate_complete_if(SEXP y_sexp, SEXP ds_sexp, SEXP pa_sexp, SEXP po
   return out_s;
 }
 
+/* Ordinary static sparse baseline OR, pooled or separate. Frozen adjoints
+   contract the unchanged full-F coefficient scores; missing slots mean S=0,
+   never a change of sample, rate, fit, or global pooled-beta incidence. */
+static int or22_position(int nprotect, const char *fn, SEXP pa, const int *bounds,
+    int B, int i, int d, int a, int *positions) {
+  R_xlen_t k = (R_xlen_t) d * B + i;
+  if (positions[k] < 0) positions[k] = (a > 0 && bounds[2 * d] > 0) ?
+    cp08_sparse_search(nprotect, fn, pa, bounds[2 * d], bounds[2 * d + 1], a) : 0;
+  return positions[k];
+}
+
+static double or22_endpoint(int nprotect, const char *fn, SEXP po, const double *y,
+    R_xlen_t ny, int B, int i, int d, int pos, double *values, unsigned char *state) {
+  R_xlen_t k = (R_xlen_t) d * B + i;
+  if (!state[k]) {
+    int o = INTEGER_ELT(po, (R_xlen_t) pos - 1);
+    if (o == NA_INTEGER || o < 1 || (R_xlen_t) o > ny)
+      cp08_malformed(nprotect, fn, "observed posting endpoint outside outcomes");
+    values[k] = y[o - 1]; state[k] = 1;
+  }
+  return values[k];
+}
+
+SEXP C_gmm_or_sparse_if(SEXP y_s, SEXP pa_s, SEXP po_s, SEXP rows_s,
+    SEXP ci_s, SEXP a_s, SEXP w_s, SEXP bounds_s, SEXP X_s, SEXP data_s, SEXP cap_s) {
+  static const char *fn = "C_gmm_or_sparse_if";
+  R_CheckUserInterrupt(); gmm_require_valid_arithmetic(0);
+  double cap = gmm_parse_max_entries(0, cap_s);
+  cp08_chunk_t g; cp08_chunk_args(0, fn, &g, rows_s, ci_s, a_s, w_s);
+  R_xlen_t ny = cp08_len(0, y_s, REALSXP, fn, "outcomes");
+  R_xlen_t npost = cp08_len(0, pa_s, INTSXP, fn, "posting A indices");
+  if (npost < 1 || npost > INT_MAX || cp08_len(0, po_s, INTSXP, fn, "posting outcomes") != npost)
+    cp08_malformed(0, fn, "empty, oversized or unequal postings");
+  int nd, ns, ng, no, nl, nx, px, tmp;
+  sep14_matrix(bounds_s, INTSXP, 2, -1, "date bounds", &tmp, &nd);
+  sep14_matrix(X_s, REALSXP, -1, -1, "source design", &nx, &px);
+  if (nd < 1 || nd > INT_MAX / 2 || nx < 1 || px < 1 || TYPEOF(data_s) != VECSXP || Rf_isObject(data_s) || XLENGTH(data_s) != 17)
+    cp08_malformed(0, fn, "empty dates/design or invalid frozen operator record");
+  SEXP ic_s = VECTOR_ELT(data_s, 0), sup_s = VECTOR_ELT(data_s, 1), sp_s = VECTOR_ELT(data_s, 2);
+  SEXP bl_s = VECTOR_ELT(data_s, 3), bp_s = VECTOR_ELT(data_s, 4), ow_s = VECTOR_ELT(data_s, 5);
+  SEXP keep_s = VECTOR_ELT(data_s, 6), beta_s = VECTOR_ELT(data_s, 7), center_s = VECTOR_ELT(data_s, 8);
+  SEXP mean_s = VECTOR_ELT(data_s, 9), ctrl_s = VECTOR_ELT(data_s, 10), fa_s = VECTOR_ELT(data_s, 11);
+  SEXP fs_s = VECTOR_ELT(data_s, 12), fb_s = VECTOR_ELT(data_s, 13), lk_s = VECTOR_ELT(data_s, 14);
+  SEXP lp_s = VECTOR_ELT(data_s, 15), adj_s = VECTOR_ELT(data_s, 16);
+  if (cp08_len(0, ic_s, INTSXP, fn, "intercept") != 1 ||
+      (INTEGER(ic_s)[0] != 0 && INTEGER(ic_s)[0] != 1)) cp08_malformed(0, fn, "invalid intercept flag");
+  int icpt = INTEGER(ic_s)[0];
+  sep14_matrix(sup_s, INTSXP, 3, -1, "supports", &tmp, &ns);
+  sep14_matrix(sp_s, REALSXP, 3, ns, "support parameters", &tmp, &tmp);
+  sep14_matrix(bl_s, INTSXP, 6, -1, "blocks", &tmp, &ng);
+  sep14_matrix(bp_s, REALSXP, 4, ng, "block parameters", &tmp, &tmp);
+  sep14_matrix(ow_s, INTSXP, 5, -1, "owners", &tmp, &no);
+  sep14_matrix(lk_s, INTSXP, 3, -1, "links", &tmp, &nl);
+  sep14_matrix(lp_s, REALSXP, 3, nl, "link parameters", &tmp, &tmp);
+  if (ns < 1 || ng < 1 || no < 1 || nl < 1) cp08_malformed(0, fn, "empty frozen operators");
+  R_xlen_t P = cp08_len(0, keep_s, INTSXP, fn, "kept columns");
+  R_xlen_t Q = cp08_len(0, mean_s, REALSXP, fn, "block means");
+  R_xlen_t C = cp08_len(0, ctrl_s, INTSXP, fn, "control positions");
+  R_xlen_t F = cp08_len(0, fs_s, INTSXP, fn, "forcing supports");
+  R_xlen_t V = cp08_len(0, fb_s, REALSXP, fn, "beta forcing");
+  R_xlen_t A = cp08_len(0, adj_s, REALSXP, fn, "adjoints");
+  if (P > INT_MAX || Q > INT_MAX || C > INT_MAX || F > INT_MAX || V > INT_MAX || A > INT_MAX ||
+      cp08_len(0, beta_s, REALSXP, fn, "coefficients") != P ||
+      cp08_len(0, center_s, REALSXP, fn, "beta score mean") != P ||
+      cp08_len(0, fa_s, REALSXP, fn, "alpha forcing") != C)
+    cp08_malformed(0, fn, "inconsistent or oversized flat operators");
+  const int *bd = INTEGER(bounds_s), *sup = INTEGER(sup_s), *bl = INTEGER(bl_s), *ow = INTEGER(ow_s);
+  const int *keep = INTEGER(keep_s), *ctrl = INTEGER(ctrl_s), *fs = INTEGER(fs_s), *lk = INTEGER(lk_s);
+  const double *y = REAL(y_s), *X = REAL(X_s), *sp = REAL(sp_s), *bp = REAL(bp_s);
+  const double *beta = REAL(beta_s), *center = REAL(center_s), *mean = REAL(mean_s);
+  const double *fa = REAL(fa_s), *fb = REAL(fb_s), *lp = REAL(lp_s), *adj = REAL(adj_s);
+  for (int d = 0; d < nd; ++d) {
+    if (bd[2 * d] == 0 && bd[2 * d + 1] == 0) continue;
+    cp08_range(0, bd + 2 * d, 2, 1, (int) npost, fn, "date bounds outside postings");
+    if (bd[2 * d] > bd[2 * d + 1]) cp08_malformed(0, fn, "reversed date bounds");
+  }
+  cp08_range(0, keep, P, 1, px, fn, "kept column outside design");
+  cp08_range(0, ctrl, C, 1, ns, fn, "control position outside supports");
+  cp08_range(0, fs, F, 1, ns, fn, "forcing position outside supports");
+  sep14_finite(sp_s); sep14_finite(bp_s); sep14_finite(beta_s); sep14_finite(center_s);
+  sep14_finite(mean_s); sep14_finite(fa_s); sep14_finite(fb_s); sep14_finite(lp_s); sep14_finite(adj_s);
+  int mp = 0;
+  for (int j = 0; j < ns; ++j) {
+    cp08_range(0, sup + 3 * (R_xlen_t) j, 1, 1, INT_MAX, fn, "invalid support cohort");
+    cp08_range(0, sup + 3 * (R_xlen_t) j + 1, 2, 1, nd, fn, "invalid support dates");
+    if (!(sp[3 * (R_xlen_t) j] > 0) || !(sp[3 * (R_xlen_t) j + 1] > 0) || !(sp[3 * (R_xlen_t) j + 2] > 0))
+      cp08_malformed(0, fn, "nonpositive fitted rate, repeat mass or weight multiplier");
+  }
+  for (int oi = 0; oi < no; ++oi) {
+    const int *v = ow + 5 * (R_xlen_t) oi;
+    sep14_span(v[0], v[1], P); sep14_span(v[2], v[3], F);
+    int64_t n = (int64_t) v[1] * v[3];
+    if (n > INT_MAX) cp08_malformed(0, fn, "forcing operator exceeds integer capacity");
+    sep14_span(v[4], (int) n, V);
+    if (v[1] > mp) mp = v[1];
+  }
+  for (int b = 0; b < ng; ++b) {
+    const int *v = bl + 6 * (R_xlen_t) b;
+    cp08_range(0, v, 1, 1, no, fn, "block owner outside operators");
+    if (v[2] != ow[5 * (R_xlen_t) (v[0] - 1) + 1] || (v[5] != 0 && v[5] != 1))
+      cp08_malformed(0, fn, "block basis or score flag differs from owner");
+    sep14_span(v[1], v[2], Q); sep14_span(v[3], v[4], C);
+    if (v[4] < 1 || !(bp[4 * (R_xlen_t) b] > 0) || (icpt && !(bp[4 * (R_xlen_t) b + 2] > 0)))
+      cp08_malformed(0, fn, "empty controls or nonpositive block duration/mass");
+    const int *first = sup + 3 * (R_xlen_t) (ctrl[v[3] - 1] - 1);
+    for (int k = 0; k < v[4]; ++k) {
+      const int *s = sup + 3 * (R_xlen_t) (ctrl[(R_xlen_t) v[3] - 1 + k] - 1);
+      if (s[1] != first[1] || s[2] != first[2]) cp08_malformed(0, fn, "control supports differ in dates");
+    }
+  }
+  for (int j = 0; j < nl; ++j) {
+    const int *v = lk + 3 * (R_xlen_t) j;
+    cp08_range(0, v, 1, 1, ng, fn, "link block outside operators");
+    cp08_range(0, v + 1, 1, 1, ns, fn, "link support outside operators");
+    const int *block = bl + 6 * (R_xlen_t) (v[0] - 1);
+    sep14_span(v[2], block[2], A);
+    const int *s = sup + 3 * (R_xlen_t) (v[1] - 1);
+    const int *c = sup + 3 * (R_xlen_t) (ctrl[block[3] - 1] - 1);
+    if (s[1] != c[1] || s[2] != c[2] || !(lp[3 * (R_xlen_t) j + 1] > 0))
+      cp08_malformed(0, fn, "link dates or direct normalization differ from block");
+  }
+  uint64_t out_n = gmm_checked_mul_u64(0, g.B, nl, cap, "sparse OR output");
+  uint64_t gather_n = gmm_checked_mul_u64(0, g.B, nd, cap, "sparse OR date table");
+  uint64_t small_n = 3ULL * ns + (uint64_t) P + ng + mp;
+  if ((long double) out_n + 3.0L * gather_n + small_n + 1024.0L > (long double) cap ||
+      out_n > SIZE_MAX / sizeof(double) || gather_n > SIZE_MAX / sizeof(double) || small_n > SIZE_MAX / sizeof(double))
+    gmm_c_abort(0, "Sparse OR concurrent buffers exceed their explicit bound.", "cdid_gmm_bound_error");
+  SEXP phi_s = PROTECT(Rf_allocMatrix(REALSXP, g.B, nl));
+  SEXP status_s = PROTECT(Rf_allocVector(INTSXP, 4));
+  SEXP out_s = PROTECT(Rf_allocVector(VECSXP, 2));
+  SEXP names_s = PROTECT(Rf_allocVector(STRSXP, 2));
+  const int nprot = 4; double *phi = REAL(phi_s);
+  if (gmm_buffers_overlap(phi, (R_xlen_t) out_n, y, ny) ||
+      gmm_buffers_overlap(phi, (R_xlen_t) out_n, g.w, g.n_frame) ||
+      gmm_buffers_overlap(phi, (R_xlen_t) out_n, X, XLENGTH(X_s)))
+    gmm_c_abort(nprot, "Sparse OR output aliases source payload.", "cdid_gmm_bound_error");
+  for (int k = 0; k < 17; ++k) {
+    SEXP v = VECTOR_ELT(data_s, k);
+    if (TYPEOF(v) == REALSXP && gmm_buffers_overlap(phi, (R_xlen_t) out_n, REAL(v), XLENGTH(v)))
+      gmm_c_abort(nprot, "Sparse OR output aliases frozen operators.", "cdid_gmm_bound_error");
+  }
+  int *positions = (int *) R_alloc((size_t) gather_n, sizeof(int));
+  double *endpoints = (double *) R_alloc((size_t) gather_n, sizeof(double));
+  unsigned char *state = (unsigned char *) R_alloc((size_t) gather_n, sizeof(unsigned char));
+  double *scratch = (double *) R_alloc((size_t) small_n, sizeof(double));
+  double *seen = scratch, *dy = seen + ns, *up = dy + ns, *rhs = up + ns;
+  double *alpha = rhs + P, *hb = alpha + ng;
+  for (R_xlen_t k = 0; k < (R_xlen_t) gather_n; ++k) { positions[k] = -1; state[k] = 0; }
+  int *status = INTEGER(status_s); cp08_status(status, CP08_OK, 0, 0, 0);
+  for (int i = 0; i < g.B && status[0] == CP08_OK; ++i) {
+    if ((i & 31) == 0) R_CheckUserInterrupt();
+    int row = g.rows[i] - 1, a = g.a[row], ci = g.ci[row]; double w = g.w[row];
+    if (a == NA_INTEGER || a < 0 || a > nx || ci == NA_INTEGER || !R_FINITE(w) || !(w > 0))
+      cp08_malformed(nprot, fn, "invalid original frame row, cohort or weight");
+    for (int j = 0; j < ns; ++j) {
+      seen[j] = dy[j] = up[j] = 0;
+      const int *s = sup + 3 * (R_xlen_t) j; const double *u = sp + 3 * (R_xlen_t) j;
+      if (ci != s[0]) continue;
+      int left = or22_position(nprot, fn, pa_s, bd, g.B, i, s[1] - 1, a, positions);
+      int right = left ? or22_position(nprot, fn, pa_s, bd, g.B, i, s[2] - 1, a, positions) : 0;
+      if (left && right) {
+        double ys = or22_endpoint(nprot, fn, po_s, y, ny, g.B, i, s[1] - 1, left, endpoints, state);
+        double yt = or22_endpoint(nprot, fn, po_s, y, ny, g.B, i, s[2] - 1, right, endpoints, state);
+        if (!R_FINITE(ys) || !R_FINITE(yt)) { cp08_status(status, CP08_ENDPOINT, 1, j + 1, i + 1); break; }
+        dy[j] = gmm_fp_sub(yt, ys); seen[j] = 1;
+        if (!R_FINITE(dy[j])) { cp08_status(status, CP08_DIFFERENCE, 1, j + 1, i + 1); break; }
+      }
+      up[j] = gmm_fp_div(gmm_fp_mul(w, gmm_fp_sub(seen[j], gmm_fp_mul(a > 0 ? 1.0 : 0.0, u[0]))), u[1]);
+    }
+    if (status[0] != CP08_OK) break;
+    for (R_xlen_t k = 0; k < P; ++k) rhs[k] = 0;
+    for (int b = 0; b < ng; ++b) {
+      const int *v = bl + 6 * (R_xlen_t) b, *o = ow + 5 * (R_xlen_t) (v[0] - 1);
+      const double *par = bp + 4 * (R_xlen_t) b;
+      for (int j = 0; j < v[2]; ++j) hb[j] = 0;
+      double ha = 0, forced = 0;
+      for (int k = 0; k < v[4]; ++k) {
+        R_xlen_t c = (R_xlen_t) v[3] - 1 + k; int sid = ctrl[c] - 1;
+        forced = gmm_fp_add(forced, gmm_fp_mul(up[sid], fa[c]));
+        if (!seen[sid]) continue;
+        double fitted = 0;
+        for (int j = 0; j < v[2]; ++j) {
+          R_xlen_t z = (R_xlen_t) o[0] - 1 + j;
+          double x = X[(R_xlen_t) (keep[z] - 1) * nx + a - 1];
+          if (!R_FINITE(x)) cp08_malformed(nprot, fn, "nonfinite observed outcome design");
+          fitted = gmm_fp_add(fitted, gmm_fp_mul(gmm_fp_mul(par[0], x), beta[z]));
+        }
+        double residual = gmm_fp_sub(gmm_fp_sub(dy[sid], par[1]), fitted);
+        double qr = gmm_fp_mul(gmm_fp_mul(w, sp[3 * (R_xlen_t) sid + 2]), residual);
+        ha = gmm_fp_add(ha, qr);
+        if (v[5]) for (int j = 0; j < v[2]; ++j) {
+          R_xlen_t z = (R_xlen_t) o[0] - 1 + j;
+          double d = gmm_fp_mul(par[0], X[(R_xlen_t) (keep[z] - 1) * nx + a - 1]);
+          if (icpt) d = gmm_fp_sub(d, mean[(R_xlen_t) v[1] - 1 + j]);
+          hb[j] = gmm_fp_add(hb[j], gmm_fp_mul(qr, d));
+        }
+      }
+      alpha[b] = icpt ? gmm_fp_div(gmm_fp_add(gmm_fp_sub(ha, par[3]), forced), par[2]) : 0;
+      if (v[5]) for (int j = 0; j < v[2]; ++j) {
+        R_xlen_t z = (R_xlen_t) o[0] - 1 + j; rhs[z] = gmm_fp_add(rhs[z], hb[j]);
+      }
+    }
+    for (int oi = 0; oi < no; ++oi) {
+      const int *o = ow + 5 * (R_xlen_t) oi;
+      for (int j = 0; j < o[1]; ++j) {
+        double forced = 0;
+        for (int k = 0; k < o[3]; ++k) forced = gmm_fp_add(forced,
+          gmm_fp_mul(up[fs[(R_xlen_t) o[2] - 1 + k] - 1], fb[(R_xlen_t) o[4] - 1 + (R_xlen_t) k * o[1] + j]));
+        R_xlen_t z = (R_xlen_t) o[0] - 1 + j;
+        rhs[z] = gmm_fp_add(gmm_fp_sub(rhs[z], center[z]), forced);
+      }
+    }
+    for (int j = 0; j < nl; ++j) {
+      const int *l = lk + 3 * (R_xlen_t) j; int b = l[0] - 1, sid = l[1] - 1;
+      const int *v = bl + 6 * (R_xlen_t) b, *o = ow + 5 * (R_xlen_t) (v[0] - 1);
+      const double *par = bp + 4 * (R_xlen_t) b, *lpj = lp + 3 * (R_xlen_t) j;
+      double projection = 0, fitted = 0, direct = 0;
+      for (int k = 0; k < v[2]; ++k) {
+        R_xlen_t z = (R_xlen_t) o[0] - 1 + k;
+        projection = gmm_fp_add(projection, gmm_fp_mul(rhs[z], adj[(R_xlen_t) l[2] - 1 + k]));
+        if (seen[sid]) {
+          double x = X[(R_xlen_t) (keep[z] - 1) * nx + a - 1];
+          if (!R_FINITE(x)) cp08_malformed(nprot, fn, "nonfinite observed target design");
+          fitted = gmm_fp_add(fitted, gmm_fp_mul(gmm_fp_mul(par[0], x), beta[z]));
+        }
+      }
+      if (seen[sid]) {
+        double residual = gmm_fp_sub(gmm_fp_sub(dy[sid], par[1]), fitted);
+        direct = gmm_fp_div(gmm_fp_mul(gmm_fp_mul(w, sp[3 * (R_xlen_t) sid + 2]),
+          gmm_fp_sub(residual, lpj[0])), lpj[1]);
+      }
+      double value = gmm_fp_add(gmm_fp_sub(gmm_fp_sub(direct, alpha[b]), projection), gmm_fp_mul(up[sid], lpj[2]));
+      if (!R_FINITE(value)) { cp08_status(status, CP08_OR_LINK_IF, 3, j + 1, i + 1); break; }
+      phi[(R_xlen_t) j * g.B + i] = value;
+    }
+  }
+  SET_STRING_ELT(names_s, 0, Rf_mkChar("phi")); SET_STRING_ELT(names_s, 1, Rf_mkChar("status"));
+  SET_VECTOR_ELT(out_s, 0, phi_s); SET_VECTOR_ELT(out_s, 1, status_s); Rf_setAttrib(out_s, R_NamesSymbol, names_s);
+  UNPROTECT(nprot); return out_s;
+}
+
 static const R_CallMethodDef CallEntries[] = {
+  {"C_gmm_or_sparse_if", (DL_FUNC) &C_gmm_or_sparse_if, 11},
   {"C_gmm_native_status", (DL_FUNC) &C_gmm_native_status, 0},
   {"C_gmm_test_arithmetic_probe", (DL_FUNC) &C_gmm_test_arithmetic_probe, 5},
   {"C_gmm_sexp_aliases", (DL_FUNC) &C_gmm_sexp_aliases, 2},
