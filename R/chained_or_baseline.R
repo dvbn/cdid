@@ -1,7 +1,8 @@
-# Private selection=none control-only shared-slope OR (D47). One borrowed common
+# Private selection=none control-only baseline OR (D47). One borrowed common
 # frame, explicit outcome recipe, actual pairs, fixed weights w/r and Z_a column
-# roles. Each (pair, cohort) support is scanned once; ONE joint blockwise fit has
-# a shared one-period slope and one intercept per unique (pair, pool) block.
+# roles. Each (pair, cohort) support is summarized once. The historical private
+# default pools slopes; explicit separate mode uses the same unique comparison
+# catalog and the baseline-only grouped integration in chained_or_baseline_separate.R.
 # No reader selection predictors, fitting roster, transport or logits are used.
 
 or_baseline_abort <- function(message, class = "input") {
@@ -561,6 +562,8 @@ or_baseline_native_int <- function(x) {
 }
 
 or_baseline_native_slope_desc <- function(backend, pre, tail, kept_cols, N, abort = or_baseline_abort) {
+  if (or_baseline_separate(backend))
+    abort("Separate outcome blocks have no pooled native slope descriptor.", "integrity")
   p <- backend$shared$p
   if (p < 1L) return(NULL)
   beta_gids <- pre$beta_gids
@@ -588,6 +591,8 @@ or_baseline_native_slope_desc <- function(backend, pre, tail, kept_cols, N, abor
 
 or_baseline_native_plan <- function(backend, links, B, pre = NULL) {
   validate_or_baseline_backend(backend)
+  if (or_baseline_separate(backend))
+    or_baseline_abort("Separate outcome blocks require the generic IF evaluator.", "integrity")
   if (!or_baseline_native_index(links, length(backend$links)) || !gmm_scalar_numeric(B) || B < 1 ||
       B != floor(B) || B > backend$control$max_chunk_rows)
     or_baseline_abort("Invalid native IF link batch or chunk rows.")
@@ -649,6 +654,8 @@ or_baseline_native_check <- function(plan, backend, links, B, pre, kind, abort) 
 # One eligible non-detailed OR chunk: the kernel fills the B x L IF in the
 # requested link order; R keeps the scale, output record and output bound.
 or_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre, plan = NULL) {
+  if (or_baseline_separate(backend))
+    or_baseline_abort("Separate outcome blocks require the generic IF evaluator.", "integrity")
   st <- reader$state; B <- length(rows); p <- backend$shared$p
   if (is.null(plan)) plan <- or_baseline_native_plan(backend, links, B, pre) else
     or_baseline_native_check(plan, backend, links, B, pre, "or_baseline_native_plan", or_baseline_abort)
@@ -998,8 +1005,11 @@ or_baseline_descriptor_intake <- function(context, reader, frame, recipe, treatm
 # eligible route (or_baseline_descriptor_intake): the same records, in the
 # same order, enter the same catalog, route gate and fit.
 fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recipe,
-                            retained_external_entries = 0, external_work_ops = 0, reference = NULL) {
+                            retained_external_entries = 0, external_work_ops = 0, reference = NULL,
+                            outcome_pooling = "pooled") {
   validate_cp04_reader(reader)
+  outcome_pooling <- or_baseline_outcome_mode(outcome_pooling)
+  separate <- identical(outcome_pooling, "separate")
   if (missing(rank_tol)) or_baseline_abort("Supply explicit private rank_tol.")
   rank_tol <- or_baseline_rank_tol(rank_tol)
   ctrl <- validate_ipw_owner_control(control)
@@ -1061,6 +1071,8 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
     records[[ell]] <- list(pair = v$pair, target = target, controls = control_cohorts,
       link_id = v$link_id, source_functional_key = source,
       functional_key = paste0("cmpcat:OR-baseline-shared-slope-WLS|", substring(source, 8L)))
+    if (separate) records[[ell]]$functional_key <- paste0(
+      "cmpcat:OR-baseline-separate-slope-WLS|", substring(source, 8L))
     if (!is.null(reference)) {
       records[[ell]]$reference <- reference$view_recipe[ell]
       records[[ell]]$functional_key <- paste0(records[[ell]]$functional_key, "|reference:",
@@ -1081,10 +1093,12 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
   S <- length(specs); G <- length(pools)
   # CP08 stage 3: the route is chosen here from actual facts, before any scan;
   # neither route catches the other's failures.
-  complete <- or_baseline_complete_facts(reader, recipe, records, specs, ctrl, reference,
+  complete <- if (separate) NULL else or_baseline_complete_facts(reader, recipe, records, specs, ctrl, reference,
     retained_external_entries = retained_external_entries, external_work_ops = external_work_ops,
     metadata_entries = header + metadata)
-  charges <- if (is.null(complete)) or_baseline_fit_charges(S, G, L, p, st$N, st$n_A, min(st$N, ctrl$max_chunk_rows),
+  charges <- if (separate) or_baseline_separate_fit_charges(S, G, L, p, st$N, st$n_A,
+    min(st$N, ctrl$max_chunk_rows), metadata, header, sum(nchar(recipe$columns, type = "bytes"))) else
+    if (is.null(complete)) or_baseline_fit_charges(S, G, L, p, st$N, st$n_A, min(st$N, ctrl$max_chunk_rows),
     metadata, header, sum(nchar(recipe$columns, type = "bytes"))) else
     or_baseline_complete_fit_charges(st, specs, S, G, L, p, min(st$N, ctrl$max_chunk_rows), metadata, header,
       sum(nchar(recipe$columns, type = "bytes")), complete)
@@ -1102,7 +1116,8 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline OR fits")
   state <- if (is.null(complete)) {
     supports <- lapply(specs, function(s) or_baseline_support(reader, s, recipe, ctrl, reference, complete))
-    ans <- or_baseline_assemble(recipe, supports, pools, links, rank_tol, st$N,
+    assemble <- if (separate) or_baseline_separate_assemble else or_baseline_assemble
+    ans <- assemble(recipe, supports, pools, links, rank_tol, st$N,
       function(sid, visit) or_baseline_visit(reader, specs[[sid]], ctrl,
         function(rows, S, obs, dy, Z) visit(Z), reference, complete))
     rm(supports)
@@ -1114,6 +1129,7 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
       seq_along(recipe$columns), or_baseline_abort)
   }
   obj <- structure(list(reader_ref = reader$ref, control = ctrl, rank_tol = rank_tol,
+    outcome_pooling = outcome_pooling,
     outcome_recipe = recipe, support_specs = specs, supports = state$supports,
     regression_specs = pools, regressions = state$regressions, shared = state$shared,
     links = state$links,
@@ -1126,14 +1142,27 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
       retained_bound = base + bound, fit_scratch_bound = scratch, work_ops_bound = work,
       own_work_ops = own_work, work_ops_convention = "cumulative",
       n_cohort_summaries = S, n_rate_fits = S, n_regression_fits = 1L, n_regression_blocks = G,
-      n_local_intercepts = if (recipe$intercept) G else 0L, n_shared_slopes = state$shared$p,
-      n_slope_columns = p, n_aliased_slopes = length(state$shared$basis$aliased_columns),
-      n_support_scans = S * (1L + state$shared$verification_scan),
+      n_local_intercepts = if (recipe$intercept) G else 0L,
+      n_shared_slopes = if (separate) 0L else state$shared$p,
+      n_slope_columns = p, n_aliased_slopes = if (separate) 0L else length(state$shared$basis$aliased_columns),
+      n_support_scans = if (separate) S else S * (1L + state$shared$verification_scan),
       n_selection_fits = 0L, n_treatment_fits = 0L,
       full_F_masks_per_model = 0L, full_F_by_link_IF_retained = FALSE,
       inverse_matrices_retained = FALSE, dense_dummy_regression = FALSE,
       peak_rss_measured = FALSE)),
     class = "cdid_or_baseline")
+  if (separate) {
+    obj$outcome_groups <- state$outcome_groups
+    obj$law <- sub("shared-one-period-slope", "separate-one-period-slopes", obj$law, fixed = TRUE)
+    groups <- state$outcome_groups$groups
+    obj$accounting$n_regression_fits <- G
+    obj$accounting$n_shared_slopes <- 0L
+    obj$accounting$n_block_slopes <- sum(vapply(groups, function(g) length(g$keep), integer(1)))
+    obj$accounting$n_aliased_slopes <- sum(vapply(groups, function(g) length(g$basis$aliased_columns), integer(1)))
+    obj$accounting$n_support_scans <- S + sum(vapply(state$outcome_groups$group_map,
+      function(m) if (groups[[m$block_ids[1L]]]$verification_scan)
+        length(m$support_ids) else 0L, integer(1)))
+  }
   if (!is.null(reference)) {
     obj$reference_ref <- reference$ref
     obj$accounting$n_reference_recipes <- nrow(reference$recipes)
@@ -1164,6 +1193,8 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
 # matrices use backend support/regression order; slopes follow the kept basis.
 # Shares follow reader$state$cohorts. Details stay on the frame scale.
 or_baseline_if_budget <- function(backend, B, links, details = FALSE) {
+  if (or_baseline_separate(backend))
+    return(or_baseline_separate_if_budget(backend, B, links, details))
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state; frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   p <- backend$shared$p; G <- length(backend$regression_specs); J <- length(st$cohorts)
@@ -1247,10 +1278,12 @@ evaluate_or_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
   pre <- or_baseline_if_budget(backend, length(rows), links, details)
   # CP08 stage 4: an eligible non-detailed chunk is one native batch; detailed
   # requests keep the route below.
-  if (!details && !is.null(backend$complete_support))
+  if (!or_baseline_separate(backend) && !details && !is.null(backend$complete_support))
     return(or_baseline_native_if_chunk(backend, reader, rows, links, scale, pre, plan))
   B <- length(rows); frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
-  kept <- backend$outcome_recipe$slope_index[backend$shared$keep]
+  separate <- or_baseline_separate(backend)
+  kept <- if (separate) backend$outcome_recipe$slope_index else
+    backend$outcome_recipe$slope_index[backend$shared$keep]
   ref <- or_baseline_reference(backend)
   panel <- if (is.null(backend$complete_support)) NULL else
     or_baseline_complete_panel(reader, backend$complete_support)
@@ -1280,7 +1313,8 @@ evaluate_or_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
         w = wa[match(obs, ia)])
     }
   }
-  core <- or_pooled_if_core(backend, st$N, w, hits, up, pre, links, details)
+  core <- if (separate) or_baseline_separate_if_core(backend, st$N, w, hits, up, pre, links, details) else
+    or_pooled_if_core(backend, st$N, w, hits, up, pre, links, details)
   phi <- core$phi
   dimnames(phi) <- list(NULL, vapply(backend$links[links], `[[`, character(1), "link_id"))
   cp04_finite(phi, "complete baseline link IF")
@@ -1291,6 +1325,11 @@ evaluate_or_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
       n_regression_score_evaluations = length(union(pre$gids, pre$beta_gids)),
       n_global_beta_blocks = length(pre$beta_gids), output_entries_bound = pre$output,
       concurrent_scratch_bound = pre$scratch, work_ops_bound = pre$work))
+  if (separate) {
+    out$diagnostics$outcome_pooling <- "separate"
+    out$diagnostics$n_global_beta_blocks <- 0L
+    out$diagnostics$n_local_beta_blocks <- length(pre$beta_gids)
+  }
   if (details) {
     # Frame tau/eta summaries need a common fixed weight; a D60 context forms
     # them only where an existing consumer reads them (none here), so NULL.
@@ -1299,7 +1338,12 @@ evaluate_or_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
       tau[, k] <- w * (as.double(ci == k) - st$tau[k]) / st$mean_w
       eta[, k] <- w * A * (as.double(ci == k) - st$eta[k]) / st$mean_wA
     }
-    out$details <- list(support_ids = pre$sids, rates = up,
+    out$details <- if (separate) list(outcome_pooling = "separate",
+      support_ids = pre$sids, rates = up, regression_ids = pre$gids, blocks = core$blocks,
+      link_block_ids = vapply(backend$links[links], `[[`, integer(1), "regression"),
+      direct = core$direct, denominator = core$denominator, numerator = core$numerator,
+      design = core$design, objective = core$objective,
+      tau = tau, eta = eta, lambda = A - st$lambda) else list(support_ids = pre$sids, rates = up,
       beta_regression_ids = pre$beta_gids, beta = core$beta, beta_score = core$beta_score,
       beta_block_scores = core$beta_block_scores, regression_ids = pre$gids,
       alpha = core$alpha, alpha_score = core$alpha_score, direct = core$direct,
@@ -1322,7 +1366,7 @@ replay_or_baseline_if <- function(backend, chunk_rows, link_batch_size, callback
     or_baseline_abort("Invalid explicit replay controls/callback.")
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   N <- reader$state$N; L <- length(backend$links); total <- 0
-  native <- !details && !is.null(backend$complete_support)
+  native <- !or_baseline_separate(backend) && !details && !is.null(backend$complete_support)
   # Preflight ALL row/link work and each link batch's output before callbacks.
   for (ls in seq.int(1L, L, by = LB)) {
     ll <- seq.int(ls, min(L, ls + LB - 1))
