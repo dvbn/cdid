@@ -298,3 +298,159 @@ testthat::test_that("general separate replay groups only requested positions and
       treatments = fit$treatments, support_specs = fit$support_specs), frozen)
   }
 })
+
+# V14: explicit native coverage. Private evaluation without a plan remains
+# the exact accepted scalar complete producer and independent test reference.
+v14_eval <- function(fit, method, rows, links, plan = NULL, scale = "frame", details = FALSE) {
+  fop_ns(if (method == "reg") "evaluate_or_baseline_if_chunk" else "evaluate_dr_baseline_if_chunk")(
+    fit, rows, links, scale = scale, details = details, plan = plan)
+}
+v14_call <- function(fit, rows, plan, data = plan$data, cap = NULL, X = NULL) {
+  reader <- get("cp04_reader", fit$reader_ref, inherits = FALSE)
+  panel <- fop_ns("or_baseline_complete_panel")(reader, fit$separate_complete)
+  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE); post <- panel$postings
+  if (is.null(X)) X <- frame$Z_a
+  if (is.null(cap)) cap <- fop_ns("separate_complete_native_live")(length(rows), length(plan$links),
+    length(plan$dates), length(plan$gids), ncol(data$family))
+  .Call(fop_ns("or_baseline_native_kernel")("C_gmm_separate_complete_if"), panel$observations$y,
+    post$date_start, post$post_a_index, post$post_obs_index, as.integer(rows), reader$state$cohort_index,
+    reader$state$a_index, reader$state$w, plan$dates, X, data, as.double(cap))
+}
+
+testthat::test_that("complete native plans preserve every raw moment IF and independent refit derivative", {
+  a <- fop_case(chunk = 32L); N <- length(a$w)
+  for (method in c("reg", "dr")) {
+    fit <- fop_fit(a, method); links <- seq_along(fit$links)
+    plan <- fop_ns("chained_full_if_plan")(fit, links, N)
+    testthat::expect_false(is.null(plan))
+    testthat::expect_identical(plan$kind, "separate_complete_native_plan")
+    frozen <- list(groups = fit$outcome_groups, regressions = fit$regressions,
+      treatments = fit$treatments, support_specs = fit$support_specs)
+    actual <- v14_eval(fit, method, seq_len(N), links, plan)
+    scalar <- v14_eval(fit, method, seq_len(N), links)
+    detailed <- v14_eval(fit, method, seq_len(N), links, details = TRUE)
+    testthat::expect_identical(actual$diagnostics$execution, "native_fixed_operator")
+    testthat::expect_equal(actual$phi, scalar$phi, tolerance = 1e-10)
+    testthat::expect_equal(actual$phi, detailed$phi, tolerance = 1e-10)
+    numerical <- t(vapply(seq_len(N), function(i) {
+      direction <- rep(-1, N); direction[i] <- N - 1
+      (fop_raw(a, fit, method, 1 + 1e-6 * direction) -
+        fop_raw(a, fit, method, 1 - 1e-6 * direction)) / 2e-6
+    }, numeric(length(links))))
+    testthat::expect_equal(unname(actual$phi), unname(numerical), tolerance = 2e-6)
+    testthat::expect_equal(crossprod(actual$phi) / N, crossprod(scalar$phi) / N, tolerance = 1e-9)
+    reordered <- c(11L, 3L, 1L)
+    subset_plan <- fop_ns("chained_full_if_plan")(fit, reordered, N)
+    testthat::expect_false(is.null(subset_plan))
+    subset <- v14_eval(fit, method, N:1, reordered, subset_plan, scale = "core")
+    testthat::expect_equal(subset$phi, scalar$phi[N:1, reordered, drop = FALSE], tolerance = 1e-10)
+    testthat::expect_identical(list(groups = fit$outcome_groups, regressions = fit$regressions,
+      treatments = fit$treatments, support_specs = fit$support_specs), frozen)
+    testthat::expect_lte(unname(fop_ns("cp04_payload")(plan)["entries"]), plan$retained_bound)
+    pre <- fop_ns(if (method == "reg") "or_baseline_if_budget" else "dr_baseline_if_budget")(fit, N, links, FALSE)
+    live <- fop_ns("separate_complete_native_live")(N, length(links), length(plan$dates),
+      length(plan$gids), ncol(plan$data$family))
+    testthat::expect_lte(plan$entries + live, pre$scratch)
+    testthat::expect_error(v14_call(fit, seq_len(N), plan, cap = live - 1), class = "cdid_gmm_bound_error")
+    # This concrete loading mutation would fail the independent IF check.
+    wrong <- plan$data; wrong$adj <- -wrong$adj
+    changed <- v14_call(fit, seq_len(N), plan, wrong)
+    testthat::expect_identical(changed$status[1L], 0L)
+    testthat::expect_gt(max(abs(changed$phi - numerical)), 2e-6)
+    bad <- plan; bad$data$adj[1L] <- bad$data$adj[1L] + 1
+    testthat::expect_error(v14_eval(fit, method, seq_len(N), links, bad), class = "cdid_or_baseline_integrity_error")
+    testthat::expect_error(v14_eval(fit, method, seq_len(N), rev(links), plan), class = "cdid_or_baseline_integrity_error")
+    other <- fop_fit(a, method)
+    testthat::expect_error(v14_eval(other, method, seq_len(N), links, plan), class = "cdid_or_baseline_integrity_error")
+    testthat::expect_error(v14_eval(fit, method, seq_len(N - 1L), links, plan), class = "cdid_or_baseline_integrity_error")
+    changed_fit <- fit
+    changed_fit$outcome_groups$groups[[1L]]$beta[1L] <- changed_fit$outcome_groups$groups[[1L]]$beta[1L] + 1
+    testthat::expect_error(v14_eval(changed_fit, method, seq_len(N), links, plan), class = "cdid_ipw_fit_error")
+    reader <- get("cp04_reader", fit$reader_ref, inherits = FALSE)
+    X <- get("frame_owner", reader$frame_ref, inherits = FALSE)$Z_a
+    X[reader$state$a_index[1L], 2L] <- NA_real_
+    testthat::expect_error(v14_call(fit, seq_len(N), plan, X = X), class = "cdid_gmm_bound_error")
+    bad_data <- plan$data; bad_data$block[3L, 1L] <- NA_integer_
+    testthat::expect_error(v14_call(fit, seq_len(N), plan, bad_data), class = "cdid_gmm_bound_error")
+  }
+})
+
+# Source-owned frames/views for two different retained local bases, and a
+# broad common control family that can fund a genuine one-row tail.
+v14_case <- function(tail = FALSE) {
+  if (tail) {
+    k <- c(rep(seq_len(61L), each = 4L), rep(1L, 13L))
+    j <- c(rep(1:4, 61L), rep(1:4, length.out = 13L))
+    cohorts <- c(3, 4:62, Inf); chunk <- 256L
+  } else {
+    k <- rep(1:4, each = 8L); j <- rep(1:8, 4L)
+    cohorts <- c(3, 4, 5, Inf); chunk <- 32L
+  }
+  N <- length(j); id <- seq_len(N); g <- cohorts[k]
+  x <- (j - mean(j)) / 3; z <- sin(j) + j / 20
+  v <- ifelse(k %in% c(1L, length(cohorts)), 0, cos(j))
+  w <- 1 + (j %% 3) / 5
+  X <- cbind(`(Intercept)` = 1, x = x)
+  if (!tail) X <- cbind(X, v = v)
+  V <- cbind(`(Intercept)` = 1, z = z); Xa <- cbind(X, z = z)
+  Y <- vapply(1:5, function(d) j / 7 + k * d / 80 + (.2 * d + .08 * d^2) * x +
+    d^2 * v / 30 + sin(j + d) / 8 + as.double(d >= g) * (d + x / 5), numeric(N))
+  ctrl <- fop_ns("ipw_owner_control")(chunk, 1e8, 2e8, 1e13, 1e8)
+  long <- data.frame(id = rep(id, each = 5L), time = rep(1:5, N), y = as.vector(t(Y)), g = rep(g, each = 5L))
+  panel <- fop_ns("construct_ipw_panel_owner")(long, "id", "time", "y", "g", ctrl)
+  build <- function(Z) {
+    frame <- fop_ns("construct_ipw_frame_owner")(panel, id, Z, w, ctrl)
+    reader <- fop_ns("construct_cp04_frame_reader")(frame, id,
+      matrix(1, N, 1L, dimnames = list(NULL, "selection_intercept")), g, w, ctrl)
+    def <- if (tail) list(c(1, 3, 3)) else list(c(1, 3, 3), c(1, 4, 4))
+    pools <- if (tail) list(cohorts[-1L]) else list(Inf, c(5, Inf))
+    views <- lapply(seq_along(def), function(i) fop_ns("construct_ipw_link_view")(frame,
+      def[[i]][1L], def[[i]][2L], def[[i]][3L], pools[[i]], control = ctrl,
+      link_id = paste0("native-local-", i), functional_key = paste0("cmpcat:native-local-", i)))
+    list(reader = reader, views = views)
+  }
+  a <- build(X); b <- build(Xa)
+  list(reader = b$reader, or_reader = a$reader, views = b$views, or_views = a$views,
+    control = ctrl, recipe = fop_ns("or_pooled_outcome_recipe")(colnames(X), TRUE, colnames(X)[-1L]),
+    X = X, V = V, Y = Y, g = g, w = w)
+}
+
+testthat::test_that("native complete replay respects local bases, zero slopes and admitted tails", {
+  for (a in list(v14_case(), v14_case(TRUE), fop_case(chunk = 32L, slopes = FALSE),
+                 fop_case(chunk = 32L, alias = TRUE), fop_case(chunk = 32L, large_level = TRUE))) {
+    N <- length(a$w); B <- min(N, a$control$max_chunk_rows)
+    for (method in c("reg", "dr")) {
+      fit <- fop_fit(a, method); links <- seq_along(fit$links)
+      plan <- fop_ns("chained_full_if_plan")(fit, links, B)
+      testthat::expect_false(is.null(plan))
+      if (N == 257L) testthat::expect_equal(plan$min_B, 1)
+      if (ncol(a$X) == 3L && !"alias" %in% colnames(a$X))
+        testthat::expect_gt(length(unique(vapply(fit$outcome_groups$groups, function(g) length(g$keep), integer(1)))), 1L)
+      for (start in seq.int(1L, N, by = B)) {
+        rows <- seq.int(start, min(N, start + B - 1L))
+        actual <- v14_eval(fit, method, rows, links, plan)
+        scalar <- v14_eval(fit, method, rows, links)
+        testthat::expect_identical(actual$diagnostics$execution, "native_fixed_operator")
+        testthat::expect_equal(actual$phi, scalar$phi, tolerance = 1e-9)
+      }
+    }
+  }
+})
+
+testthat::test_that("optional native capacity decline keeps original admission and scalar replay", {
+  a <- fop_case(chunk = 31L)
+  for (method in c("reg", "dr")) {
+    fit <- fop_fit(a, method); links <- seq_along(fit$links)
+    testthat::expect_null(fop_ns("chained_full_if_plan")(fit, links, 31L))
+    before <- fop_ns(if (method == "reg") "or_baseline_if_budget" else "dr_baseline_if_budget")(fit, 1L, links, FALSE)
+    out <- fop_ns("chained_full_if_chunk")(fit, 32L, links, "frame", plan = NULL)
+    testthat::expect_identical(out$diagnostics$execution, "fixed_operator")
+    testthat::expect_equal(out$phi, v14_eval(fit, method, 32L, links)$phi, tolerance = 1e-10)
+    after <- fop_ns(if (method == "reg") "or_baseline_if_budget" else "dr_baseline_if_budget")(fit, 1L, links, FALSE)
+    testthat::expect_identical(before, after)
+  }
+  for (a in list(fop_case(chunk = 32L, missing = TRUE), fop_case(chunk = 32L, intercept = FALSE))) {
+    fit <- fop_fit(a, "reg")
+    testthat::expect_null(fop_ns("chained_full_if_plan")(fit, seq_along(fit$links), 32L))
+  }
+})

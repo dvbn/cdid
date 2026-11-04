@@ -239,7 +239,8 @@ or_baseline_native_cache <- new.env(parent = emptyenv())
 or_baseline_native_kernel <- function(name) {
   arity <- c(C_gmm_cp08_support_chunk = 12L, C_gmm_cp08_pair_rows = 9L, C_gmm_cp08_fit_pass1 = 15L,
     C_gmm_cp08_fit_pass2 = 15L, C_gmm_cp08_or_if_chunk = 17L, C_gmm_cp08_dr_if_prepare = 14L,
-    C_gmm_cp08_dr_if_assemble = 17L, C_gmm_cp08_dr_treatment_batch = 19L)
+    C_gmm_cp08_dr_if_assemble = 17L, C_gmm_cp08_dr_treatment_batch = 19L,
+    C_gmm_separate_complete_if = 12L)
   syms <- gmm_require_native_dll()
   owner <- environment(sys.function())
   cache <- get0("or_baseline_native_cache", envir = owner, mode = "environment", inherits = FALSE)
@@ -1306,7 +1307,8 @@ evaluate_or_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
     or_baseline_abort("Invalid explicit IF row/link batch, scale or details flag.")
   pre <- or_baseline_if_budget(backend, length(rows), links, details)
   if (or_baseline_separate(backend) && !details && !is.null(backend$separate_complete))
-    return(or_separate_complete_if(backend, reader, rows, links, scale, pre))
+    return(if (is.null(plan)) or_separate_complete_if(backend, reader, rows, links, scale, pre) else
+      separate_complete_native_if(backend, reader, rows, links, scale, pre, plan))
   # CP08 stage 4: an eligible non-detailed chunk is one native batch; detailed
   # requests keep the route below.
   if (!or_baseline_separate(backend) && !details && !is.null(backend$complete_support))
