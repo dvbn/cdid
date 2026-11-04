@@ -424,3 +424,42 @@ test_that("NULL native entry bound is unbounded while finite live-output boundar
   expect_error(.Call(k, 6L, pa, po, bd, TRUE, 5), class = "cdid_gmm_bound_error")
   expect_identical(.Call(k, 6L, pa, po, bd, TRUE, 6), list(obs = 1L, pos_s = 104L, pos_t = 107L))
 })
+
+test_that("sparse pair kernel verifies the DLL once and uses its already checked alias symbol", {
+  require_dll <- api$gmm_require_native_dll
+  cache <- new.env(parent = emptyenv())
+  checked <- 0L
+  local_mocked_bindings(cp04_pair_rows_native_cache = cache,
+    gmm_require_native_dll = function() {
+      checked <<- checked + 1L
+      require_dll()
+    },
+    gmm_sexp_aliases = function(...) stop("Redundant native-DLL lookup through the alias wrapper."),
+    .package = "cdid")
+  first <- api$cp04_pair_rows_native_kernel()
+  second <- api$cp04_pair_rows_native_kernel()
+  expect_identical(first, second)
+  expect_identical(checked, 2L)
+  # A different symbol-list object cannot reuse the cached binding merely
+  # because its values resemble the current DLL's symbols.
+  hit <- get("C_gmm_cp08_sparse_pair_rows", cache, inherits = FALSE)
+  hit$syms <- c(hit$syms, list(foreign = NULL))
+  assign("C_gmm_cp08_sparse_pair_rows", hit, cache)
+  third <- api$cp04_pair_rows_native_kernel()
+  expect_identical(third, first)
+  expect_identical(checked, 3L)
+  syms <- require_dll()
+  refreshed <- get("C_gmm_cp08_sparse_pair_rows", cache, inherits = FALSE)
+  expect_true(.Call(syms$C_gmm_sexp_aliases, refreshed$syms, syms))
+  query <- c(2L, 0L, 1L); posting <- c(1L, 2L, 1L, 2L)
+  positions <- 101:104; bounds <- c(1L, 2L, 3L, 4L)
+  expect_identical(.Call(third, query, posting, positions, bounds, TRUE, 15),
+    list(obs = c(1L, 3L), pos_s = c(102L, 101L), pos_t = c(104L, 103L)))
+  expect_error(.Call(third, query, posting, positions, bounds, TRUE, 14), class = "cdid_gmm_bound_error")
+  # A live verification failure propagates even when a cache hit exists.
+  fails_live_check <- function() {
+    local_mocked_bindings(gmm_require_native_dll = function() stop("live DLL verification failure"), .package = "cdid")
+    expect_error(api$cp04_pair_rows_native_kernel(), "live DLL verification failure", fixed = TRUE)
+  }
+  fails_live_check()
+})

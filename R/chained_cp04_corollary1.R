@@ -63,7 +63,8 @@ cp04_pair_rows_native_kernel <- function() {
   owner <- environment(sys.function())
   cache <- get0("cp04_pair_rows_native_cache", envir = owner, mode = "environment", inherits = FALSE)
   hit <- if (is.environment(cache)) get0("C_gmm_cp08_sparse_pair_rows", envir = cache, inherits = FALSE) else NULL
-  if (is.list(hit) && identical(hit$owner, owner) && gmm_sexp_aliases(hit$syms, syms)) return(hit$address)
+  if (is.list(hit) && identical(hit$owner, owner) &&
+      isTRUE(.Call(syms$C_gmm_sexp_aliases, hit$syms, syms))) return(hit$address)
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- tryCatch(base::getNativeSymbolInfo("C_gmm_cp08_sparse_pair_rows", PACKAGE = dlls[["cdid"]]),
     error = function(e) NULL)
