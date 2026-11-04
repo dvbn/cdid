@@ -253,3 +253,25 @@ testthat::test_that("many consumers reserve non-row adjoint matrices before ordi
   testthat::expect_error(fop_ns("or_baseline_separate_if_budget")(
     metadata, 1L, seq_len(consumers), FALSE), class = "cdid_ipw_owner_bound_error")
 })
+
+testthat::test_that("online common QR preserves each raw support's full all-coefficient objective", {
+  for (chunk in c(1L, 3L, 11L)) {
+    a <- fop_case(chunk = chunk); fit <- fop_fit(a, "reg")
+    prepared <- fop_ns("or_separate_complete_supports")(a$or_reader, fit$support_specs,
+      a$recipe, seq_along(a$recipe$columns), a$control, fit$separate_complete,
+      fit$accounting$fit_scratch_bound)
+    st <- get("cp04_reader", fit$reader_ref, inherits = FALSE)$state
+    if (chunk < 8L) testthat::expect_gt(prepared$counts["common_design_merges"], 0)
+    for (sid in seq_along(fit$support_specs)) {
+      sp <- fit$support_specs[[sid]]; ix <- which(a$g == st$cohorts[sp$cohort])
+      dy <- a$Y[ix, sp$pair$t_calendar_index] - a$Y[ix, sp$pair$s_calendar_index]
+      D <- cbind(1, sp$transitions * a$X[ix, "x"])
+      F <- prepared$supports[[sid]]$design$summary$raw$factor
+      for (theta in list(c(-.3, .4), c(1.7, -.2))) {
+        raw_objective <- sum(a$w[ix] * (dy - as.vector(D %*% theta))^2)
+        compact_objective <- sum(as.vector(F %*% c(-theta, 1))^2)
+        testthat::expect_equal(compact_objective, raw_objective, tolerance = 1e-9)
+      }
+    }
+  }
+})

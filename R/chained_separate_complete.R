@@ -48,72 +48,116 @@ or_separate_complete_index <- function(complete, specs, links, treatments = NULL
   complete
 }
 
-# QR of a fixed weighted design serves bounded batches of RAW pair differences.
-# Keep all columns before the unchanged local alias/rank/prediction checks.
-or_separate_complete_supports <- function(reader, specs, recipe, frame_index, ctrl, complete) {
+# Stable nonnegative combination of response-only residual coordinates. No
+# squared-norm subtraction is used, including across early deficient chunks.
+or_separate_complete_norm <- function(x) {
+  if (!length(x)) return(0)
+  if (any(!is.finite(x)))
+    cdid_abort("Nonfinite compressed WLS factor.", "cdid_or_wls_numeric_error")
+  scale <- max(abs(x))
+  if (scale == 0) 0 else scale * sqrt(sum((x / scale)^2))
+}
+
+# One online unscaled weighted-design QR per cohort. Its row transforms serve
+# bounded batches of RAW pair responses. Keep min(cumulative rows, 1+p) rows,
+# never the numerical QR rank: an early zero-design response coordinate must
+# survive until it actually becomes a trailing row. Pivoted predictor columns
+# are restored in R, while exactly that QR's row transform is applied to h.
+or_separate_complete_supports <- function(reader, specs, recipe, frame_index, ctrl, complete, scratch_bound) {
   st <- reader$state; frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   panel <- or_baseline_complete_panel(reader, complete)
-  supports <- lapply(specs, function(s) or_pooled_support_start(recipe, s$transitions))
-  counts <- c(design_qr = 0L, response_batches = 0L, response_columns = 0L)
-  cohorts <- unique(vapply(specs, `[[`, integer(1), "cohort"))
+  supports <- vector("list", length(specs))
+  template <- or_pooled_support_start(recipe, 1)
+  counts <- c(design_qr = 0L, common_design_merges = 0L, response_batches = 0L, response_columns = 0L)
+  cohorts <- unique(vapply(specs, `[[`, integer(1), "cohort")); d <- recipe$p + 1L
   for (k in cohorts) {
     sids <- which(vapply(specs, function(s) s$cohort == k, logical(1)))
-    first <- st$cohort_start[k]; last <- st$cohort_end[k]
+    first <- st$cohort_start[k]; last <- st$cohort_end[k]; M <- length(sids)
+    B <- min(last - first + 1L, ctrl$max_chunk_rows)
+    # h/e/sums and scaled-design facts coexist with one chunk's QR, up to
+    # sixteen raw/projection/merge columns, small QR copies and final factors.
+    # This peak must fit the already reserved S*p^2 separate-fit envelope.
+    ipw_owner_safe_sum(c(8 * M * (d + 2), 16 * B * (d + 32), 128 * d^2, 8192),
+      scratch_bound, "separate common-design merge scratch")
+    h <- matrix(0, d, M); energy <- sumY <- numeric(M)
+    R <- matrix(0, 0L, d); n_total <- 0L; mass <- 0
+    sumZ <- colmax <- numeric(recipe$p); merge_rows <- 0L
+    Ls <- vapply(specs[sids], `[[`, numeric(1), "transitions")
+    distinct_L <- unique(Ls); L_pos <- match(Ls, distinct_L)
+    anchors <- matrix(0, recipe$p, length(distinct_L))
+    constant <- matrix(TRUE, recipe$p, length(distinct_L))
     for (start in seq.int(first, last, by = ctrl$max_chunk_rows)) {
       rows <- st$cohort_order[seq.int(start, min(last, start + ctrl$max_chunk_rows - 1L))]
       Z <- frame$Z_a[st$a_index[rows], frame_index, drop = FALSE]
       z <- Z[, recipe$slope_index, drop = FALSE]; w <- st$w[rows]; sw <- sqrt(w)
-      X <- cbind(1, unname(z)); n <- length(rows); d <- ncol(X)
+      X <- cbind(1, unname(z)); n <- length(rows)
       q <- qr(X * sw, LAPACK = TRUE)
-      R <- qr.R(q)[, order(q$pivot), drop = FALSE]; m <- nrow(R)
-      mass <- sum(w); sumZ <- unname(colSums(w * z))
-      colmax <- if (recipe$p) unname(apply(abs(z), 2L, max)) else numeric(0)
+      chunk_R <- qr.R(q)[, order(q$pivot), drop = FALSE]
+      m_old <- nrow(R); m_chunk <- nrow(chunk_R)
+      merge <- if (m_old) qr(rbind(R, chunk_R), LAPACK = TRUE) else NULL
+      next_R <- if (m_old) qr.R(merge)[, order(merge$pivot), drop = FALSE] else chunk_R
+      m_next <- min(n_total + n, d)
+      if (nrow(next_R) != m_next || any(!is.finite(next_R)))
+        cdid_abort("Nonfinite compressed WLS factor.", "cdid_or_wls_numeric_error")
+      merge_rows <- max(merge_rows, m_old + m_chunk)
       counts["design_qr"] <- counts["design_qr"] + 1L
-      # A fixed implementation batch cap bounds response and QR-apply copies;
-      # fitting preflight reserves all sixteen columns even for smaller batches.
-      for (lo in seq.int(1L, length(sids), by = 16L)) {
-        ids <- sids[seq.int(lo, min(length(sids), lo + 15L))]
+      if (m_old) counts["common_design_merges"] <- counts["common_design_merges"] + 1L
+      for (lo in seq.int(1L, M, by = 16L)) {
+        ids <- seq.int(lo, min(M, lo + 15L))
         raw <- matrix(0, n, length(ids))
-        for (j in seq_along(ids)) raw[, j] <-
-          or_baseline_complete_pair_rows(reader, panel, rows, specs[[ids[j]]]$pair, TRUE)$dy
+        for (j in seq_along(ids)) raw[, j] <- or_baseline_complete_pair_rows(reader,
+          panel, rows, specs[[sids[ids[j]]]]$pair, TRUE)$dy
         projected <- qr.qty(q, raw * sw)
+        leading <- projected[seq_len(m_chunk), , drop = FALSE]
+        transformed <- if (m_old) qr.qty(merge,
+          rbind(h[seq_len(m_old), ids, drop = FALSE], leading)) else leading
+        if (any(!is.finite(projected)) || any(!is.finite(transformed)))
+          cdid_abort("Nonfinite compressed WLS factor.", "cdid_or_wls_numeric_error")
+        h[seq_len(m_next), ids] <- transformed[seq_len(m_next), , drop = FALSE]
+        for (j in seq_along(ids)) {
+          tail_new <- if (n > m_chunk) projected[seq.int(m_chunk + 1L, n), j] else numeric(0)
+          tail_merge <- if (m_old + m_chunk > m_next)
+            transformed[seq.int(m_next + 1L, m_old + m_chunk), j] else numeric(0)
+          energy[ids[j]] <- or_separate_complete_norm(c(energy[ids[j]],
+            or_separate_complete_norm(tail_new), or_separate_complete_norm(tail_merge)))
+          sumY[ids[j]] <- sumY[ids[j]] + sum(w * raw[, j])
+        }
         counts["response_batches"] <- counts["response_batches"] + 1L
         counts["response_columns"] <- counts["response_columns"] + length(ids)
-        for (j in seq_along(ids)) {
-          sid <- ids[j]; acc <- supports[[sid]]; L <- specs[[sid]]$transitions
-          F <- cbind(sweep(R, 2L, c(1, rep(L, recipe$p)), `*`), projected[seq_len(m), j])
-          if (n > d) {
-            tail <- projected[seq.int(d + 1L, n), j]
-            scale <- max(abs(tail))
-            norm <- if (scale == 0) 0 else scale * sqrt(sum((tail / scale)^2))
-            F <- rbind(F, c(rep(0, d), norm))
-          }
-          F <- or_wls_compress(F)
-          D <- L * z
-          if (any(!is.finite(D))) or_baseline_abort("Nonfinite separate complete pair design.", "numeric")
-          constant <- if (recipe$p) vapply(seq_len(recipe$p), function(j)
-            all(D[, j] == D[1L, j]), logical(1)) else logical(0)
-          raw_summary <- structure(list(factor = F, n = n, columns = acc$summary$raw$columns),
-            class = "cdid_or_wls_summary")
-          chunk <- structure(list(raw = raw_summary, n = n, p = recipe$p,
-            columns = acc$summary$columns, anchor = if (recipe$p) as.numeric(D[1L, ]) else numeric(0),
-            constant = constant, accounting = list(input_rows = n, augmented_cols = recipe$p + 2L,
-              augmented_rows = nrow(F), max_chunk_merge_rows = nrow(F), n_compressions = 1L)),
-            class = "cdid_or_pooled_wls_chunk")
-          # The empty starting factor is neutral; do not QR an unchanged
-          # compact factor a second time before its first nonempty merge.
-          acc$summary <- if (acc$n == 0L) chunk else
-            or_pooled_wls_merge_chunks(list(acc$summary, chunk))
-          acc$weight_mass <- acc$weight_mass + mass; acc$n <- acc$n + n
-          acc$sumZ <- acc$sumZ + sumZ; acc$sumY <- acc$sumY + sum(w * raw[, j])
-          acc$colmax <- pmax(acc$colmax, colmax)
-          supports[[sid]] <- acc
-        }
       }
+      # Exact constancy is a fact of raw D=L*z, not of a rounded QR factor.
+      # Equal actual L values reuse this fact without equating fitted weights.
+      for (j in seq_along(distinct_L)) {
+        D <- distinct_L[j] * z
+        if (any(!is.finite(D))) or_baseline_abort("Nonfinite separate complete pair design.", "numeric")
+        if (!n_total && recipe$p) anchors[, j] <- as.numeric(D[1L, ])
+        if (recipe$p) constant[, j] <- constant[, j] & vapply(seq_len(recipe$p),
+          function(col) all(D[, col] == anchors[col, j]), logical(1))
+      }
+      mass <- mass + sum(w); sumZ <- sumZ + unname(colSums(w * z))
+      if (recipe$p) colmax <- pmax(colmax, unname(apply(abs(z), 2L, max)))
+      R <- next_R; n_total <- n_total + n
+    }
+    for (j in seq_along(sids)) {
+      # Pair duration scales predictor columns only AFTER the common merge.
+      F <- cbind(sweep(R, 2L, c(1, rep(Ls[j], recipe$p)), `*`), h[seq_len(nrow(R)), j])
+      if (n_total > d) F <- rbind(F, c(rep(0, d), energy[j]))
+      if (any(!is.finite(F)))
+        cdid_abort("Nonfinite compressed WLS factor.", "cdid_or_wls_numeric_error")
+      raw_summary <- structure(list(factor = unname(F), n = n_total,
+        columns = template$summary$raw$columns), class = "cdid_or_wls_summary")
+      summary <- structure(list(raw = raw_summary, n = n_total, p = recipe$p,
+        columns = template$summary$columns, anchor = if (recipe$p) anchors[, L_pos[j]] else numeric(0),
+        constant = if (recipe$p) constant[, L_pos[j]] else logical(0),
+        accounting = list(input_rows = n_total, augmented_cols = recipe$p + 2L,
+          augmented_rows = nrow(F), max_chunk_merge_rows = merge_rows,
+          n_compressions = 0L)), class = "cdid_or_pooled_wls_chunk")
+      acc <- list(L = Ls[j], summary = summary, weight_mass = mass, n = n_total,
+        sumZ = sumZ, sumY = sumY[j], colmax = colmax)
+      supports[[sids[j]]] <- or_baseline_support_rate(acc, mass, n_total, st$N)
     }
   }
-  out <- lapply(supports, function(acc) or_baseline_support_rate(acc, acc$weight_mass, acc$n, st$N))
-  list(supports = out, counts = counts)
+  list(supports = supports, counts = counts)
 }
 
 or_separate_complete_extra <- function(complete, B, p, S, G, L) {

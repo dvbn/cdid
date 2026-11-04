@@ -1125,7 +1125,7 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline OR fits")
   state <- if (is.null(complete)) {
     fixed_supports <- if (is.null(fixed)) NULL else or_separate_complete_supports(reader,
-      specs, recipe, seq_along(recipe$columns), ctrl, fixed)
+      specs, recipe, seq_along(recipe$columns), ctrl, fixed, scratch)
     supports <- if (is.null(fixed_supports)) lapply(specs,
       function(s) or_baseline_support(reader, s, recipe, ctrl, reference, complete)) else fixed_supports$supports
     assemble <- if (separate) or_baseline_separate_assemble else or_baseline_assemble

@@ -38,6 +38,8 @@ change(i, e) = alpha(b) + L(e) * z(i)' beta(b) + error      for control units i
 - `beta(b)` is the block's slope vector. `alpha(b)` is its intercept when `xformla` has one.
 - `L(e)` counts steps between the two dates in the stored calendar. It uses their positions, never the difference between their labels.
 
+The separate specification can also be written as one stacked regression with block-specific covariate slopes and, when requested, intercepts. This is a way to organize the calculation, not a restriction that the coefficients are equal. On eligible complete panels, `cdid` reuses common design factorizations across comparisons while keeping their coefficients separate. Inference still combines contributions from the same original unit across all its comparisons.
+
 `outcome_pooling = "pooled"` instead fits one slope vector `beta` across all blocks, with a local intercept for each block. This is the outcome model used in earlier versions. The fit includes the comparisons reported before treatment as well as those used for treatment effects.
 
 | `outcome_pooling` | Outcome-model restriction | Practical consequence |

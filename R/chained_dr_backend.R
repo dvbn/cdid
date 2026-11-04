@@ -1126,7 +1126,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
 
   state <- if (is.null(complete)) {
     fixed_supports <- if (is.null(fixed)) NULL else or_separate_complete_supports(reader,
-      specs, recipe, or_frame_index, ctrl, fixed)
+      specs, recipe, or_frame_index, ctrl, fixed, scratch)
     supports <- if (is.null(fixed_supports)) lapply(specs, function(s)
       dr_baseline_support(reader, s, recipe, or_frame_index, ctrl, reference, complete)) else fixed_supports$supports
     assemble <- if (separate) or_baseline_separate_assemble else or_baseline_assemble
