@@ -158,59 +158,6 @@ validate_ipw_raw_backend <- function(backend, frame_owner = NULL, panel_owner = 
   invisible(backend)
 }
 
-# RAW-local position-only adapter to the existing sparse join. TRUE requests
-# observation positions, not outcomes: this kernel has no outcome argument.
-# The caller supplies an already charged chunk-scratch slice. Native scratch
-# (3B), results (<=3B), query/adapter copies (<=3B) and headers fit 9B+128;
-# unsupported structure/capacity keeps the original R query before execution.
-# Resolver and kernel errors propagate without a computational fallback.
-ipw_raw_pair_positions_native <- function(panel_owner, rows, ds, dt, scratch_entries) {
-  B <- length(rows)
-  scratch_entries <- ipw_owner_int_bound(scratch_entries, "raw pair query scratch", min_val = 0)
-  required <- ipw_owner_safe_sum(c(ipw_owner_safe_product(9, B), 128))
-  native_entries <- ipw_owner_safe_product(6, B)
-  if (B < 1L || required > scratch_entries || native_entries > panel_owner$control$max_matrix_entries)
-    return(NULL)
-  post <- panel_owner$postings
-  if (is.na(ds) || is.na(dt) || post$date_count[ds] < 1L || post$date_count[dt] < 1L)
-    return(NULL)
-  bounds <- c(post$date_start[ds], post$date_end[ds], post$date_start[dt], post$date_end[dt])
-  if (!cp04_pair_rows_native_ok(rows, post, bounds, TRUE)) return(NULL)
-  # Preserve the existing per-stream work cap: two binary searches use at
-  # most 8*(depth+4) row operations; 96 more cover the remaining support work.
-  # The minimum existing raw stream charge is 128*(1+ceiling(log2(2+1))).
-  depth <- sum(ceiling(log2(post$date_count[c(ds, dt)] + 1)))
-  if (8 * (depth + 4) + 96 > 384) return(NULL)
-  .Call(cp04_pair_rows_native_kernel(), rows, post$post_a_index, post$post_obs_index,
-    bounds, TRUE, native_entries)
-}
-
-# Same mask fields/order as the original owner query. The range is bounded
-# before creating its A-index vector; the native and remaining caller buffers
-# fit inside the old 48B+256 support-query scratch, without using caller headroom.
-ipw_raw_query_pair_mask <- function(context, s, t, a_start = 1L, a_end = context$n_a_units,
-                                    ds = NULL, dt = NULL) {
-  if (is.null(ds)) ds <- match(as.double(s), context$all_times)
-  if (is.null(dt)) dt <- match(as.double(t), context$all_times)
-  range_ok <- is.numeric(a_start) && !is.object(a_start) && length(a_start) == 1L &&
-    is.finite(a_start) && a_start == floor(a_start) && a_start >= 1 &&
-    is.numeric(a_end) && !is.object(a_end) && length(a_end) == 1L &&
-    is.finite(a_end) && a_end == floor(a_end) && a_end >= a_start &&
-    a_end <= context$n_a_units && a_end <= .Machine$integer.max
-  if (range_ok && a_end - a_start + 1 <= context$control$max_chunk_rows) {
-    B <- ipw_owner_safe_sum(c(a_end - a_start, 1))
-    scratch <- ipw_owner_safe_sum(c(ipw_owner_safe_product(48, B), 256))
-    rows <- seq.int(as.integer(a_start), as.integer(a_end))
-    hit <- ipw_raw_pair_positions_native(context, rows, ds, dt, scratch)
-    if (!is.null(hit)) {
-      a <- rows[hit$obs]
-      return(list(a_index = a, unit_index = context$a_unit_index[a],
-        obs_s = hit$pos_s, obs_t = hit$pos_t))
-    }
-  }
-  ipw_owner_query_pair_mask(context, s, t, a_start, a_end, ds, dt)
-}
-
 # Scan ONE unique date pair `(s, t)` across `1..n_a_units` in bounded chunks of
 # `step`, computing outcome-free per-cohort counts, weight masses, and exact
 # 4-double mask power-sum fingerprints modulo P = 67108859 for every A-cohort.
@@ -245,7 +192,7 @@ ipw_raw_scan_pair_summary <- function(frame_owner, panel_owner, pair_desc, step,
       hit <- if (complete_pair) {
         ipw_owner_query_complete_pair_mask(panel_owner, ds, dt, a_start, a_end)
       } else {
-        ipw_raw_query_pair_mask(
+        ipw_owner_query_pair_mask(
           panel_owner, pair_desc$s, pair_desc$t,
           a_start = a_start, a_end = a_end, ds = ds, dt = dt
         )
@@ -391,10 +338,8 @@ ipw_raw_verify_pair_masks_equal <- function(frame_owner, panel_owner, pair1_summ
   while (a_start <= n_a) {
     ipw_owner_check_interrupt()
     a_end <- as.integer(min(as.double(n_a), as.double(a_start) + step - 1))
-    query1 <- if (isTRUE(pair1_summary$complete_pair)) ipw_owner_query_pair_mask else ipw_raw_query_pair_mask
-    query2 <- if (isTRUE(pair2_summary$complete_pair)) ipw_owner_query_pair_mask else ipw_raw_query_pair_mask
-    hit1 <- query1(panel_owner, p1$s, p1$t, a_start = a_start, a_end = a_end, ds = ds1, dt = dt1)
-    hit2 <- query2(panel_owner, p2$s, p2$t, a_start = a_start, a_end = a_end, ds = ds2, dt = dt2)
+    hit1 <- ipw_owner_query_pair_mask(panel_owner, p1$s, p1$t, a_start = a_start, a_end = a_end, ds = ds1, dt = dt1)
+    hit2 <- ipw_owner_query_pair_mask(panel_owner, p2$s, p2$t, a_start = a_start, a_end = a_end, ds = ds2, dt = dt2)
     a1 <- hit1$a_index
     a2 <- hit2$a_index
     if (length(a1) > 0L) a1 <- a1[!is.na(ipw_owner_match_sorted_double(a_cohort_idx[a1], oci))]
@@ -434,7 +379,7 @@ ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summa
     hit <- if (complete_pair) {
       ipw_owner_query_complete_pair_mask(panel_owner, ds, dt, a_start, a_end)
     } else {
-      ipw_raw_query_pair_mask(
+      ipw_owner_query_pair_mask(
         panel_owner, pair_desc$s, pair_desc$t,
         a_start = a_start, a_end = a_end, ds = ds, dt = dt
       )
@@ -500,7 +445,7 @@ ipw_raw_collect_pair_endpoints <- function(panel_owner, pair_summary, coh_desc, 
   while (a_start <= n_a) {
     ipw_owner_check_interrupt()
     a_end <- as.integer(min(as.double(n_a), as.double(a_start) + step - 1))
-    hit <- ipw_raw_query_pair_mask(
+    hit <- ipw_owner_query_pair_mask(
       panel_owner, pair_desc$s, pair_desc$t,
       a_start = a_start, a_end = a_end, ds = ds, dt = dt
     )
@@ -2310,7 +2255,7 @@ ipw_raw_query_pair_rows <- function(panel_owner, pair_rec, rows) {
     hit <- if (isTRUE(pair_rec$complete_pair)) {
       ipw_owner_query_complete_pair_mask(panel_owner, ds, dt, a_s, a_e)
     } else {
-      ipw_raw_query_pair_mask(
+      ipw_owner_query_pair_mask(
         panel_owner, pair_desc$s, pair_desc$t,
         a_start = a_s, a_end = a_e, ds = ds, dt = dt
       )
@@ -2324,16 +2269,6 @@ ipw_raw_query_pair_rows <- function(panel_owner, pair_rec, rows) {
     return(list(obs = obs, pos_s = pos_s, pos_t = pos_t))
   }
   post <- panel_owner$postings
-  hit <- if (isTRUE(pair_rec$complete_pair)) NULL else {
-    scratch <- ipw_owner_safe_sum(c(ipw_owner_safe_product(48, B), 256))
-    ipw_raw_pair_positions_native(panel_owner, as.integer(rows), ds, dt, scratch)
-  }
-  if (!is.null(hit)) {
-    obs[hit$obs] <- TRUE
-    pos_s[hit$obs] <- hit$pos_s
-    pos_t[hit$obs] <- hit$pos_t
-    return(list(obs = obs, pos_s = pos_s, pos_t = pos_t))
-  }
   pa <- post$post_a_index
   r_dbl <- as.double(rows)
   hs <- ipw_owner_match_sorted_double(r_dbl, pa, post$date_start[ds], post$date_end[ds])
