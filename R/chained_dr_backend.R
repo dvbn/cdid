@@ -1058,7 +1058,14 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
       s$cohorts[1L] %in% complete$target && all(s$cohorts[-1L] %in% complete$control) &&
       identical(as.integer(s$n_observers), as.integer(sum(st$cohort_end[s$cohorts] - st$cohort_start[s$cohorts] + 1L))),
       logical(1)))) complete <- NULL
-  trt_groups <- if (is.null(complete)) NULL else {
+  fixed <- if (separate) or_separate_complete_facts(reader, recipe, records, specs, ctrl, reference,
+    frame_index = or_frame_index, treatment = trt_recipe,
+    retained_external_entries = retained_external_entries, external_work_ops = external_work_ops,
+    metadata_entries = header + metadata) else NULL
+  if (!is.null(fixed) && !all(vapply(ts, function(s)
+      identical(as.integer(s$n_observers), as.integer(sum(st$cohort_end[s$cohorts] - st$cohort_start[s$cohorts] + 1L))),
+      logical(1)))) fixed <- NULL
+  trt_groups <- if (is.null(complete) && is.null(fixed)) NULL else {
     trt_keys <- vapply(ts, function(s) paste(s$cohorts, collapse = ":"), character(1))
     lapply(unique(trt_keys), function(k) which(trt_keys == k))
   }
@@ -1071,11 +1078,20 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
     metadata, header, name_bytes
   ) else or_baseline_complete_fit_charges(st, specs, S, G, L, p_or, min(st$N, ctrl$max_chunk_rows),
     metadata, header, name_bytes, complete)
+  if (!is.null(fixed)) {
+    extra <- or_separate_complete_extra(fixed, min(st$N, ctrl$max_chunk_rows), p_or, S, G, L)
+    or_charges <- Map(`+`, or_charges, extra)
+  }
   trt_models_bound <- T_count * (p_trt * p_trt + 12 * (p_trt + p_or) + 8 * max_m + p_trt * max_m + 4096) +
     L * (8 * p_or + 8 * p_trt + 1024) + 8192
   trt_scratch <- max_trt_n * (p_trt + p_or + 16) + 32 * (p_trt + max_m + 4)^2 + 8192
   trt_work <- 128 * (gc$maxit + 2) * trt_scan_n * (p_trt + 2)^2 +
     128 * T_count * st$N * max_m + 128 * trt_models_bound
+  if (!is.null(fixed)) {
+    # One exact treatment root and prepared risk roster live at a time.
+    trt_scratch <- trt_scratch + max_trt_n * (p_trt + p_or + 16) +
+      64 * (T_count + max_m + (p_trt + 2)^2)
+  }
   if (!is.null(complete)) {
     # One logit on the first model's observers plus its prepared invariants
     # (share$inputs and share$prep) per (g, K) cohort group, followed by one
@@ -1109,14 +1125,20 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline DR fits")
 
   state <- if (is.null(complete)) {
-    supports <- lapply(specs, function(s) dr_baseline_support(reader, s, recipe, or_frame_index,
-      ctrl, reference, complete))
+    fixed_supports <- if (is.null(fixed)) NULL else or_separate_complete_supports(reader,
+      specs, recipe, or_frame_index, ctrl, fixed)
+    supports <- if (is.null(fixed_supports)) lapply(specs, function(s)
+      dr_baseline_support(reader, s, recipe, or_frame_index, ctrl, reference, complete)) else fixed_supports$supports
     assemble <- if (separate) or_baseline_separate_assemble else or_baseline_assemble
     ans <- assemble(
       recipe, supports, pools, links, rank_tol, st$N,
       function(sid, visit) dr_support_visit(reader, specs[[sid]], ctrl, or_frame_index,
                                             function(rows, S_vec, obs, dy, Z) visit(Z), reference, complete)
     )
+    if (!is.null(fixed_supports)) {
+      fixed_counts <- fixed_supports$counts
+      rm(fixed_supports)
+    }
     rm(supports)
     ans
   } else {
@@ -1126,8 +1148,24 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
       or_frame_index, dr_baseline_abort)
   }
 
-  share <- if (is.null(complete)) NULL else new.env(parent = emptyenv())
-  treatments <- if (is.null(complete)) {
+  share <- if (is.null(complete) && is.null(fixed)) NULL else new.env(parent = emptyenv())
+  treatments <- if (!is.null(fixed)) {
+    out_trt <- vector("list", T_count)
+    share$calls <- share$reuses <- share$summary_batches <- share$summary_batched_models <- 0L
+    for (g_idx in trt_groups) {
+      share_g <- new.env(parent = emptyenv())
+      for (tid in g_idx) {
+        spec <- ts[[tid]]
+        out_trt[[tid]] <- dr_baseline_treatment_fit(reader, spec, state$supports,
+          state$regressions[[spec$regression]], or_outcome_block_fit(state$outcome_groups, spec$regression),
+          recipe, or_frame_index, trt_recipe, gc, ctrl, reference, fixed, share_g)
+      }
+      share$calls <- share$calls + share_g$calls
+      share$reuses <- share$reuses + share_g$reuses
+      rm(share_g)
+    }
+    out_trt
+  } else if (is.null(complete)) {
     lapply(ts, function(s) {
       dr_baseline_treatment_fit(
         reader, s, state$supports, state$regressions[[s$regression]],
@@ -1322,6 +1360,12 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
     class = c("cdid_dr_baseline", "cdid_dr_backend")
   )
   if (separate) obj <- or_selection_separate_record(obj, state)
+  if (!is.null(fixed)) {
+    obj$separate_complete <- or_separate_complete_index(fixed, specs, obj$links, ts, trt_groups)
+    obj$accounting$fixed_operator <- c(list(route = "separate_complete"), as.list(fixed_counts),
+      list(n_treatment_logit_fits = unname(logit_counts["fits"]),
+        n_treatment_logit_reuses = unname(logit_counts["reuses"])))
+  }
   if (!is.null(reference)) {
     obj$reference_ref <- reference$ref
     obj$accounting$n_reference_recipes <- nrow(reference$recipes)

@@ -79,6 +79,8 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   pre <- dr_separate_if_envelope(backend, length(rows), links, details)
   cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
     pre$scratch, c(backend$accounting$work_ops_bound, pre$work), pre$output, "separate DR IF chunk")
+  if (!details && !isTRUE(backend$uses_selection_models) && !is.null(backend$separate_complete))
+    return(dr_separate_complete_if(backend, reader, rows, links, scale, pre))
   B <- length(rows); N <- st$N; conditional <- isTRUE(backend$uses_selection_models)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   ref <- chained_backend_reference(backend); ci <- st$cohort_index[rows]

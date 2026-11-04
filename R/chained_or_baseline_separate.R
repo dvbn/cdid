@@ -94,7 +94,9 @@ or_baseline_separate_if_budget <- function(backend, B, links, details) {
   maps <- 4096 + 32 * (S + G + nl + incidence)
   cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
     maps, 64 * maps, 0, "separate baseline OR dependency metadata")
-  gids <- if (details) seq_len(G) else sort(unique(vapply(backend$links[links], `[[`, integer(1), "regression")))
+  link_blocks <- if (!is.null(backend$separate_complete)) backend$separate_complete$link_block[links] else
+    vapply(backend$links[links], `[[`, integer(1), "regression")
+  gids <- if (details) seq_len(G) else sort(unique(link_blocks))
   sids <- sort(unique(c(vapply(backend$links[links], `[[`, integer(1), "support_id"),
     unlist(lapply(backend$regression_specs[gids], `[[`, "support_ids")))))
   ps <- vapply(backend$outcome_groups$groups[gids], function(g) length(g$keep), integer(1))
@@ -105,13 +107,18 @@ or_baseline_separate_if_budget <- function(backend, B, links, details) {
     if (details) 1536 * (ng + nl + 1) + 32 * name_bytes * (ng + nl + 1) + 32 * (ns + ng) else 128 * nl
   width <- nl + 8 + if (details) 2 * sum(ps + 1) + ns + nl * (p + 3) + 2 * J + 4 else 0
   output <- B * width + metadata
+  # Ordinary fixed-operator replay solves p_b-by-n_requested_links_b
+  # loadings without a row dimension. Reserve all solve copies before allocation.
+  adjoint_peak <- if (!details && !is.null(backend$separate_complete))
+    max(c(0, ps * tabulate(match(link_blocks, gids), nbins = length(gids)))) else 0
   scratch <- maps + output + 32 * B * (ns * (p + 5) + mp * (mp + ns + 6) + nl + 16) +
-    128 * (mp + 2)^2
+    128 * (mp + 2)^2 + 32 * adjoint_peak
   work <- 128 * maps + 128 * B * ((ns + 1) * (p + 2)^2 * (1 + ceiling(log2(st$n_A + 1))) +
     sum((ps + 2)^2 * (ns + nl + 2)) + J + nl * (p + 2))
   cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
     scratch, work, output, "separate baseline OR IF chunk")
-  list(gids = gids, beta_gids = gids, sids = sids, output = output, scratch = scratch, work = work)
+  list(gids = gids, beta_gids = gids, sids = sids, output = output, scratch = scratch, work = work,
+    adjoint_entries_peak = adjoint_peak)
 }
 
 # One bounded original-unit chunk, streamed by unique block. Only details retain

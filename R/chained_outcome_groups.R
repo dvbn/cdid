@@ -38,18 +38,27 @@ or_outcome_group_layout <- function(recipe, supports, blocks, links, mode,
       or_pooled_abort("Each consuming link needs an original block ID and support ID.", "input", route)
   }
   B <- length(blocks)
+  # Separate blocks need only their own consuming link positions. Index once;
+  # scanning the entire link catalog for every block is quadratic metadata work.
+  separate_links <- if (mode == "separate") {
+    bids <- vapply(links, function(l) as.integer(l$regression), integer(1))
+    positions <- seq_along(links); names(positions) <- names(links)
+    list(by_block = split(positions, factor(bids, levels = seq_len(B))),
+      support = vapply(links, function(l) as.integer(l$support_id), integer(1)))
+  } else NULL
   group_id <- if (mode == "pooled") rep.int(1L, B) else seq_len(B)
   block_map <- data.frame(block_id = seq_len(B), name = block_names,
     group_id = group_id, local_block_id = if (mode == "pooled") seq_len(B) else rep.int(1L, B),
     stringsAsFactors = FALSE)
   group_map <- lapply(seq_len(max(group_id)), function(g) {
     bids <- which(group_id == g)
-    lids <- which(vapply(links, function(l) l$regression %in% bids, logical(1)))
+    lids <- if (is.null(separate_links))
+      which(vapply(links, function(l) l$regression %in% bids, logical(1))) else separate_links$by_block[[g]]
     # In separate mode include precisely this block's controls and ALL of its
     # consuming prediction supports. Unrelated treated domains must stay out.
     sids <- if (mode == "pooled") seq_along(supports) else sort(unique(c(
       unlist(lapply(blocks[bids], `[[`, "support_ids"), use.names = FALSE),
-      vapply(links[lids], function(l) as.integer(l$support_id), integer(1)))))
+      separate_links$support[lids])))
     list(block_ids = bids, support_ids = as.integer(sids), link_ids = lids,
       slope_dimension_bound = recipe$p,
       coefficient_dimension_bound = recipe$p + recipe$intercept * length(bids),
@@ -117,10 +126,11 @@ or_outcome_block_index <- function(object, block) {
 # In pooled mode fit/basis describe the joint group, local_block_id selects the
 # intercept record. There is no standalone block slope solve in that mode.
 or_outcome_block_fit <- function(object, block) {
-  b <- or_outcome_block_index(object, block); m <- object$block_map[b, ]
-  g <- object$groups[[m$group_id]]
-  c(list(block_id = b, group_id = m$group_id, local_block_id = m$local_block_id),
-    g$regressions[[m$local_block_id]], list(p = length(g$keep),
+  b <- or_outcome_block_index(object, block)
+  group_id <- object$block_map$group_id[b]; local_block_id <- object$block_map$local_block_id[b]
+  g <- object$groups[[group_id]]
+  c(list(block_id = b, group_id = group_id, local_block_id = local_block_id),
+    g$regressions[[local_block_id]], list(p = length(g$keep),
       coefficient_dimension = length(g$keep) + object$recipe$intercept,
       keep = g$keep, beta = g$beta, basis = g$basis, fit = g$fit))
 }

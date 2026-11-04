@@ -1096,6 +1096,9 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
   complete <- if (separate) NULL else or_baseline_complete_facts(reader, recipe, records, specs, ctrl, reference,
     retained_external_entries = retained_external_entries, external_work_ops = external_work_ops,
     metadata_entries = header + metadata)
+  fixed <- if (separate) or_separate_complete_facts(reader, recipe, records, specs, ctrl, reference,
+    retained_external_entries = retained_external_entries, external_work_ops = external_work_ops,
+    metadata_entries = header + metadata) else NULL
   charges <- if (separate) or_baseline_separate_fit_charges(S, G, L, p, st$N, st$n_A,
     min(st$N, ctrl$max_chunk_rows), metadata, header, sum(nchar(recipe$columns, type = "bytes")),
     pools = pools, links = links, support_rows = vapply(specs, function(s)
@@ -1104,6 +1107,10 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
     metadata, header, sum(nchar(recipe$columns, type = "bytes"))) else
     or_baseline_complete_fit_charges(st, specs, S, G, L, p, min(st$N, ctrl$max_chunk_rows), metadata, header,
       sum(nchar(recipe$columns, type = "bytes")), complete)
+  if (!is.null(fixed)) {
+    extra <- or_separate_complete_extra(fixed, min(st$N, ctrl$max_chunk_rows), p, S, G, L)
+    charges <- Map(`+`, charges, extra)
+  }
   scratch <- charges$scratch
   # CP08/D78 work ownership. `own_work` is this fit's INCREMENTAL charge (every
   # support scan, pooled fit, factor and validation term of `charges$work`).
@@ -1117,11 +1124,18 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
   bound <- metadata + charges$models
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline OR fits")
   state <- if (is.null(complete)) {
-    supports <- lapply(specs, function(s) or_baseline_support(reader, s, recipe, ctrl, reference, complete))
+    fixed_supports <- if (is.null(fixed)) NULL else or_separate_complete_supports(reader,
+      specs, recipe, seq_along(recipe$columns), ctrl, fixed)
+    supports <- if (is.null(fixed_supports)) lapply(specs,
+      function(s) or_baseline_support(reader, s, recipe, ctrl, reference, complete)) else fixed_supports$supports
     assemble <- if (separate) or_baseline_separate_assemble else or_baseline_assemble
     ans <- assemble(recipe, supports, pools, links, rank_tol, st$N,
       function(sid, visit) or_baseline_visit(reader, specs[[sid]], ctrl,
         function(rows, S, obs, dy, Z) visit(Z), reference, complete))
+    if (!is.null(fixed_supports)) {
+      fixed_counts <- fixed_supports$counts
+      rm(fixed_supports)
+    }
     rm(supports)
     ans
   } else {
@@ -1164,6 +1178,10 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
     obj$accounting$n_support_scans <- S + sum(vapply(state$outcome_groups$group_map,
       function(m) if (groups[[m$block_ids[1L]]]$verification_scan)
         length(m$support_ids) else 0L, integer(1)))
+    if (!is.null(fixed)) {
+      obj$separate_complete <- or_separate_complete_index(fixed, specs, obj$links)
+      obj$accounting$fixed_operator <- c(list(route = "separate_complete"), as.list(fixed_counts))
+    }
   }
   if (!is.null(reference)) {
     obj$reference_ref <- reference$ref
@@ -1278,6 +1296,8 @@ evaluate_or_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
       !is.character(scale) || length(scale) != 1L || is.na(scale) || !scale %in% c("frame", "core"))
     or_baseline_abort("Invalid explicit IF row/link batch, scale or details flag.")
   pre <- or_baseline_if_budget(backend, length(rows), links, details)
+  if (or_baseline_separate(backend) && !details && !is.null(backend$separate_complete))
+    return(or_separate_complete_if(backend, reader, rows, links, scale, pre))
   # CP08 stage 4: an eligible non-detailed chunk is one native batch; detailed
   # requests keep the route below.
   if (!or_baseline_separate(backend) && !details && !is.null(backend$complete_support))
