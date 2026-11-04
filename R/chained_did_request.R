@@ -1158,8 +1158,8 @@ chained_request_H_diagnostics <- function(H, n_A) {
 
 # Compact post-plus-auxiliary ledger. Only existing fitted-view reference identity
 # is compared; no coefficients, (g,K) key, mask reconstruction or refit is used.
-chained_request_nuisance_diagnostics <- function(res, control, custom) {
-  if (!is.null(res$nuisance_registry$cp04)) return(cp04_public_diagnostics(res, control))
+chained_request_nuisance_diagnostics <- function(res, control, custom, public_object = NULL) {
+  if (!is.null(res$nuisance_registry$cp04)) return(cp04_public_diagnostics(res, control, public_object))
   aux <- res$auxiliary_reporting
   fits <- aux$fitted_views
   post <- res$point_links_all
@@ -1341,8 +1341,8 @@ chained_request_bind_mp <- function(res, prep, call, params, request, control, p
   mp$chained$reduction_summary <- res$reduction_summary[intersect(c("weighting", "weighting_requested", "reduce_structural_redundancy", "reduction_active",
     "n_links_all", "n_links_used", "max_moment_expansion_diff"), names(res$reduction_summary))]
   mp$chained$covariance_handling <- res$covariance_handling
-  mp$chained$nuisance_diagnostics <- chained_request_nuisance_diagnostics(res, control, is.function(params$est_method))
-  mp$chained$resource_accounting <- res$resource_accounting
+  mp$chained$nuisance_diagnostics <- chained_request_nuisance_diagnostics(res, control, is.function(params$est_method), mp)
+  mp$chained$resource_accounting <- cp04_pipeline_public_resource(res$resource_accounting)
   mp$chained$numerical_transfer <- if (is.null(gt)) list(requested = FALSE, performed = FALSE,
     status = "complete_per_fit_error_certification_not_requested_or_performed", certified = FALSE) else list(requested = TRUE,
     certified = isTRUE(res$numerical_transfer$certified),

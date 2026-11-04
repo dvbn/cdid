@@ -5600,6 +5600,8 @@ run_chained_ipw_pipeline <- function(
   compact_facts <- NULL
   compact_res <- NULL
   M_cov <- if (early_reduction || cpt_mode) 0.0 else M_rows
+  memory_phase_route <- cp04_pipeline_phase_eligible(cp04, transfer_requested, cpt_mode,
+    imputation, augmented, custom_est_method, wt_mode, ctrl$gmm_accuracy$covariance_strategy)
   combined_initial <- ipw_owner_safe_sum(c(
     owners_live, aux_env$retained_entries,
     4.0*as.double(nrow(data))*(length(data)+p_bound),
@@ -5612,7 +5614,7 @@ run_chained_ipw_pipeline <- function(
     # D27 capture metadata persists across fits; one summary chunk is live.
     if (is.function(custom_est_method)) 0.0 else
       2048.0*M_bound + 2048.0 + 8.0*min(n_a_units,ctrl$owner_control$max_chunk_rows)
-  ),min(ctrl$owner_control$max_retained_entries,ctrl$owner_control$max_matrix_entries),
+  ),if (memory_phase_route) NULL else min(ctrl$owner_control$max_retained_entries,ctrl$owner_control$max_matrix_entries),
   if (early_reduction) "pipeline owners, original-row views/nuisances, ledger/basis, retained results and inference matrices before the structural basis" else
   "pipeline simultaneous owners, nuisances, ledger/basis, retained results and inference matrices")
 
@@ -5624,6 +5626,19 @@ run_chained_ipw_pipeline <- function(
   ),ctrl$owner_control$max_work_ops,
   if (early_reduction) "pipeline construction/reporting/aggregation/interval/multiplier work before the structural basis" else
   "pipeline reporting/aggregation/interval/multiplier whole-path work envelope")
+  # The old sum remains an estimate, not a claim that future buffers are
+  # retained by every nuisance fit. Keep actual persistent input/model metadata
+  # here; each covariance/GMM/reporting allocation rejoins its own phase below.
+  initial_envelope_estimate <- combined_initial
+  memory_phase <- if (memory_phase_route) cp04_pipeline_phase_start(combined_initial,
+    (if (transfer_requested) 64.0 else 16.0) * M_cov * M_cov,
+    (if (cpt_mode) 0.0 else (if (transfer_requested) 128.0 else 32.0) * n_total * J_bound),
+    if (reserve_draws) (if (transfer_requested) 16.0 else 8.0) * as.double(biters) * J_bound * (length(agg_types) + 1.0) else 0.0,
+    32.0 * ctrl$owner_control$max_chunk_rows * (M_cov + p_bound + 1.0),
+    if (cpt_mode) 0.0 else aux_report_entries, ctrl$owner_control) else NULL
+  if (is.null(memory_phase)) ipw_owner_safe_sum(combined_initial,
+    min(ctrl$owner_control$max_retained_entries, ctrl$owner_control$max_matrix_entries),
+    "pipeline original simultaneous prefix") else combined_initial <- memory_phase$persistent_entries
   # The existing whole-pipeline envelope above covers the fact scan's N-weight
   # comparison and O(M + T + chunk_rows) date buffers inside its input-copy,
   # per-original-row and bounded-chunk allowances. Its original M-bound scan
@@ -6008,7 +6023,7 @@ run_chained_ipw_pipeline <- function(
   # Final public diagnostic copying is checked against the recorded pipeline
   # peak. Reserve its existing one-output plus four-scratch charge before the
   # automatic OR/DR row planner consumes the remaining workspace.
-  final_diagnostic_copy_entries <- if (cp04_auto_plan)
+  final_diagnostic_copy_entries <- if (cp04_auto_plan && is.null(memory_phase))
     5 * (4 * nuis_res$cp04$accounting$owned_entries + 4096) else 0
   # The automatic planner's retained argument (zero on every other CP04 route);
   # the retained moment IF admission below probes the same planner with it.
@@ -6042,6 +6057,18 @@ run_chained_ipw_pipeline <- function(
     min(ctrl$owner_control$max_retained_entries, ctrl$owner_control$max_matrix_entries),
     "pipeline persistent envelope plus retained diagnostics")
 
+  # Reporting happens with the returned GMM arrays still live. Restore the
+  # original output-copy, draw and auxiliary reservations in THIS phase, and
+  # conservatively retain the full GMM/D5 envelopes (including its dead scratch).
+  reporting_retained <- if (is.null(memory_phase)) retained_with_diagnostics else ipw_owner_safe_sum(c(
+    retained_with_diagnostics, gmm_preflight$total_payload_entries,
+    d5_arrays$ledger_if_entries, d5_arrays$basis_if_entries,
+    d5_arrays$ledger_enclosure_entries, d5_arrays$basis_enclosure_entries,
+    memory_phase$deferred_target_output_entries, memory_phase$deferred_draw_entries,
+    memory_phase$deferred_auxiliary_entries),
+    min(ctrl$owner_control$max_retained_entries, ctrl$owner_control$max_matrix_entries),
+    "baseline reporting phase with retained GMM results and output/draw buffers")
+  cp04_reporting_retained <- cp04_registry_retained_entries(nuis_res, reporting_retained)
   cp04_retained_with_diagnostics <- cp04_registry_retained_entries(nuis_res, retained_with_diagnostics)
   cp04_retained <- NULL
   cp04_cov_retained <- NULL
@@ -6067,7 +6094,7 @@ run_chained_ipw_pipeline <- function(
         if (!is.na(d$index) && d$index > 0L) d$index else NA_integer_, integer(1))
       idx_map <- if (!is.null(cp04)) nuis_res$cp04_aux_index else nuis_res$raw_aux_index
       ids <- idx_map[q[!is.na(q)]]; ids <- unique(ids[!is.na(ids)])
-      if (!length(ids)) 0 else cp04_preflight_links(active_backend, ids, cp04_retained_with_diagnostics +
+      if (!length(ids)) 0 else cp04_preflight_links(active_backend, ids, cp04_reporting_retained +
         8 * n_total * (length(aux_sel_bp) + nrow(ledger)))$work_ops_bound
     }
     combined_work <- ipw_owner_safe_sum(c(combined_work, cp04_work$work,
@@ -6125,8 +6152,15 @@ run_chained_ipw_pipeline <- function(
       aux_backend_ids <- aux_backend_ids[!is.na(aux_backend_ids)]
       if (length(aux_backend_ids)) {
         cp04_retained_if_auxiliary_admit(cp04_retained, active_backend, aux_backend_ids,
-          retained = cp04_retained_with_diagnostics + 8 * n_total * (length(aux_sel_bp) + nrow(ledger)),
-          live = cp04_retained$admission_total + 2 * as.double(n_total) * as.double(J_est_expected),
+          retained = cp04_reporting_retained + 8 * n_total * (length(aux_sel_bp) + nrow(ledger)),
+          # The all-served probe has no active producer to restore V5's X.
+          # Fund RAW reporting prefix + store + output together in this phase;
+          # a capacity decline still releases the store before ordinary report.
+          live = if (is.null(memory_phase)) cp04_retained$admission_total +
+            2 * as.double(n_total) * as.double(J_est_expected) else max(
+              cp04_retained$admission_total + 2 * as.double(n_total) * as.double(J_est_expected),
+              ipw_owner_safe_sum(c(reporting_retained, cp04_retained$entries,
+                8 * n_total * (length(aux_sel_bp) + nrow(ledger))))),
           work = combined_work, control = active_backend$control)
         if (!is.null(cp04_retained$auxiliary)) combined_work <- ipw_owner_safe_sum(
           c(combined_work, cp04_retained$auxiliary$work), active_backend$control$max_work_ops,
@@ -6304,6 +6338,11 @@ run_chained_ipw_pipeline <- function(
     # caller metadata never grants the D27 roundoff-negative diagnosis.
     prov_used$complete_unit_if_gram <- ipw_seal(list(covariance = V_used,
       n_units = prov_used$n_units, nuisance_fit_id = prov_used$nuisance_fit_id), "complete_unit_if_gram")
+    # V_R and D26_gram_provenance_snapshot in the unchanged GMM preflight
+    # cover the original covariance result and its dimnamed V_used. The
+    # sealed provenance borrows V_used itself, not a third numeric matrix.
+    if (!is.null(memory_phase) && !gmm_sexp_aliases(V_used, prov_used$complete_unit_if_gram$covariance))
+      cp04_abort("Pipeline covariance provenance does not borrow its admitted input matrix.", "integrity")
   }
   # D92 GMM-only store: after the covariance store and its temporary buffers
   # have been released, independently consider a GMM-only store at the original
@@ -6567,7 +6606,7 @@ run_chained_ipw_pipeline <- function(
   progress("reporting ", Q_rep, " pretrend and ", R_full, " post cells; fitting ", Q_aux, " auxiliary comparisons")
   reporting_map <- build_ipw_auxiliary_reporting(ledger, metadata_obj$catalog$spec$calendar, metadata_obj$catalog$spec$cohorts,
     metadata_obj$catalog$spec$anticipation, cg_mode, nuis_res, frame_owner, gmm_handoff, ctrl, root_witness, num_transfer,
-    isTRUE(run_numerical_transfer), bp_mode, n_total, a_to_full, retained_with_diagnostics,
+    isTRUE(run_numerical_transfer), bp_mode, n_total, a_to_full, reporting_retained,
     custom_est_method = custom_est_method, custom_dots = custom_dots,
     pt_assumption = pt_assumption, pt_start = pt_start, pt_catalog_links = metadata_obj$design_links,
     aux_spec = aux_plan, compute_if = compute_inffunc, retained_store = cp04_retained)
@@ -6693,6 +6732,8 @@ run_chained_ipw_pipeline <- function(
     num_transfer$gmm_transfer$complete_inference_certified <- supported_ok && whole_request_complete && agg_complete
     num_transfer$gmm_transfer$certificate_scope <- "Certifies exactly `certified_target_ids` under the separate ID sets in `band_families`; separate sup-t families do not certify their union simultaneously. It never affirms unsupported cells or whole-request coverage when `whole_request_complete` is FALSE."
   }
+  memory_phase <- cp04_pipeline_phase_finish(memory_phase, nuis_res, combined_live,
+    cp04_planner_retained, reporting_retained)
   structure(
     list(
       support_status = if (whole_request_complete) "all_requested_cells_supported" else "partial_support",
@@ -6702,7 +6743,8 @@ run_chained_ipw_pipeline <- function(
         population_claim = "none: catalog-relative support only; unavailable cells are not population non-identification claims",
         maps = list(ledger_to_core_target_row = ledger$core_target_row, ledger_to_loading_column = ledger$loading_column,
           basis_to_loading_column = basis$loading_column, core_target_to_loading_column = core_targets$loading_column)),
-      resource_accounting = c(list(initial_envelope_entries=combined_initial,
+      resource_accounting = c(list(initial_envelope_entries=if (is.null(memory_phase)) combined_initial else initial_envelope_estimate,
+        memory_phases=memory_phase,
         simultaneous_entries=combined_live,downstream_work_ops=combined_work,point_producer=point_preflight,
         complete_raw_capacity=complete_raw_capacity,
         memory_prefix_composition = list(embedded_external_entries = cp04_memory_overlap,

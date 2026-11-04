@@ -454,3 +454,139 @@ testthat::test_that("optional native capacity decline keeps original admission a
     testthat::expect_null(fop_ns("chained_full_if_plan")(fit, seq_along(fit$links), 32L))
   }
 })
+
+v17_public <- function(a, method, mode, law, old = FALSE, draws = FALSE, pt = "post") {
+  if (old) testthat::local_mocked_bindings(cp04_pipeline_phase_eligible = function(...) FALSE, .package = "cdid")
+  data <- a$long; data$g[!is.finite(data$g)] <- 0
+  cdid::att_gt(yname = "y", tname = "time", idname = "id", gname = "g", data = data,
+    frame = a$frame, xformla = ~x + z, weightsname = "w", selection = "none",
+    est_method = method, control_group = law, outcome_pooling = mode,
+    pt_assumption = pt, pt_start = if (pt == "all") 1 else NULL,
+    bstrap = draws, cband = FALSE, biters = 19L, gmm_weighting = "optimal",
+    control = list(chunk_rows = 7L))
+}
+
+testthat::test_that("baseline phases retain the full criterion and original-unit inference", {
+  a <- fop_case()
+  for (method in c("reg", "dr")) for (mode in c("pooled", "separate")) for (law in c("nevertreated", "notyettreated")) {
+    actual <- v17_public(a, method, mode, law)
+    old <- v17_public(a, method, mode, law, TRUE)
+    testthat::expect_equal(actual$att, old$att, tolerance = 1e-9)
+    testthat::expect_equal(actual$inffunc, old$inffunc, tolerance = 1e-9)
+    testthat::expect_equal(actual$V_analytical, old$V_analytical, tolerance = 1e-9)
+    testthat::expect_equal(actual$se, old$se, tolerance = 1e-9)
+    testthat::expect_identical(actual$chained$available, old$chained$available)
+    testthat::expect_identical(actual$chained$covariance_handling$handler_used, old$chained$covariance_handling$handler_used)
+    testthat::expect_equal(actual$chained$covariance_handling$lambda, old$chained$covariance_handling$lambda, tolerance = 1e-9)
+    phase <- actual$chained$resource_accounting$memory_phases
+    testthat::expect_false(is.null(phase))
+    testthat::expect_null(old$chained$resource_accounting$memory_phases)
+    testthat::expect_lt(phase$persistent_entries, phase$whole_path_estimate)
+    testthat::expect_gt(phase$deferred_diagnostic_entries, 0)
+    testthat::expect_equal(actual$chained$resource_accounting$final_diagnostic_copy_entries, 0)
+    testthat::expect_gte(phase$reporting_prefix_entries,
+      phase$deferred_target_output_entries + phase$deferred_draw_entries + phase$deferred_auxiliary_entries)
+    cap <- actual$chained$aggregation_state$public$entries
+    testthat::expect_gt(cap, 0)
+    testthat::expect_lte(phase$fit_peak_bound, cap)
+    testthat::expect_lte(phase$covariance_gmm_peak, cap)
+    testthat::expect_lte(phase$reporting_prefix_entries, cap)
+    # Public accounting must not retain a backend/reader through private seals.
+    testthat::expect_null(phase$ref); testthat::expect_null(phase$backend_ref); testthat::expect_null(phase$reader_ref)
+    testthat::expect_false(any(vapply(phase, is.environment, logical(1))))
+    testthat::expect_identical(names(actual$chained$nuisance_diagnostics), names(old$chained$nuisance_diagnostics))
+  }
+  # A fixed draw count remains in the reporting phase. No draw is redrawn;
+  # paired calls start from the same seed and compare the existing estimator.
+  set.seed(1717); actual <- v17_public(a, "dr", "separate", "notyettreated", draws = TRUE)
+  set.seed(1717); old <- v17_public(a, "dr", "separate", "notyettreated", TRUE, TRUE)
+  testthat::expect_equal(actual$att, old$att, tolerance = 1e-9)
+  testthat::expect_equal(actual$inffunc, old$inffunc, tolerance = 1e-9)
+  testthat::expect_equal(actual$se, old$se, tolerance = 1e-9)
+  testthat::expect_gt(actual$chained$resource_accounting$memory_phases$deferred_draw_entries, 0)
+})
+
+testthat::test_that("diagnostic phases count retained GMM and partial public payload with exact capacity and source guards", {
+  a <- fop_case(); reader <- a$or_reader
+  external <- 4096
+  b <- fop_ns("fit_or_baseline")(reader, a$or_views, a$control, 1e-10, a$recipe,
+    retained_external_entries = external, outcome_pooling = "separate")
+  prefix <- reader$accounting$borrowed_owner_entries + external
+  registry <- list(cp04 = b, cp04_reader = reader,
+    cp04_memory_accounting = fop_ns("cp04_registry_memory_accounting")(prefix, reader, b))
+  phase <- fop_ns("cp04_pipeline_phase_start")(prefix + 3072, 4096, 0, 0, 0, 0, a$control)
+  phase <- fop_ns("cp04_pipeline_phase_finish")(phase, registry, 1e6, 1e5, 1e5)
+  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+  panel <- get("panel_owner", reader$panel_ref, inherits = FALSE)
+  res <- list(nuisance_registry = registry, frame_owner = frame, panel_owner = panel,
+    covariance_stream = list(V = diag(3)), gmm_fit = list(internal_gauge = list(Lambda = matrix(1, 3, 4))),
+    resource_accounting = list(memory_phases = phase, initial_envelope_entries = 1e8, simultaneous_entries = 1e8))
+  partial <- list(inffunc = matrix(2, 32, 3))
+  retained <- fop_ns("cp04_public_diagnostic_retained")(res, partial)
+  testthat::expect_equal(retained, prefix + unname(fop_ns("cp04_payload")(list(res, partial))["entries"]))
+  larger <- res; larger$gmm_fit$internal_gauge$R_chol <- diag(20)
+  testthat::expect_gte(fop_ns("cp04_public_diagnostic_retained")(larger, partial) - retained, 400)
+  bound <- 4 * b$accounting$owned_entries + 4096
+  peak <- retained + 5 * bound
+  ctrl <- fop_ns("ipw_owner_control")(7L, peak, peak, 1e13, peak)
+  testthat::expect_silent(fop_ns("cp04_budget")(ctrl, c(retained, bound), 4 * bound, 8 * bound, bound, "phase witness"))
+  low <- fop_ns("ipw_owner_control")(7L, peak, peak - 1, 1e13, peak)
+  testthat::expect_error(fop_ns("cp04_budget")(low, c(retained, bound), 4 * bound, 8 * bound, bound, "phase witness"),
+    class = "cdid_ipw_owner_bound_error")
+  bad <- res; bad$resource_accounting$memory_phases$persistent_entries <- prefix + 1
+  testthat::expect_error(fop_ns("cp04_public_diagnostic_retained")(bad, partial), class = "cdid_cp04_integrity_error")
+  foreign <- res; foreign$nuisance_registry$cp04 <- fop_fit(a, "reg")
+  testthat::expect_error(fop_ns("cp04_public_diagnostic_retained")(foreign, partial), class = "cdid_cp04_integrity_error")
+  stale <- res; stale$nuisance_registry$cp04_memory_accounting$embedded_external_entries <- external + 1
+  testthat::expect_error(fop_ns("cp04_public_diagnostic_retained")(stale, partial), class = "cdid_cp04_integrity_error")
+  public <- fop_ns("cp04_pipeline_public_resource")(res$resource_accounting)
+  testthat::expect_false(any(vapply(public$memory_phases, is.environment, logical(1))))
+  testthat::expect_equal(public$memory_phases$persistent_entries, prefix)
+})
+
+
+testthat::test_that("phase metadata is funded through reporting and unsupported covariance routes stay unchanged", {
+  start <- fop_ns("cp04_pipeline_phase_start")
+  testthat::expect_null(start(10000, 16, 5000, 1000, 100, 1000, fop_case()$control))
+  eligible <- fop_ns("cp04_pipeline_phase_eligible")
+  args <- list(cp04 = list(or_method = "baseline"), transfer = FALSE, pretest = FALSE,
+    imputation = FALSE, augmented = FALSE, custom = NULL, weighting = "identity", strategy = list())
+  testthat::expect_false(do.call(eligible, args))
+  args$weighting <- "optimal"; args["strategy"] <- list(NULL)
+  testthat::expect_false(do.call(eligible, args))
+  args$strategy <- list(method = "tikhonov")
+  testthat::expect_true(do.call(eligible, args))
+})
+
+
+testthat::test_that("all-served report cache funds persistent X plus restored reporting buffers and store", {
+  a <- fop_case(); ids <- a$frame$id[a$g %in% c(3, Inf)]
+  a$long <- a$long[a$long$id %in% ids, , drop = FALSE]
+  a$frame <- a$frame[a$frame$id %in% ids, , drop = FALSE]
+  # This pooled complete-support optimization requires fixed equal unit
+  # weights. Change only this witness input, not fop_case or any other test.
+  a$frame$w <- 1
+  admit <- fop_ns("cp04_retained_if_auxiliary_admit"); seen <- list()
+  testthat::local_mocked_bindings(cp04_retained_if_auxiliary_admit = function(store, backend, backend_ids,
+      retained, live, work, control) {
+    caller <- parent.frame()
+    raw <- get("reporting_retained", caller)
+    N <- get("n_total", caller); ledger <- get("ledger", caller); selected <- get("aux_sel_bp", caller)
+    needed <- raw + store$entries + 8 * N * (length(selected) + nrow(ledger))
+    complete <- !is.null(backend$complete_support)
+    testthat::expect_true(complete)
+    mapped <- if (complete) fop_ns("cp04_retained_if_auxiliary_map")(store, backend, backend_ids) else rep(NA_integer_, length(backend_ids))
+    answer <- admit(store, backend, backend_ids, retained, live, work, control)
+    seen[[length(seen) + 1L]] <<- list(live = live, needed = needed, complete = complete,
+      n_requested = length(backend_ids), n_mapped = sum(!is.na(mapped)),
+      ids_stream = backend_ids[is.na(mapped)], admitted = !is.null(store$auxiliary),
+      all_served = !is.null(store$auxiliary) && store$auxiliary$columns_streamed == 0L)
+    answer
+  }, .package = "cdid")
+  fit <- v17_public(a, "dr", "pooled", "nevertreated", pt = "all")
+  testthat::expect_gt(length(seen), 0L)
+  testthat::expect_true(any(vapply(seen, `[[`, logical(1), "all_served")),
+    info = paste(capture.output(str(seen)), collapse = "\n"))
+  for (record in seen) testthat::expect_gte(record$live, record$needed)
+  testthat::expect_true(all(fit$chained$available))
+})

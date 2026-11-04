@@ -248,11 +248,10 @@ chained_full_link_estimate <- function(backend, j) {
   f <- backend$treatments[[l$model]]; unname(f$means["T"] - f$means["M"])
 }
 
-or_public_diagnostics <- function(res, control) {
+or_public_diagnostics <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
   bound <- 4 * b$accounting$owned_entries + 4096
-  cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
-    res$resource_accounting$initial_envelope_entries)), bound),
+  cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
     4 * bound, 8 * bound, bound, "OR public diagnostic copy")
   local_blocks <- if (identical(b$outcome_pooling, "separate")) outcome_public_blocks(b) else NULL
   shared <- b$shared[intersect(c("p", "keep", "beta", "coefficients", "fit", "summary",
@@ -339,11 +338,10 @@ or_public_diagnostics <- function(res, control) {
   out
 }
 
-dr_public_diagnostics <- function(res, control) {
+dr_public_diagnostics <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
   bound <- 4 * b$accounting$owned_entries + 4096
-  cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
-    res$resource_accounting$initial_envelope_entries)), bound),
+  cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
     4 * bound, 8 * bound, bound, "DR public diagnostic copy")
   local_blocks <- if (identical(b$outcome_pooling, "separate")) outcome_public_blocks(b) else NULL
   shared <- b$shared[intersect(c("p", "keep", "beta", "coefficients", "fit", "summary",

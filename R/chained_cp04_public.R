@@ -1824,21 +1824,21 @@ cp04_stream_covariance <- function(backend, links, retained = 0) {
 
 # D60: every reference-input backend's diagnostics carry its recipe table,
 # extraction conventions, provenance, frozen bases and recipe repeat rates.
-cp04_public_diagnostics <- function(res, control) {
-  out <- cp04_public_diagnostics_route(res, control)
+cp04_public_diagnostics <- function(res, control, public_object = NULL) {
+  out <- cp04_public_diagnostics_route(res, control, public_object)
   b <- res$nuisance_registry$cp04
   if (!is.null(b$reference_ref) && is.null(out$reference_inputs))
     out$reference_inputs <- chained_reference_record(chained_backend_reference(b))
   out
 }
 
-cp04_public_diagnostics_route <- function(res, control) {
+cp04_public_diagnostics_route <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
   if (inherits(b, "cdid_reference_ipw_backend")) return(reference_ipw_public_diagnostics(res, control))
   if (inherits(b, "cdid_augmented_backend")) return(augmented_public_diagnostics(res, control))
   if (inherits(b, "cdid_imputation_backend")) return(imputation_public_diagnostics(res, control))
-  if (inherits(b, c("cdid_dr_baseline", "cdid_dr_corollary1"))) return(dr_public_diagnostics(res, control))
-  if (inherits(b, c("cdid_or_baseline", "cdid_or_corollary1"))) return(or_public_diagnostics(res, control))
+  if (inherits(b, c("cdid_dr_baseline", "cdid_dr_corollary1"))) return(dr_public_diagnostics(res, control, public_object))
+  if (inherits(b, c("cdid_or_baseline", "cdid_or_corollary1"))) return(or_public_diagnostics(res, control, public_object))
   # Reserve the compact copy before constructing lists; source factors are
   # borrowed, without owner/design/IF copies. Conservative header allowance.
   bound <- 4 * b$accounting$owned_entries + 4096
