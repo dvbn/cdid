@@ -148,7 +148,8 @@ or_public_fit <- function(method, reader, views, ctrl, retained, work,
   tryCatch(if (identical(method, "baseline"))
     fit_or_baseline(reader, views, ctrl$owner_control, or_public_rank_tol(),
       outcome_recipe = outcome_recipe,
-      retained_external_entries = external, external_work_ops = work, reference = reference, outcome_pooling = outcome_pooling) else
+      retained_external_entries = external, external_work_ops = work, reference = reference, outcome_pooling = outcome_pooling,
+      automatic_chunk_rows = automatic_chunk_rows) else
     if (!is.null(reference)) fit_or_selection_models(reader, views, ctrl$owner_control, ctrl$glm_control,
       or_public_rank_tol(), outcome_recipe = outcome_recipe,
       retained_external_entries = external, external_work_ops = work,

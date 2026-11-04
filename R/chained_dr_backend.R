@@ -1123,12 +1123,19 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
     "baseline DR pipeline fit work"
   )
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline DR fits")
+  qr_buffer <- if (separate && automatic_chunk_rows && is.null(reference) && is.null(complete) && is.null(fixed))
+    or_baseline_qr_buffer_plan(ctrl, base, bound, scratch, p_or, st$n_A) else NULL
+  if (!is.null(qr_buffer)) {
+    scratch <- ipw_owner_safe_sum(c(scratch, qr_buffer$extra), ctrl$max_matrix_entries, "baseline DR buffered QR scratch")
+    cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline DR buffered QR fit")
+  }
 
   state <- if (is.null(complete)) {
     fixed_supports <- if (is.null(fixed)) NULL else or_separate_complete_supports(reader,
       specs, recipe, or_frame_index, ctrl, fixed, scratch)
     supports <- if (is.null(fixed_supports)) lapply(specs, function(s)
-      dr_baseline_support(reader, s, recipe, or_frame_index, ctrl, reference, complete)) else fixed_supports$supports
+      if (is.null(qr_buffer)) dr_baseline_support(reader, s, recipe, or_frame_index, ctrl, reference, complete) else
+        or_baseline_qr_buffered_support(reader, s, recipe, ctrl, qr_buffer$rows, or_frame_index)) else fixed_supports$supports
     assemble <- if (separate) or_baseline_separate_assemble else or_baseline_assemble
     ans <- assemble(
       recipe, supports, pools, links, rank_tol, st$N,

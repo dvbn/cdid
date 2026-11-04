@@ -1006,10 +1006,12 @@ or_baseline_descriptor_intake <- function(context, reader, frame, recipe, treatm
 # same order, enter the same catalog, route gate and fit.
 fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recipe,
                             retained_external_entries = 0, external_work_ops = 0, reference = NULL,
-                            outcome_pooling = "pooled") {
+                            outcome_pooling = "pooled", automatic_chunk_rows = FALSE) {
   validate_cp04_reader(reader)
   outcome_pooling <- or_baseline_outcome_mode(outcome_pooling)
   separate <- identical(outcome_pooling, "separate")
+  if (!identical(automatic_chunk_rows, isTRUE(automatic_chunk_rows)))
+    or_baseline_abort("Invalid private automatic row-planning flag.")
   if (missing(rank_tol)) or_baseline_abort("Supply explicit private rank_tol.")
   rank_tol <- or_baseline_rank_tol(rank_tol)
   ctrl <- validate_ipw_owner_control(control)
@@ -1123,11 +1125,18 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
     "baseline OR pipeline fit work")
   bound <- metadata + charges$models
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline OR fits")
+  qr_buffer <- if (separate && automatic_chunk_rows && is.null(reference) && is.null(complete) && is.null(fixed))
+    or_baseline_qr_buffer_plan(ctrl, base, bound, scratch, p, st$n_A) else NULL
+  if (!is.null(qr_buffer)) {
+    scratch <- ipw_owner_safe_sum(c(scratch, qr_buffer$extra), ctrl$max_matrix_entries, "baseline OR buffered QR scratch")
+    cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline OR buffered QR fit")
+  }
   state <- if (is.null(complete)) {
     fixed_supports <- if (is.null(fixed)) NULL else or_separate_complete_supports(reader,
       specs, recipe, seq_along(recipe$columns), ctrl, fixed, scratch)
     supports <- if (is.null(fixed_supports)) lapply(specs,
-      function(s) or_baseline_support(reader, s, recipe, ctrl, reference, complete)) else fixed_supports$supports
+      function(s) if (is.null(qr_buffer)) or_baseline_support(reader, s, recipe, ctrl, reference, complete) else
+        or_baseline_qr_buffered_support(reader, s, recipe, ctrl, qr_buffer$rows)) else fixed_supports$supports
     assemble <- if (separate) or_baseline_separate_assemble else or_baseline_assemble
     ans <- assemble(recipe, supports, pools, links, rank_tol, st$N,
       function(sid, visit) or_baseline_visit(reader, specs[[sid]], ctrl,
