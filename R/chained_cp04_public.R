@@ -1026,9 +1026,18 @@ cp04_retained_if_phase_inventory <- function(phase = c("covariance", "gmm"), bac
     d5_persistent_entries = d5_persistent)
 }
 
+# The same phase storage also serves ordinary static incomplete separate OR/DR.
+# Keep selected complete-support and every reference/selection route unchanged.
+cp04_retained_if_phase_baseline <- function(backend) {
+  is.list(backend) && inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline")) &&
+    identical(backend$outcome_pooling, "separate") && !isTRUE(backend$uses_selection_models) &&
+    is.null(backend$reference_ref) && is.null(backend$separate_complete)
+}
+
 # D92 phase-local retained moment IF (invocation-local, single-phase lifetime).
 # Considered only when the accepted whole-lifetime store declines for a
-# one-block, non-transfer, dated augmented backend:
+# one-block, non-transfer eligible backend (dated augmented, raw IPW or
+# ordinary static incomplete separate baseline OR/DR):
 #   - phase = "covariance": covariance-only store at `cov_plan$chunk_rows`,
 #     filled during the covariance mean pass, sliced during the covariance Gram
 #     pass, and released before allocating GMM consumers.
@@ -1052,7 +1061,8 @@ cp04_retained_if_phase_reserve <- function(backend, links, phase = c("covariance
   if (inherits(backend, "cdid_cp04_retained_if_bound"))
     cp04_abort("Retained moment IF phase storage cannot be reserved on an already bound producer.", "integrity")
   if (isTRUE(numerical_transfer)) return(NULL)
-  if (!is.list(backend) || !inherits(backend, c("cdid_augmented_backend", "cdid_ipw_raw_backend"))) return(NULL)
+  if (!is.list(backend) || (!inherits(backend, c("cdid_augmented_backend", "cdid_ipw_raw_backend")) &&
+      !cp04_retained_if_phase_baseline(backend))) return(NULL)
   if (!is.list(cov_plan) || !is.list(cov_plan$blocks) || !length(cov_plan$blocks))
     cp04_abort("Invalid covariance plan for retained moment IF storage.", "integrity")
   if (length(cov_plan$blocks) != 1L) return(NULL)

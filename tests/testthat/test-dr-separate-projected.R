@@ -235,3 +235,126 @@ testthat::test_that("one compact plan serves duplicate consumers and the admitte
   testthat::expect_error(dsp("cp04_preflight_links")(fit, links, retained + 1,
     chunk_rows = 16L), class = "cdid_ipw_owner_bound_error")
 })
+
+dsp_phase_or <- function(a) {
+  frame <- get("frame_owner", a$reader$frame_ref, inherits = FALSE)
+  views <- lapply(seq_along(a$defs), function(i) {
+    d <- a$defs[[i]]
+    dsp("construct_ipw_link_view")(frame, d$s, d$t, d$g, d$K, control = a$fit$control,
+      link_id = paste0("phase-or-", i), functional_key = paste0("cmpcat:phase-or-", i))
+  })
+  recipe <- dsp("or_pooled_outcome_recipe")(colnames(frame$Z_a), TRUE,
+    setdiff(colnames(frame$Z_a), "(Intercept)"))
+  dsp("fit_or_baseline")(a$reader, views, a$fit$control, 1e-10,
+    recipe, outcome_pooling = "separate")
+}
+
+testthat::test_that("baseline phase eligibility excludes pooled, selection, reference and selected complete routes", {
+  # Eligibility-only metadata, never validated or evaluated as fitted owners.
+  meta <- structure(list(outcome_pooling = "separate"), class = "cdid_dr_baseline")
+  eligible <- dsp("cp04_retained_if_phase_baseline")
+  testthat::expect_true(eligible(meta))
+  for (field in c("uses_selection_models", "reference_ref", "separate_complete", "outcome_pooling")) {
+    other <- meta
+    other[[field]] <- switch(field, uses_selection_models = TRUE,
+      reference_ref = new.env(parent = emptyenv()), separate_complete = list(selected = TRUE),
+      outcome_pooling = "pooled")
+    testthat::expect_false(eligible(other))
+  }
+  class(meta) <- "cdid_imputation_backend"
+  testthat::expect_false(eligible(meta))
+})
+
+testthat::test_that("static incomplete OR and DR phase stores preserve original-unit IFs and release before reuse", {
+  a <- dsp_case()
+  fits <- list(dr = a$fit, or = dsp_phase_or(a))
+  testthat::expect_lt(a$reader$state$lambda, 1)
+  links <- c(6L, 3L, 1L, 5L, 2L, 4L)
+  d5 <- list(ledger_if_entries = 0, basis_if_entries = 0,
+    ledger_enclosure_entries = 0, basis_enclosure_entries = 0)
+  for (kind in names(fits)) {
+    fit <- fits[[kind]]; ctrl <- fit$control
+    frozen <- list(ref = fit$ref, reader_ref = fit$reader_ref, regressions = fit$regressions,
+      outcome_groups = fit$outcome_groups, treatments = fit$treatments)
+    testthat::expect_true(dsp("cp04_retained_if_phase_baseline")(fit))
+    raw <- matrix(0, a$N, length(links))
+    dsp("cp04_replay_links")(fit, links, function(b) raw[b$rows, ] <<- b$phi,
+      scale = "core", chunk_rows = 7L)
+    reference <- dsp("cp04_stream_covariance")(fit, links)
+    # The independent reference outputs remain live in this test caller.
+    caller <- unname(dsp("cp04_payload")(list(raw, reference))["entries"])
+    cov_plan <- dsp("cp04_stream_plan")(fit, links, caller)
+    point <- dsp("cp04_preflight_links")(fit, links, caller, chunk_rows = 7L)
+    testthat::expect_length(cov_plan$blocks, 1L)
+    testthat::expect_equal(cov_plan$chunk_rows, 7)
+    cov_inv <- dsp("cp04_retained_if_phase_inventory")("covariance", fit, cov_plan, point,
+      caller, caller, d5, length(links), length(fit$links))
+    entries <- dsp("cp04_retained_if_entries")(a$N, length(links), 7L) +
+      dsp("cp04_retained_if_boundary_cost")(fit, links, 7L)$entries
+    small <- dsp("ipw_owner_control")(7L, cov_inv$live + entries - 1,
+      cov_inv$live + entries - 1, ctrl$max_work_ops, ctrl$max_output_entries)
+    # The original phase buffers fit this finite cap, while its optional
+    # cache does not. No sealed owner or its control is mutated.
+    testthat::expect_true(dsp("cp04_budget")(small,
+      c(cov_inv$retained, fit$accounting$owned_entries, fit$accounting$borrowed_entries),
+      c(cov_plan$peak, cov_inv$gram_entries), 0, 0, "uncached phase witness"))
+    reserve <- function(phase, inv, control = ctrl, active = NULL, transfer = FALSE) {
+      dsp("cp04_retained_if_phase_reserve")(fit, links, phase, 7L, cov_plan,
+        retained = inv$retained, live = inv$live, work = 0, control = control,
+        numerical_transfer = transfer, active_store = active)
+    }
+    testthat::expect_null(reserve("covariance", cov_inv, small))
+    testthat::expect_null(reserve("covariance", cov_inv, transfer = TRUE))
+    too_small <- dsp("ipw_owner_control")(7L, cov_inv$live - 1, cov_inv$live - 1,
+      ctrl$max_work_ops, ctrl$max_output_entries)
+    testthat::expect_error(dsp("cp04_budget")(too_small,
+      c(cov_inv$retained, fit$accounting$owned_entries, fit$accounting$borrowed_entries),
+      c(cov_plan$peak, cov_inv$gram_entries), 0, 0, "original overbudget phase"),
+      class = "cdid_ipw_owner_bound_error")
+    cov_store <- reserve("covariance", cov_inv)
+    testthat::expect_true(is.environment(cov_store))
+    producer <- dsp("cp04_retained_if_bind")(fit, cov_store)
+    cached <- dsp("cp04_stream_covariance")(producer, links, cov_inv$retained)
+    testthat::expect_equal(cached$estimates, reference$estimates, tolerance = 1e-10)
+    testthat::expect_equal(cached$mean_phi, reference$mean_phi, tolerance = 1e-10)
+    testthat::expect_equal(cached$covariance, reference$covariance, tolerance = 1e-10)
+    testthat::expect_equal(unname(cov_store$phi), raw, tolerance = 1e-10)
+    testthat::expect_identical(cov_store$producer_passes, 1L)
+    testthat::expect_identical(cov_store$slice_passes, 1L)
+    testthat::expect_equal(unname(cov_store$phi[49:50, , drop = FALSE]),
+      raw[49:50, , drop = FALSE], tolerance = 1e-10)
+    testthat::expect_error(dsp("cp04_retained_if_check")(cov_store, fit, rev(links), 7L, "core"),
+      class = "cdid_cp04_integrity_error")
+    testthat::expect_error(dsp("cp04_retained_if_check")(cov_store, fit, links, 6L, "core"),
+      class = "cdid_cp04_integrity_error")
+    foreign <- fits[[if (kind == "dr") "or" else "dr"]]
+    testthat::expect_error(dsp("cp04_retained_if_check")(cov_store, foreign, links, 7L, "core"),
+      class = "cdid_cp04_integrity_error")
+    gmm_inv <- dsp("cp04_retained_if_phase_inventory")("gmm", fit, cov_plan, point,
+      caller, caller, d5, length(links), length(fit$links))
+    testthat::expect_error(reserve("gmm", gmm_inv, active = cov_store),
+      class = "cdid_cp04_integrity_error")
+    cov_record <- dsp("cp04_retained_if_release")(cov_store)
+    producer <- NULL
+    testthat::expect_identical(cov_store$state, "released")
+    testthat::expect_false(any(c("phi", "raw_ref", "backend_snapshot", "reader_snapshot") %in% ls(cov_store)))
+    gmm_store <- reserve("gmm", gmm_inv, active = cov_store)
+    testthat::expect_true(is.environment(gmm_store))
+    producer <- dsp("cp04_retained_if_bind")(fit, gmm_store)
+    for (pass in 1:2) dsp("cp04_replay_links")(producer, links, function(b) {
+      testthat::expect_equal(unname(b$phi), raw[b$rows, , drop = FALSE], tolerance = 1e-10)
+    }, scale = "core", chunk_rows = 7L)
+    testthat::expect_identical(gmm_store$producer_passes, 1L)
+    testthat::expect_identical(gmm_store$slice_passes, 1L)
+    gmm_record <- dsp("cp04_retained_if_release")(gmm_store)
+    producer <- NULL
+    testthat::expect_false(any(c("phi", "raw_ref", "backend_snapshot", "reader_snapshot") %in% ls(gmm_store)))
+    record <- dsp("cp04_retained_if_phase_record")(cov_record, gmm_record)
+    testthat::expect_identical(record$mode, "phase_local")
+    testthat::expect_identical(record$simultaneous_stores, 1L)
+    testthat::expect_identical(record$producer_passes, 2L)
+    testthat::expect_identical(record$slice_passes, 2L)
+    testthat::expect_identical(list(ref = fit$ref, reader_ref = fit$reader_ref, regressions = fit$regressions,
+      outcome_groups = fit$outcome_groups, treatments = fit$treatments), frozen)
+  }
+})

@@ -6082,12 +6082,14 @@ run_chained_ipw_pipeline <- function(
     if (!is.null(cp04_retained)) combined_work <- ipw_owner_safe_sum(c(combined_work, cp04_retained$work),
       active_backend$control$max_work_ops, "CP04 retained moment IF fill and slice work")
     # D92 covariance-only store: only when the whole-lifetime store declined
-    # for a one-block, non-transfer, dated augmented or compact raw-IPW backend,
+    # for a one-block, non-transfer, dated augmented, compact raw-IPW or static
+    # incomplete separate baseline OR/DR backend,
     # independently consider a covariance-only store at `cp04_work$chunk_rows`.
     cp04_phase_eligible <- is.null(cp04_retained) && !transfer_requested &&
       ((inherits(active_backend, "cdid_augmented_backend") &&
         !is.null(active_backend$reference_ref) && !is.null(active_backend$layout)) ||
-       inherits(active_backend, "cdid_ipw_raw_backend")) &&
+       inherits(active_backend, "cdid_ipw_raw_backend") ||
+       cp04_retained_if_phase_baseline(active_backend)) &&
       length(cp04_work$blocks) == 1L
     if (cp04_phase_eligible) {
       cov_phase_inv <- cp04_retained_if_phase_inventory("covariance", active_backend, cp04_work, point_preflight,
