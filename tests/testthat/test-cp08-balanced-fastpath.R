@@ -378,6 +378,7 @@ rs_plain <- function(fo, specs, aux, ctrl) {
 # forces the existing route (no context) through the same copies.
 rs_bound <- c("build_cp04_public_registry", "cp04_public_link_views", "ipw_owner_link_support_context",
   "construct_ipw_link_view", "ipw_owner_context_link_lookup", "ipw_owner_context_record_link",
+  "cp04_pair_support",
   "ipw_owner_pair_masks_equal_fact", "ipw_owner_pair_complete", "ipw_owner_date_complete")
 rs_counted <- function(decline = FALSE) {
   e <- new.env(parent = api)
@@ -387,6 +388,12 @@ rs_counted <- function(decline = FALSE) {
   e$ipw_owner_chunked_pair_support <- function(...) {
     n$scans <- n$scans + 1L; n$log <- c(n$log, "scan")
     api$ipw_owner_chunked_pair_support(...)
+  }
+  # The public registry can scan all owner cohorts once for an incomplete
+  # pair. Count that actual worker too; borrowed summaries invoke neither scan.
+  e$cp04_pair_support_scan <- function(...) {
+    n$scans <- n$scans + 1L; n$log <- c(n$log, "scan")
+    api$cp04_pair_support_scan(...)
   }
   e$ipw_owner_posting_date_complete <- function(...) { n$dates <- n$dates + 1L; api$ipw_owner_posting_date_complete(...) }
   e$ipw_owner_construction_context <- function(...) { n$log <- c(n$log, "context"); api$ipw_owner_construction_context(...) }

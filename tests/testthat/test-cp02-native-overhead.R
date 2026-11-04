@@ -1000,9 +1000,13 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # accepted CP04 owner SHA: 518a9b09057389dbdb03f0be5f01f97b07630595ce66cd1612ffd8aaa05071c8.
     # Historical common_context_integration.json owner SHA:
     # 8b27a3b1ceac5643731803f657943d45ae9e1112d8141247102ca9741e57fa63.
-    # Current accepted owner pin including the complete-support exact rate = 1 delta:
+    # Issue 8 candidate: the only further owner delta is the already allowed
+    # construct_ipw_link_view body, dispatching to the admitted private CP04
+    # incomplete-pair support cache. The original scanner and reference stay
+    # byte-identical; test-cp04-pair-support-cache.R checks uncached parity.
+    # This exact candidate pin requires independent acceptance before integration.
     expect_identical(digest::digest(file = file.path(pkg_root, "R", "chained_ipw_owner.R"), algo = "sha256"),
-      "b68487d7d16cc3546e6a4beb4b2f0cdf9e53cee6526691ba46405e4db1260e78")
+      "a75c743194168caad38cb0ef3285afb9fe1c383370d1eeadcf5566316e390a63")
     for (nm in orig_own_names) {
       vo <- get(nm, envir = e_orig_own, inherits = FALSE)
       vc <- get(nm, envir = e_cand_own, inherits = FALSE)

@@ -251,7 +251,8 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
       context_entries = context$accounting$entries, context_entries_bound = context$accounting$entries_bound,
       context_work_ops_bound = context$accounting$work_ops_bound, link_support_context = NULL)
   } else {
-    built <- cp04_public_link_views(frame, specs, aux, ctrl$owner_control, retained_pipeline_entries)
+    built <- cp04_public_link_views(frame, specs, aux, ctrl$owner_control, retained_pipeline_entries,
+      reuse_pair_support = TRUE)
     views <- built$views; aux_index <- built$aux_index; aux_errors <- built$aux_errors
     construction <- list(route = "link_views", heavy_link_views_constructed = length(views),
       descriptor_rows = 0L, catalog_rows = as.integer(M), auxiliary_rows = length(aux$descriptors),
@@ -482,7 +483,8 @@ cp04_registry_work_accounting <- function(prefix, prepared, backend, max_work_op
 # support summary of an equal-mask view scanned earlier in this invocation; it
 # is dropped before any fit. Not admitted, every view scans as before. The
 # actual scans and borrowed records are counted apart, as evidence only.
-cp04_public_link_views <- function(frame, specs, aux, control, retained_pipeline_entries = 0) {
+cp04_public_link_views <- function(frame, specs, aux, control, retained_pipeline_entries = 0,
+                                   reuse_pair_support = FALSE) {
   M <- length(specs)
   # Only descriptor lengths are read; no pair/date/population scan. Include
   # auxiliary classes before admission so an earlier cache cannot coexist
@@ -492,6 +494,8 @@ cp04_public_link_views <- function(frame, specs, aux, control, retained_pipeline
   for (s in aux$descriptors) max_cohorts <- max(max_cohorts, 1 + length(s$K))
   ctx <- ipw_owner_link_support_context(frame, M + length(aux$descriptors), retained_pipeline_entries, control,
     max_cohorts = max_cohorts)
+  if (isTRUE(reuse_pair_support)) ctx <- cp04_pair_support_context(ctx, frame, M + length(aux$descriptors),
+    retained_pipeline_entries, control, max_cohorts)
   views <- lapply(seq_len(M), function(j) {
     s <- specs[[j]]
     construct_ipw_link_view(frame, s$s, s$t, g = s$g, K = s$K,
@@ -512,6 +516,9 @@ cp04_public_link_views <- function(frame, specs, aux, control, retained_pipeline
   }
   work <- if (is.null(ctx)) NULL else list(support_scans = ctx$link_scans, support_reuses = ctx$link_reuses,
     support_records = ctx$link_records, reserved_entries = ctx$link_entries)
+  if (is.environment(ctx) && is.environment(ctx$pair_support)) work$pair_support <- list(
+    scans = ctx$pair_support$scans, reuses = ctx$pair_support$reuses, records = ctx$pair_support$n_records,
+    capacity = ctx$pair_support$capacity, reserved_entries = ctx$pair_support$entries)
   ctx <- NULL
   list(views = views, aux_index = aux_index, aux_errors = aux_errors, construction_work = work)
 }
