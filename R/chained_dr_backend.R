@@ -1937,7 +1937,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
 }
 
 evaluate_dr_baseline_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE, plan = NULL) {
-  if (dr_separate(backend)) return(evaluate_dr_separate_if_chunk(backend, rows, links, scale, details))
+  if (dr_separate(backend)) return(evaluate_dr_separate_if_chunk(backend, rows, links, scale, details, plan = plan))
   validate_dr_baseline_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state

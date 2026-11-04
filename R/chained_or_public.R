@@ -214,6 +214,9 @@ chained_full_if_budget <- function(backend, B, links) {
 # CP08 stage 4: the compact native plan of an eligible complete-support OR/DR
 # replay, built once per replay from the validated sealed backend (else NULL).
 chained_full_if_plan <- function(backend, links, B) {
+  if (inherits(backend, "cdid_dr_baseline") && dr_separate(backend) &&
+      !isTRUE(backend$uses_selection_models) && is.null(backend$reference_ref) &&
+      is.null(backend$separate_complete)) return(dr_separate_baseline_replay_plan(backend, links, B))
   if (inherits(backend, "cdid_ipw_raw_backend")) return(ipw_raw_if_plan(backend, links, B))
   if (inherits(backend, c("cdid_reference_ipw_backend", "cdid_cp04_custom_backend", "cdid_augmented_backend",
       "cdid_imputation_backend")) || !is.list(backend) || is.null(backend$complete_support)) return(NULL)

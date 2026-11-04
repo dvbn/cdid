@@ -1,7 +1,8 @@
 # Unchanged detailed replay and independent raw-row nuisance refits are the
 # references. No expected value is produced by the projected helper itself.
 dsp <- function(name) getFromNamespace(name, "cdid")
-dsp_case <- function(intercept = TRUE, slopes = TRUE, alias = FALSE) {
+dsp_case <- function(intercept = TRUE, slopes = TRUE, alias = FALSE, chunk_rows = 7L,
+                     copies = 1L, long_ids = FALSE) {
   j <- rep(1:12, 4); group <- rep(1:4, each = 12); N <- length(j) + 2L
   id <- seq_len(N); g <- c(c(3, 4, 5, Inf)[group], 3, Inf)
   x <- c((j - 6.5) / 5, -.7, .9); z <- c(sin(j) / 2 + j / 30, .2, -.3)
@@ -18,7 +19,7 @@ dsp_case <- function(intercept = TRUE, slopes = TRUE, alias = FALSE) {
   V <- cbind(`(Intercept)` = 1, z = z)
   Xa <- cbind(`(Intercept)` = 1, x = x, z = z)
   if (alias) Xa <- cbind(Xa, alias = X[, "alias"])
-  control <- dsp("ipw_owner_control")(7L, 1e8, 2e8, 1e13, 1e8)
+  control <- dsp("ipw_owner_control")(chunk_rows, 1e8, 2e8, 1e13, 1e8)
   data <- data.frame(id = rep(id, each = 5L), t = rep(1:5, N), g = rep(g, each = 5L), y = as.vector(t(Y)))
   # Exercise both absent rows and stored NA outcomes without changing A.
   data <- data[!(data$id == 2L & data$t == 3L), ]
@@ -32,10 +33,12 @@ dsp_case <- function(intercept = TRUE, slopes = TRUE, alias = FALSE) {
     list(s = 1, t = 3, g = 4, K = c(5, Inf)), list(s = 1, t = 3, g = 5, K = Inf),
     list(s = 2, t = 5, g = 3, K = c(4, Inf)), list(s = 1, t = 3, g = 3, K = Inf),
     list(s = 1, t = 3, g = 4, K = Inf), list(s = 1, t = 3, g = 3, K = c(4, 5, Inf)))
+  defs <- rep(defs, copies)
   views <- lapply(seq_along(defs), function(i) {
     d <- defs[[i]]
+    key <- paste0("projected-", i, if (long_ids) strrep("long-id", 80L) else "")
     dsp("construct_ipw_link_view")(frame, d$s, d$t, d$g, d$K, control = control,
-      link_id = paste0("projected-", i), functional_key = paste0("cmpcat:projected-", i))
+      link_id = key, functional_key = paste0("cmpcat:", key))
   })
   recipe <- dsp("or_pooled_outcome_recipe")(colnames(X), intercept, setdiff(colnames(X), "(Intercept)"))
   fit <- dsp("fit_dr_baseline")(reader, views, control,
@@ -141,4 +144,94 @@ testthat::test_that("ordinary baseline projected replay avoids the detailed OR w
   testthat::expect_identical(n, 0L)
   dsp_eval(a, 7:1, c(9L, 3L, 1L), TRUE)
   testthat::expect_gt(n, 0L)
+})
+
+testthat::test_that("frozen separate DR replay operators match V8 and detailed IFs without chunk solves", {
+  for (args in list(list(), list(intercept = FALSE), list(slopes = FALSE), list(alias = TRUE))) {
+    a <- do.call(dsp_case, c(args, list(chunk_rows = 50L)))
+    fit <- a$fit; links <- rev(seq_along(fit$links)); rows <- rev(seq_len(a$N))
+    frozen <- list(groups = fit$outcome_groups, regressions = fit$regressions,
+      treatments = fit$treatments, reader_ref = fit$reader_ref)
+    plan <- dsp("chained_full_if_plan")(fit, links, 50L)
+    testthat::expect_true(is.list(plan))
+    testthat::expect_lte(unname(dsp("cp04_payload")(plan)["entries"]), plan$entries)
+    testthat::expect_lte(plan$entries, plan$retained_bound)
+    testthat::expect_lte(plan$reservation, 16 * plan$min_B * length(links))
+    run <- function(plan) {
+      pooled <- dsp("or_pooled_wls_gram_solve"); plain <- dsp("or_wls_gram_solve"); chol <- dsp("cp04_solve")
+      solves <- 0L
+      testthat::local_mocked_bindings(
+        or_pooled_wls_gram_solve = function(...) { solves <<- solves + 1L; pooled(...) },
+        or_wls_gram_solve = function(...) { solves <<- solves + 1L; plain(...) },
+        cp04_solve = function(...) { solves <<- solves + 1L; chol(...) }, .package = "cdid")
+      out <- dsp("chained_full_if_chunk")(fit, rows, links, "core", plan)
+      list(out = out, solves = solves)
+    }
+    planned <- run(plan); original <- run(NULL)
+    detailed <- dsp_eval(a, rows, links, TRUE, "core")
+    testthat::expect_identical(planned$solves, 0L)
+    testthat::expect_gt(original$solves, 0L)
+    testthat::expect_equal(planned$out, original$out, tolerance = 1e-10)
+    testthat::expect_equal(planned$out$phi, detailed$phi, tolerance = 1e-10)
+    testthat::expect_equal(crossprod(planned$out$phi), crossprod(original$out$phi), tolerance = 1e-10)
+    testthat::expect_identical(list(groups = fit$outcome_groups, regressions = fit$regressions,
+      treatments = fit$treatments, reader_ref = fit$reader_ref), frozen)
+    broken <- plan; broken$eta[1L, 1L] <- broken$eta[1L, 1L] + 1
+    testthat::expect_error(dsp("chained_full_if_chunk")(fit, rows, links, "core", broken),
+      class = "cdid_dr_baseline_integrity_error")
+    testthat::expect_error(dsp("chained_full_if_chunk")(fit, rows, rev(links), "core", plan),
+      class = "cdid_dr_baseline_integrity_error")
+    testthat::expect_error(dsp("chained_full_if_chunk")(fit, rows[-1L], links, "core", plan),
+      class = "cdid_dr_baseline_integrity_error")
+    # The one-row tail cannot fund the retained descriptor, so the whole
+    # replay declines without selecting a different row partition.
+    testthat::expect_null(dsp("chained_full_if_plan")(fit, links, 49L))
+    testthat::expect_null(dsp("chained_full_if_plan")(fit, 1L, 1L))
+  }
+  foreign <- dsp_case(chunk_rows = 50L)
+  testthat::expect_error(dsp("chained_full_if_chunk")(foreign$fit, rows, links, "core", plan),
+    class = "cdid_dr_baseline_integrity_error")
+})
+
+testthat::test_that("one compact plan serves duplicate consumers and the admitted short tail", {
+  a <- dsp_case(chunk_rows = 50L, copies = 40L, long_ids = TRUE)
+  fit <- a$fit; links <- rev(seq_along(fit$links))
+  plan <- dsp("chained_full_if_plan")(fit, links, 16L)
+  testthat::expect_true(is.list(plan))
+  testthat::expect_equal(plan$min_B, 2)
+  testthat::expect_lte(plan$reservation, 16 * 2L * length(links))
+  testthat::expect_lte(length(plan$tids), 9L)
+  testthat::expect_lte(length(plan$gids), 9L)
+  # Labels stay in the existing backend/output; no label or fit snapshots
+  # are replicated in this retained descriptor.
+  testthat::expect_false(any(vapply(plan[setdiff(names(plan), "kind")], is.character, logical(1L))))
+  testthat::expect_false(any(c("backend_snapshot", "reader_snapshot", "fit", "labels") %in% names(plan)))
+  direct <- matrix(0, a$N, length(links)); replayed <- direct
+  for (first in seq.int(1L, a$N, by = 16L)) {
+    rows <- seq.int(first, min(a$N, first + 15L))
+    out <- dsp("chained_full_if_chunk")(fit, rows, links, "core", plan)
+    old <- dsp_eval(a, rows, links, FALSE, "core")
+    testthat::expect_equal(out, old, tolerance = 1e-10)
+    direct[rows, ] <- old$phi
+  }
+  subset <- seq.int(1L, length(links), by = 2L)
+  partial_plan <- dsp("chained_full_if_plan")(fit, links[subset], 50L)
+  testthat::expect_true(is.list(partial_plan))
+  partial <- dsp("chained_full_if_chunk")(fit, rev(seq_len(a$N)), links[subset], "core", partial_plan)
+  testthat::expect_equal(unname(partial$phi), direct[rev(seq_len(a$N)), subset, drop = FALSE], tolerance = 1e-10)
+  create <- dsp("dr_separate_baseline_replay_plan"); created <- 0L
+  testthat::local_mocked_bindings(dr_separate_baseline_replay_plan = function(...) {
+    created <<- created + 1L; create(...)
+  }, .package = "cdid")
+  dsp("cp04_replay_links")(fit, links, function(out) replayed[out$rows, ] <<- out$phi,
+    scale = "core", chunk_rows = 16L)
+  testthat::expect_identical(created, 1L)
+  testthat::expect_equal(replayed, direct, tolerance = 1e-10)
+  pre <- dsp("dr_baseline_if_budget")(fit, 16L, links, FALSE)
+  owned <- fit$accounting$owned_entries + fit$accounting$borrowed_entries
+  retained <- fit$control$max_matrix_entries - owned - pre$output - pre$scratch
+  admitted <- dsp("cp04_preflight_links")(fit, links, retained, chunk_rows = 16L)
+  testthat::expect_equal(admitted$chunk_rows, 16)
+  testthat::expect_error(dsp("cp04_preflight_links")(fit, links, retained + 1,
+    chunk_rows = 16L), class = "cdid_ipw_owner_bound_error")
 })

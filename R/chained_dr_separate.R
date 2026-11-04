@@ -66,7 +66,7 @@ dr_separate_if_envelope <- function(backend, B, links, details) {
     output = output, scratch = scratch, work = work)
 }
 
-evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE) {
+evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE, plan = NULL) {
   validate_dr_backend(backend)
   route <- if (isTRUE(backend$uses_selection_models)) "corollary1" else "baseline"
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
@@ -115,7 +115,7 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   # Ordinary baseline non-reference DR needs only each model's scalar
   # contraction of the frozen outcome coefficient IF, not detailed OR output.
   if (!details && !conditional && is.null(ref))
-    return(dr_separate_baseline_projected_if(backend, reader, rows, links, scale, pre, w, hits, up))
+    return(dr_separate_baseline_projected_if(backend, reader, rows, links, scale, pre, w, hits, up, plan = plan))
   # The pure OR core needs its own target residual mean, not the DR link mean.
   # This invocation-local shallow record is never resealed or retained.
   requested <- backend$links[links]
