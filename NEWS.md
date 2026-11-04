@@ -1,4 +1,4 @@
-# cdid 2.0.0.0
+# cdid 1.2.0.0
 
 * Add `outcome_pooling` to chained `att_gt()` and `conditional_did_pretest()`. The default, `"separate"`, fits the untreated outcome-change regression separately for each distinct comparison. Identical comparisons reuse their fitted regression. This changes the default working outcome model for treatment OR and DR and can change estimates and inference. Set `outcome_pooling = "pooled"` to retain the shared-slope specification of version 1.1.0.1.
 * Apply the same outcome choice to observation-weighted, imputed and augmented changes. `selection_pooling` continues to control observation probabilities; `imputation_pooling` continues to control actual-change imputation. Neither is changed by `outcome_pooling`.

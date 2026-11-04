@@ -4,7 +4,7 @@ The GitHub repository is currently private; your account needs access to install
 
 ## Usual installation
 
-Install `cdid` 2.0.0.0 from GitHub:
+Install `cdid` 1.2.0.0 from GitHub:
 
 ```r
 # install.packages("remotes")
@@ -13,7 +13,7 @@ remotes::install_github("dvbn/cdid")
 
 `cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
 
-This is all that is needed to use the package. Version 2.0.0.0 is the next release after 0.1.1 and is not yet available from CRAN.
+This is all that is needed to use the package. Version 1.2.0.0 is the next release after 0.1.1 and is not yet available from CRAN.
 
 ## Optional: pinned validation setup
 
@@ -47,7 +47,7 @@ Start a fresh R session and put the setup library first:
 
 ```r
 .libPaths(c(normalizePath("validation/.lib"), .libPaths()))  # from the repository root
-packageVersion("cdid")    # 2.0.0.0
+packageVersion("cdid")    # 1.2.0.0
 ?cdid::att_gt
 ```
 
