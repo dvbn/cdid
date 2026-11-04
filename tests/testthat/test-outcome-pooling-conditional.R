@@ -32,6 +32,45 @@ opcpt_backend_rows <- function(state, q) {
   out
 }
 
+# Snapshot the source-owned mathematical state, not environments reachable
+# through sealed references or caller formulas. In particular the dated
+# augmented layout reader can reach invocation-local closure state. Identity
+# of each sealed owner is checked separately from its fitted numeric records.
+opcpt_frozen_fit <- function(backend) {
+  validator <- switch(opcpt_ns("cpt_backend_kind")(backend),
+    or_baseline = "validate_or_baseline_backend", or_legacy = "validate_or_corollary1_backend",
+    or_selection = "validate_or_corollary1_backend", dr_baseline = "validate_dr_baseline_backend",
+    dr_selection = "validate_dr_corollary1_backend", imputation = "validate_imputation_backend",
+    augmented = "validate_augmented_backend")
+  opcpt_ns(validator)(backend)
+  reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
+  selection <- backend$selection_backend
+  reference <- opcpt_ns("chained_backend_reference")(backend)
+  list(
+    identities = backend[c("ref", "reader_ref", "frame_ref", "panel_ref", "design_ref", "reference_ref")],
+    recipes = backend[c("outcome_pooling", "outcome_recipe", "or_frame_index", "treatment_recipe",
+      "selection_model", "selection_pooling", "imputation_pooling", "law")],
+    catalog = backend[c("support_specs", "regression_specs", "treatment_specs", "selection_specs",
+      "pairs", "cell_specs", "cell_lookup", "group_specs", "or_blocks", "links", "up_map", "q_of_s",
+      "q_of_cell", "theta_ids")],
+    fits = backend[c("supports", "regressions", "treatments", "selections", "cells", "groups",
+      "shared", "shared_or", "outcome_groups")],
+    fit_counts = backend$accounting[grep("^n_", names(backend$accounting))],
+    selection = if (is.null(selection)) NULL else selection[c("ref", "reader_ref", "reference_ref",
+      "selection_model", "selection_pooling", "design_spec", "cells", "block_specs", "blocks",
+      "pair_cohorts", "links", "alpha", "beta", "coefficients")],
+    reader_state = reader$state,
+    roster_design = backend[c("X_F", "design_columns", "selection_columns", "cohorts", "a", "tau", "eta", "lambda")],
+    layout = backend$layout[c("state", "orig_row", "by_orig", "cohort", "recipe", "families", "N", "N_layout", "frame_id")],
+    reference = if (is.null(reference)) NULL else list(
+      identity = reference$ref,
+      records = reference[c("N", "calendar", "recipes", "view_recipe", "route", "design_kind", "weight_kind",
+        "fix_weights", "role_slot", "or_index", "basis", "outcome_recipe", "columns", "x_columns",
+        "weight_keys", "w", "stats")],
+      designs = lapply(reference$designs, function(x) x[c("kind", "static", "keys", "Z", "columns", "assign", "intercept")]))
+  )
+}
+
 testthat::test_that("separate conditional extractors recover complete link IFs on fixed union fits", {
   A <- opcpt_data("fA.csv"); B <- opcpt_data("fB.csv"); Bd <- opcpt_data("fBd.csv")
   pair <- list(selection = "conditional_mtar", selection_xformla = ~sx + sz)
@@ -52,13 +91,13 @@ testthat::test_that("separate conditional extractors recover complete link IFs o
     testthat::expect_identical(result$chained$request$outcome_pooling, "separate", info = nm)
     state <- attr(result, "state"); backend <- state$registry$cp04
     testthat::expect_identical(backend$outcome_pooling, "separate", info = nm)
-    frozen <- serialize(backend, NULL)
+    frozen <- opcpt_frozen_fit(backend)
     for (cell in attr(result, "cells")) {
       q <- opcpt_index(state, cell$id)
       testthat::expect_equal(opcpt_ns("cpt_cell_scalar_rows")(cell), cell$sigma * opcpt_backend_rows(state, q),
         tolerance = 1e-9, info = paste(nm, cell$id))
       testthat::expect_equal(cell$sigma * cell$mu1, cell$estimate_scalar, tolerance = 1e-10)
-      testthat::expect_equal(cell$denominator_check$supplied, cell$denominator_check$accumulated, tolerance = 1e-12)
+      testthat::expect_equal(unname(cell$denominator_check$supplied), unname(cell$denominator_check$accumulated), tolerance = 1e-12)
       slopes <- grep("^(or_beta|ob):", cell$coords, value = TRUE)
       testthat::expect_true(all(grepl("^(or_beta|ob):[0-9]+:[0-9]+$", slopes)), info = nm)
       # Replaying distinct row chunks reads the same sealed union nuisance fit.
@@ -67,7 +106,10 @@ testthat::test_that("separate conditional extractors recover complete link IFs o
       testthat::expect_identical(extractor$spec$coords, cell$coords)
       for (k in seq_len(extractor$n_chunks)) extractor$pieces(k)
     }
-    testthat::expect_identical(serialize(backend, NULL), frozen, info = nm)
+    # A Boolean comparison prevents large diagnostic dumps on a true change;
+    # all fitted coefficients/factors, identities, dependencies and unit maps
+    # above must remain exactly identical across the threshold/row replay.
+    testthat::expect_true(identical(opcpt_frozen_fit(backend), frozen), info = paste(nm, "frozen fitted mathematical state"))
   }
 })
 

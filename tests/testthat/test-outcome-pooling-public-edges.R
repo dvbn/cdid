@@ -27,7 +27,7 @@ testthat::test_that("public separate routing covers both control laws and PT sys
     testthat::expect_equal(a$V_analytical, b$V_analytical, tolerance = 1e-9, info = info)
     testthat::expect_identical(a$chained$available, b$chained$available)
     testthat::expect_identical(a$chained$request$outcome_pooling, "separate")
-    testthat::expect_identical(a$chained$request$control_group, cs$control_group)
+    testthat::expect_identical(a$DIDparams$control_group, cs$control_group)
     testthat::expect_identical(a$chained$request$pt_assumption, cs$pt_assumption)
     testthat::expect_identical(a$DIDparams$base_period, cs$base_period)
     testthat::expect_identical(rownames(a$inffunc), fx$frame$id)
@@ -101,7 +101,7 @@ testthat::test_that("separate public intercept-only DR equals IPW and no-interce
   testthat::expect_identical(no_intercept$DIDparams$outcome_pooling, "separate")
 })
 
-testthat::test_that("empty post catalogs preserve separate auxiliary fits and public request metadata", {
+testthat::test_that("unavailable post cells preserve separate auxiliary fits and public request metadata", {
   fx <- oped_fixture(); fx$args$est_method <- "reg"
   post <- fx$data$g > 0 & fx$data$time >= fx$data$g
   fx$args$data$y[post] <- NA_real_
@@ -111,7 +111,10 @@ testthat::test_that("empty post catalogs preserve separate auxiliary fits and pu
   testthat::expect_true(all(is.na(mp$att[mp$t >= mp$group])))
   diag <- mp$chained$nuisance_diagnostics
   testthat::expect_gt(length(diag$outcome_blocks), 0L)
-  testthat::expect_true(all(diag$fitted_catalog$role == "auxiliary"))
+  # Pre/pre target pairs can remain catalog moments even with no observed
+  # treated post outcomes. Auxiliary comparisons must still be fitted.
+  testthat::expect_true(all(diag$fitted_catalog$role %in% c("catalog", "auxiliary")))
+  testthat::expect_true(any(diag$fitted_catalog$role == "auxiliary"))
   args <- fx$args
   for (nm in c("imputation_pooling", "gmm_weighting")) args[[nm]] <- NULL
   args$biters <- 9L
