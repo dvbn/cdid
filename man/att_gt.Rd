@@ -393,7 +393,7 @@ test; the conditional pretrend test is
 \code{\link{conditional_did_pretest}()}.
 
 The package refuses to load with did older than 2.5.1 or DRDID older than
-1.3.0; it has been tested with did 2.5.1 and DRDID 1.3.0, and later versions
+1.4.0; it has been tested with did 2.5.1 and DRDID 1.4.0, and later versions
 are accepted but untested. Qualify calls as \code{cdid::att_gt()} so that a
 later \code{library(did)} cannot change which function runs.
 

@@ -1,3 +1,8 @@
+# cdid 1.1.0.1
+
+* Require DRDID 1.4.0 or later. Its upstream correction fixes the pre-period outcome-regression contribution to ordinary DR repeated-cross-section inference, including ordinary unbalanced-panel paths. Point estimates are unchanged by that sign correction. Ordinary mode continues to delegate to did; chained estimation is unchanged.
+* Update the pinned validation dependency to DRDID 1.4.0. Existing frozen campaigns retain their original source and dependency profile; use a separate run for this revision.
+
 # cdid 1.1.0.0
 
 * Construct internally estimated moment covariance matrices symmetrically, avoiding platform-dependent refusals caused by rounding in diagonal blocks.

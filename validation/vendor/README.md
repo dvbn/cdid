@@ -4,7 +4,7 @@ The repository includes these **unmodified source archives**, not installed pack
 
 | Archive | Version | License | Upstream authors |
 | --- | --- | --- | --- |
-| `DRDID_1.3.0.tar.gz` | 1.3.0 | GPL-3 | Pedro H. C. Sant'Anna; Jun Zhao |
+| `DRDID_1.4.0.tar.gz` | 1.4.0 | GPL-3 | Pedro H. C. Sant'Anna; Jun Zhao |
 | `did_2.5.1.tar.gz` | 2.5.1 | GPL-3 | Brantly Callaway; Pedro H. C. Sant'Anna |
 
 `SOURCES.csv` is readable with base R `read.csv(..., stringsAsFactors = FALSE)`. It records exact filenames, versions, licenses, byte sizes, MD5/SHA-256 digests, official CRAN current-source and version-archive URLs, and the normalized `Depends`/`Imports`/`LinkingTo` DESCRIPTION fields. The installer uses the bundled files only and does not download them.

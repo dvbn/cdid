@@ -229,13 +229,13 @@ Refusals are errors that inherit class `cdid_error`. The most common classes are
 | `cdid_chained_public_control_error` | an invalid `control` list |
 | `cdid_custom_ipw_error` | malformed or nonfinite output of a custom IPW function |
 | `cdid_chained_request_no_inffunc_error` | `aggte()` on a result fitted with `compute_inffunc = FALSE` |
-| `cdid_untested_upstream` | loading the package with `did` older than 2.5.1 or `DRDID` older than 1.3.0 |
+| `cdid_untested_upstream` | loading the package with `did` older than 2.5.1 or `DRDID` older than 1.4.0 |
 
 Fits can also stop because a numeric workspace or work limit would be exceeded, or because a model fit, covariance or solve is invalid. Such failures concern the computation; they are not conclusions about whether an effect is identified in the population. Nothing is dropped or relaxed to make a fit succeed.
 
 ## Tested versions and dependencies
 
-The package requires `did` 2.5.1 or later and `DRDID` 1.3.0 or later, and refuses to load with earlier versions. It has been tested with `did` 2.5.1 and `DRDID` 1.3.0. Later versions are accepted, but it is not guaranteed that everything works with them or that results are unchanged; a result records the `did` version it was computed with in `fit$chained$versions`. The metadata declares R 4.1.0 or later and imports `did`, `DRDID` and the base package `parallel`; that declaration is not a completed minimum-version or platform-support validation. `ggplot2`, which `did` uses for its plots, is needed for `ggdid()`. The [installation](../../README.md#installation) instructions use `remotes::install_github("dvbn/cdid")`; the optional [pinned validation setup](../../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions.
+The package requires `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0. Later versions are accepted, but it is not guaranteed that everything works with them or that results are unchanged; a result records the `did` version it was computed with in `fit$chained$versions`. The metadata declares R 4.1.0 or later and imports `did`, `DRDID` and the base package `parallel`; that declaration is not a completed minimum-version or platform-support validation. `ggplot2`, which `did` uses for its plots, is needed for `ggdid()`. The [installation](../../README.md#installation) instructions use `remotes::install_github("dvbn/cdid")`; the optional [pinned validation setup](../../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions.
 
 ---
 
