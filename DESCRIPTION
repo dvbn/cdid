@@ -1,7 +1,7 @@
 Package: cdid
 Type: Package
 Title: The Chained Difference-in-Differences
-Version: 1.1.0.1
+Version: 2.0.0.0
 Authors@R: 
     c(
       person("David", "Benatia", email = "david.benatia@hec.ca", role = c("cre", "aut")),
@@ -18,7 +18,7 @@ Description: Estimates group-time average treatment effects in panels with
     panel data, combines short within-unit comparisons by the generalized
     method of moments. It provides chained inverse probability weighting
     (IPW), outcome regression (OR) and doubly robust (DR) estimation, where OR
-    and DR use one pooled regression of the controls' outcome changes; custom
+    and DR use separate or pooled regressions of the controls' outcome changes; custom
     IPW callbacks; correction for covariate-dependent missing outcomes by
     observation weighting, change imputation or their augmented combination;
     parallel trends from each cohort's reference period (PT-post) or from a

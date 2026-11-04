@@ -1,5 +1,7 @@
 # Portable Reliability Campaign Runbook
 
+The outcome regressions in this campaign explicitly use `outcome_pooling = "pooled"`, preserving its shared-slope specification. It does not compare the separate and pooled outcome models. The package default is `"separate"`; choose it explicitly in a distinct campaign if that is the model to be assessed. Existing frozen runs keep their recorded source and settings.
+
 This directory (`validation/campaign/`) contains the self-contained preparation and execution toolkit for the 64-recipe, 562-logical-cell synthetic Monte Carlo reliability campaign defined in [`contract/CAMPAIGN_DESIGN.md`](contract/CAMPAIGN_DESIGN.md), [`contract/RECIPES.csv`](contract/RECIPES.csv), [`contract/CELLS.csv`](contract/CELLS.csv), and [`contract/SUBSUMED_MAP.csv`](contract/SUBSUMED_MAP.csv).
 
 ## 1. Scope and Scientific Rules
@@ -11,7 +13,7 @@ This directory (`validation/campaign/`) contains the self-contained preparation 
 
 ## 2. Prerequisites and Environment Setup
 
-Before freezing or running batches on the target machine, install the required R (`>= 4.1.0`) and Python (`>= 3.9`) environment and pinned package dependencies (`cdid == 1.1.0.1`, `did == 2.5.1`, `DRDID == 1.4.0`, `jsonlite`) with `Rscript --vanilla validation/setup.R` from the clean private checkout; see [`../SETUP.md`](../SETUP.md) for installer arguments. Version 1.1.0.1 identifies the supplied source; no public or CRAN release is implied.
+Before freezing or running batches on the target machine, install the required R (`>= 4.1.0`) and Python (`>= 3.9`) environment and pinned package dependencies (`cdid == 2.0.0.0`, `did == 2.5.1`, `DRDID == 1.4.0`, `jsonlite`) with `Rscript --vanilla validation/setup.R` from the clean private checkout; see [`../SETUP.md`](../SETUP.md) for installer arguments. Version 2.0.0.0 identifies the supplied source; no public or CRAN release is implied.
 
 The supervisor requires a POSIX host (Linux or macOS) for process-group termination and advisory locking.
 
@@ -48,7 +50,7 @@ python3 validation/campaign/freeze.py \
 
 - Use an empty results directory. Existing frozen runs cannot be overwritten.
 - Passing `--source-sha FREEZE_SOURCE_SHA` (or omitting `--source-sha`) is explicitly refused.
-- At freeze time, [`worker.R`](worker.R) verifies `R >= 4.1.0`, `cdid == 1.1.0.1`, `did == 2.5.1`, and `DRDID == 1.4.0`, records the runtime `sessionInfo()`, BLAS/LAPACK paths, and installed source-function identity, dependency `DESCRIPTION`/`.rdb` hashes, the full R/dependency/BLAS/RNG profile into `<RESULTS>/r_runtime.json` and `<RESULTS>/provenance.json`, and saves the 29,500 RNG states to `<RESULTS>/seeds_29500.rds`.
+- At freeze time, [`worker.R`](worker.R) verifies `R >= 4.1.0`, `cdid == 2.0.0.0`, `did == 2.5.1`, and `DRDID == 1.4.0`, records the runtime `sessionInfo()`, BLAS/LAPACK paths, and installed source-function identity, dependency `DESCRIPTION`/`.rdb` hashes, the full R/dependency/BLAS/RNG profile into `<RESULTS>/r_runtime.json` and `<RESULTS>/provenance.json`, and saves the 29,500 RNG states to `<RESULTS>/seeds_29500.rds`.
 
 ## 5. Running One Bounded Batch
 

@@ -1,3 +1,10 @@
+# cdid 2.0.0.0
+
+* Add `outcome_pooling` to chained `att_gt()` and `conditional_did_pretest()`. The default, `"separate"`, fits the untreated outcome-change regression separately for each distinct comparison. Identical comparisons reuse their fitted regression. This changes the default working outcome model for treatment OR and DR and can change estimates and inference. Set `outcome_pooling = "pooled"` to retain the shared-slope specification of version 1.1.0.1.
+* Apply the same outcome choice to observation-weighted, imputed and augmented changes. `selection_pooling` continues to control observation probabilities; `imputation_pooling` continues to control actual-change imputation. Neither is changed by `outcome_pooling`.
+* Carry comparison-specific regression uncertainty through the original-unit influence functions, aggregation and conditional pretrend test. Separate regressions retain prediction-preserving alias handling and report insufficient control support without switching to pooling.
+* Update help and the practical guide to explain the two outcome specifications. Historical article outputs retain their recorded versions and explicitly request the pooled specification where used.
+
 # cdid 1.1.0.1
 
 * Require DRDID 1.4.0 or later. Its upstream correction fixes the pre-period outcome-regression contribution to ordinary DR repeated-cross-section inference, including ordinary unbalanced-panel paths. Point estimates are unchanged by that sign correction. Ordinary mode continues to delegate to did; chained estimation is unchanged.

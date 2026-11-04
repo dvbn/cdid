@@ -1,6 +1,6 @@
 # Chained GMM weighting and covariance regularization
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
 
 Chained estimation combines two-period comparison moments across the retained catalog to recover group-time treatment effects. It separately reports direct, unrestricted pre-period comparisons ([Bellego, Benatia, and Dortet-Bernadet 2025](https://doi.org/10.1016/j.jeconom.2024.105783); [Callaway and Sant'Anna 2021](https://doi.org/10.1016/j.jeconom.2020.12.001)). This page explains how the generalized method of moments (GMM) criterion is formed, how exact structural reductions and Tikhonov covariance regularization work under feasible two-step weighting, how moment-covariance singularity differs from parameter identification, and how point-estimate weighting is kept separate from sandwich and multiplier inference.
 
@@ -184,6 +184,7 @@ The snippet below reuses `sim_panel` from [Get started](../get-started.md#prepar
 # same prepared panel (and optional unit frame).
 fit_gmm_variants <- function(data, frame = NULL) {
   fit_opt <- cdid::att_gt(
+    outcome_pooling = "pooled",
     yname = "y", tname = "period", idname = "id", gname = "first_treat",
     data = data, frame = frame,
     control_group = "nevertreated", est_method = "dr",
@@ -193,6 +194,7 @@ fit_gmm_variants <- function(data, frame = NULL) {
 
   # "two_step" is a documented alias for "optimal"
   fit_alias <- cdid::att_gt(
+    outcome_pooling = "pooled",
     yname = "y", tname = "period", idname = "id", gname = "first_treat",
     data = data, frame = frame,
     control_group = "nevertreated", est_method = "dr",
@@ -202,6 +204,7 @@ fit_gmm_variants <- function(data, frame = NULL) {
 
   # Explicit unweighted GMM in the full catalog metric
   fit_id <- cdid::att_gt(
+    outcome_pooling = "pooled",
     yname = "y", tname = "period", idname = "id", gname = "first_treat",
     data = data, frame = frame,
     control_group = "nevertreated", est_method = "dr",
@@ -211,6 +214,7 @@ fit_gmm_variants <- function(data, frame = NULL) {
 
   # Explicit covariance-ridge tuning and optional resource limits
   fit_tuned <- cdid::att_gt(
+    outcome_pooling = "pooled",
     yname = "y", tname = "period", idname = "id", gname = "first_treat",
     data = data, frame = frame,
     control_group = "nevertreated", est_method = "dr",

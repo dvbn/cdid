@@ -4,7 +4,7 @@
 \alias{cdid-package}
 \title{cdid: The Chained Difference-in-Differences}
 \description{
-cdid 1.1.0.1, an update of the package after version 0.1.1, is a small layer on
+cdid 2.0.0.0, an update of the package after version 0.1.1, is a small layer on
 the did package. It keeps did's \code{att_gt()} and \code{aggte()} interface and
 adds an estimation mode for panel data with missing outcomes.
 

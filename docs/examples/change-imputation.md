@@ -1,6 +1,6 @@
 # Impute actual changes for missing outcomes
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
 
 Observation weighting reweights the changes of units observed at both dates. Change imputation instead predicts the actual change of every unit from its covariates, and the augmented correction combines prediction with weighting. This example compares the three corrections on the panel of [Choose an observation model for missing outcomes](observation-models.md), where every model they need is correctly specified by construction. [Handling missing outcomes](../methods/missing-outcomes.md#change-imputation) defines the methods.
 
@@ -65,6 +65,7 @@ fit_weighting <- cdid::att_gt(
 )
 
 fit_imputation <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "time", idname = "id", gname = "g",
   xformla = ~ x, data = panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -77,6 +78,7 @@ fit_imputation <- cdid::att_gt(
 )
 
 fit_augmented <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "time", idname = "id", gname = "g",
   xformla = ~ x, data = panel, frame = units,
   control_group = "nevertreated", est_method = "dr",

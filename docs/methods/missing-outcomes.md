@@ -1,6 +1,6 @@
 # Handling missing outcomes
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
 
 An observed outcome change is available only when the same unit is observed at both dates. Imputation and augmented correction also reconstruct changes on the full study population. The choices on this page decide what must be true for those observed changes to stand in for the study population, and which models adjust for differences between the units observed and the population. The arguments involved begin with `selection`, together with `imputation_pooling` and the unit table `frame`.
 
@@ -140,7 +140,7 @@ All three adjustments need conditional mean trends missing at random for every n
 
 For the augmented correction combined with treatment DR, the sufficient condition is therefore: (treatment propensity model correct or counterfactual regression correct) and, for every needed cell, (observation model correct or imputation model correct). The correct alternative may differ from one cell to another. These are sufficient conditions for the primitive links with several qualifications. ATT/GMM recovery additionally needs valid moments for every used catalog link and the accepted identification and regularity conditions; incompatible link pseudo-targets can make the limit depend on the GMM weights.
 
-- Pooled slopes, the two dates of a date model and the shared counterfactual regression link cells together, so an error in another cell, block or pooling group can move a shared coefficient.
+- Shared coefficients in the chosen observation, imputation or outcome model, and the two endpoints of a date model, link cells together. An error elsewhere in a shared group can affect its other predictions.
 - If variables that appear only in `selection_xformla` shift the mean change, an imputation model built from `xformla` cannot be correct on its own, and the observation model must be. Adding observation covariates is therefore not automatically harmless.
 - When both alternatives of a cell are wrong, or both treatment models are wrong, the estimate is generally biased.
 - The results are large sample properties. There is no finite sample unbiasedness, and small fitted probabilities inflate the variance.
@@ -156,7 +156,7 @@ For the augmented correction combined with treatment DR, the sufficient conditio
 | `"across_cohorts"` | one slope vector shared by all cells | one slope vector shared by all cells |
 | Intercepts | separate for each cell when `selection_xformla` has an intercept | separate for each cohort and pair when `xformla` has an intercept |
 
-Shared slopes are an explicit model restriction that you choose. They can be wrong, for example when the changes of a treated cohort respond to covariates differently across date pairs. The package never pools automatically, and a pooling group whose design is rank deficient is refused. `selection_pooling` changes only the slopes of the observation models; the shared slope and local intercepts of the counterfactual outcome regression are unaffected. Under the augmented correction the two pooling arguments act independently.
+Shared slopes are an explicit model restriction that you choose. They can be wrong, for example when the changes of a treated cohort respond to covariates differently across date pairs. The package never pools automatically, and a pooling group whose design is rank deficient is refused. `selection_pooling` changes only the observation models. `imputation_pooling` controls actual-change imputation, and `outcome_pooling` controls the counterfactual untreated-change regression used by treatment OR and DR. These three choices act independently, including under the augmented correction. The outcome choice has two values: `"separate"` (default) for comparison-specific coefficients, or `"pooled"` for shared per-step slopes and local intercepts. The [treatment adjustment guide](treatment.md#outcome-regression-or) explains that choice.
 
 ## Two covariate formulas
 
@@ -245,6 +245,7 @@ The four fits below hold the data, the unit table, the covariate formula and the
 
 ```r
 fit_none <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -264,6 +265,7 @@ fit_weighting <- cdid::att_gt(
 )
 
 fit_imputation <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -274,6 +276,7 @@ fit_imputation <- cdid::att_gt(
 )
 
 fit_augmented <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",

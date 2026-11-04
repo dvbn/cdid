@@ -1,6 +1,6 @@
 # Treatment adjustment: IPW, OR and DR
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. Their OR/DR calls explicitly request the historical pooled specification.
 
 `est_method` decides how each treatment cohort is made comparable with its controls. The same choice applies to every short comparison in the chain. It is separate from the choice of how to handle missing outcomes, which has its own arguments and is described in [Handling missing outcomes](missing-outcomes.md).
 
@@ -26,60 +26,57 @@ What must be correct is the logit model of cohort membership in the population t
 
 ## Outcome regression (OR)
 
-`est_method = "reg"` models untreated outcome changes. A single weighted least squares regression is fitted to the outcome changes of control units, pooling every comparison that the fit uses, including the comparisons reported before treatment:
+`est_method = "reg"` models untreated outcome changes using weighted least squares on control units. `outcome_pooling = "separate"`, the default, gives each comparison block its own coefficients:
 
 ```
-change(i, e) = alpha(b) + L(e) * z(i)' beta + error      for control units i
+change(i, e) = alpha(b) + L(e) * z(i)' beta(b) + error      for control units i
 ```
 
 - `e = (s, t)` is a date pair and `change(i, e)` is the outcome change of unit i from s to t.
 - `z(i)` holds the covariates of `xformla`, without the intercept.
-- `beta` is one slope vector shared by every comparison and every period.
-- `L(e)` is the number of steps from s to t in the stored calendar, the sorted dates present in the data. It is computed from the positions of the two dates, never by subtracting their labels.
-- `alpha(b)` is a local intercept for each block b, a distinct combination of date pair and control group. Blocks have intercepts when `xformla` has an intercept.
+- A block b is a distinct date pair and control group, with its reference covariates and sampling weights. Comparisons that use the same fit reuse it; sharing observations does not force different blocks to have equal coefficients.
+- `beta(b)` is the block's slope vector. `alpha(b)` is its intercept when `xformla` has one.
+- `L(e)` counts steps between the two dates in the stored calendar. It uses their positions, never the difference between their labels.
 
-For a baseline or observation-weighted comparison of cohort g, the estimate is the normalized weighted target-cohort mean of the observed change minus its predicted untreated change, `alpha(b) + L(e) * z(i)' beta`. With imputation or augmented correction, the same treatment adjustment uses reconstructed changes. Treatment OR itself fits no treatment propensity model or actual-treated-change regression; the latter belongs to the separate observation-reconstruction step when requested.
+`outcome_pooling = "pooled"` instead fits one slope vector `beta` across all blocks, with a local intercept for each block. This is the outcome model used in earlier versions. The fit includes the comparisons reported before treatment as well as those used for treatment effects.
 
-The stored calendar sets the step counts. If the data contain the dates 2001, 2003 and 2004, then:
-
-| Date pair | Positions in the stored calendar | `L(e)` |
+| `outcome_pooling` | Outcome-model restriction | Practical consequence |
 | --- | --- | --- |
-| 2001 to 2003 | 1 to 2 | 1 |
-| 2003 to 2004 | 2 to 3 | 1 |
-| 2001 to 2004 | 1 to 3 | 2 |
+| `"separate"` (default) | each block has its own slopes | covariate effects may differ across comparisons; each control design must support its required predictions |
+| `"pooled"` | slopes per calendar step are shared across blocks | pooling may help when individual control samples are small, but the shared-slope restriction must be credible |
 
-This specification has three practical consequences.
+For separate fits, `L(e)` is constant within each block. Scaling its covariates by `L(e)` therefore only rescales that block's coefficients; it imposes no equality across short and long changes. For pooled fits, the scaling matters: a two-step change has twice the covariate slope of a one-step change. With dates 2001, 2003 and 2004, the successive pairs each have one step and the pair 2001 to 2004 has two.
 
-- A covariate shifts untreated changes by the same amount per calendar step in every period and in every comparison. There is no separate slope for each period. If the influence of a covariate on untreated trends changes over time, the model is misspecified.
-- A comparison over two steps has a covariate slope twice that of a comparison over one step, so the regression of short and long changes is internally consistent.
-- The shared slope is a restriction on the outcome model. It adds no parallel trends assumption.
+For a baseline or observation-weighted comparison of cohort g, OR averages the observed change minus its predicted untreated change over the weighted target cohort. Imputation and augmented correction apply the same treatment adjustment to reconstructed changes. Treatment OR fits no treatment propensity model. Actual-change imputation, when requested, is a separate model.
+
+Pooling changes the working outcome model, not the parallel-trends assumption. The package never switches a failed separate fit to pooling automatically. Neither choice has a uniform precision advantage.
 
 The covariate formula determines the fitted model:
 
 | `xformla` | Fitted model |
 | --- | --- |
 | `NULL` or `~ 1` | a local intercept for each block and no slopes |
-| `~ x1 + x2` | local intercepts and shared slopes on `L(e) * x1` and `L(e) * x2` |
-| `~ 0 + x1` | a shared slope on `L(e) * x1` and no local intercepts |
+| `~ x1 + x2` | local intercepts and slopes on `L(e) * x1` and `L(e) * x2`, separate or pooled as requested |
+| `~ 0 + x1` | slopes on `L(e) * x1`, separate or pooled as requested, and no intercepts |
 | `~ 0` | refused, because `xformla` needs at least one column |
 
-Before fitting, the package looks for columns of the design that are exact combinations of other columns. Such a column is removed only when predictions for every relevant control and treated unit stay the same. Near dependencies that cannot be removed at arithmetic roundoff are retained for the separate rank check. An exact control null direction that fails to reconstruct required treated predictions is refused, as is a pooled design that remains rank deficient. Removing a column only changes the parameterization: the fitted predictions are unchanged, and nothing is assumed about the coefficient of the removed column. The original, retained and removed columns are recorded in `fit$chained$outcome_design` and the route-specific records of `fit$chained$nuisance_diagnostics`. Inspect them with `str()` rather than assuming one common `basis` subfield.
+Before fitting, the package looks for columns of the design that are exact combinations of other columns. Such a column is removed only when predictions for every relevant control and treated unit stay the same. Near dependencies that cannot be removed at arithmetic roundoff are retained for the separate rank check. An exact control null direction that fails to reconstruct required treated predictions is refused, as is a required regression design that remains rank deficient. Removing a column only changes the parameterization: the fitted predictions are unchanged, and nothing is assumed about the coefficient of the removed column. The original, retained and removed columns are recorded in `fit$chained$outcome_design` and the route-specific records of `fit$chained$nuisance_diagnostics`. Inspect them with `str()` rather than assuming one common `basis` subfield.
 
 Baseline OR with static covariates needs the design on repeat observers. Dated covariates are read at the route's required reference rows. Imputation and augmented correction need their outcome design on every relevant row of the complete unit table.
 
-This is a difference from `did` only when coefficient restrictions or fitting procedures differ. The same formula notation can describe a shared slope here and separately fitted slopes there; if the complete specification and fitted procedure coincide, OR/DR labels alone cannot explain different estimates. The [balanced-panel decision guide](../from-did.md#why-can-balanced-results-differ-and-which-should-i-use) separates this issue from additional NYT moments and explains the conditional tradeoffs.
+This is a difference from `did` only when coefficient restrictions or fitting procedures differ. Separate fits, the default, allow comparison-specific coefficients as in `did`. Explicit pooling changes that restriction even with the same formula notation. If the complete specification and fitted procedure coincide, OR/DR labels alone cannot explain different estimates. The [balanced-panel decision guide](../from-did.md#why-can-balanced-results-differ-and-which-should-i-use) separates this issue from additional NYT moments and explains the conditional tradeoffs.
 
 ## Doubly robust treatment estimation (DR)
 
-`est_method = "dr"`, the default, combines the two models. The pooled control regression predicts each unit's untreated change, and IPW then compares the remaining changes (observed change minus prediction) of the cohort and its weighted controls, with separately normalized weights. For each comparison this gives
+`est_method = "dr"`, the default, combines the two models. The chosen control regression predicts each unit's untreated change, and IPW then compares the remaining changes (observed change minus prediction) of the cohort and its weighted controls, with separately normalized weights. For each comparison this gives
 
 ```
-DR = IPW - (mean design of the cohort - weighted mean design of the controls)' beta
+DR = IPW - (mean design of the cohort - weighted mean design of the controls)' beta(b)
 ```
 
-where the design of a unit is `L(e) * z(i)`. The local intercept cancels because both sets of weights sum to one. With an intercept only formula, DR therefore equals IPW exactly, including its influence function.
+where the design of a unit is `L(e) * z(i)` and pooled fits use the same `beta` for every block. The local intercept cancels because both sets of weights sum to one. With an intercept only formula, DR therefore equals IPW exactly, including its influence function.
 
-**What DR protects.** Suppose missing outcomes are handled validly and parallel trends, no anticipation, overlap and the regularity conditions hold. Then each comparison is consistent if either the treatment propensity model or the pooled outcome regression is correct. Two qualifications apply. The regression is shared, so it must be correct across all of its pooled blocks: a wrong specification in one block can move the shared slope. The guarantee is a large sample property. DR estimates are not unbiased in finite samples, and when both models are wrong they are generally biased, although the errors can cancel in special cases.
+**What DR protects.** Suppose missing outcomes are handled validly and parallel trends, no anticipation, overlap and the regularity conditions hold. Then each comparison is consistent if either the treatment propensity model or the chosen outcome regression is correct. With separate regressions, correctness is required in the relevant comparison. With pooled regressions, it must hold across the blocks sharing coefficients: misspecification in one block can move the shared slope. The guarantee is a large sample property. DR estimates are not unbiased in finite samples, and when both models are wrong they are generally biased, although the errors can cancel in special cases.
 
 | Treatment propensity model | Outcome regression | IPW | OR | DR |
 | --- | --- | --- | --- | --- |
@@ -92,9 +89,9 @@ Every entry assumes that the remaining assumptions hold. In particular, treatmen
 
 ## Change imputation uses a different regression
 
-When missing outcomes are handled by change imputation (`selection_est_method = "imputation"`) or by the augmented correction (`selection_est_method = "dr"`), the package fits a second regression. It predicts actual changes, including any treatment effects, separately for each cohort and date pair, and averages the predictions over the study population. That model and its pooling argument `imputation_pooling` are described in [Handling missing outcomes](missing-outcomes.md#change-imputation). The counterfactual OR on this page is a different model, although both use `xformla`. It always shares one slope vector across its blocks and has no pooling argument.
+When missing outcomes are handled by change imputation (`selection_est_method = "imputation"`) or by the augmented correction (`selection_est_method = "dr"`), the package fits a second regression. It predicts actual changes, including any treatment effects, separately for each cohort and date pair, and averages the predictions over the study population. That model and its pooling argument `imputation_pooling` are described in [Handling missing outcomes](missing-outcomes.md#change-imputation). The counterfactual OR on this page is a different model, although both use `xformla`. `outcome_pooling` controls only this counterfactual regression. It is independent of `imputation_pooling` for actual changes and `selection_pooling` for observation probabilities.
 
-With change imputation, the treatment methods work on the reconstructed changes: IPW fits the treatment logits with the corresponding weights and no counterfactual regression, OR fits the shared counterfactual regression to the imputed changes of the controls and no treatment logit, and DR fits both.
+With change imputation, the treatment methods work on the reconstructed changes: IPW fits the treatment logits with the corresponding weights and no counterfactual regression, OR fits the chosen counterfactual regression to the imputed changes of the controls and no treatment logit, and DR fits both.
 
 ## Covariates
 
@@ -154,12 +151,12 @@ fit_ipw <- cdid::att_gt(
 fit_or <- cdid::att_gt(
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = cov_panel, control_group = "nevertreated",
-  est_method = "reg", bstrap = FALSE, cband = FALSE
+  est_method = "reg", outcome_pooling = "pooled", bstrap = FALSE, cband = FALSE
 )
 fit_dr <- cdid::att_gt(
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = cov_panel, control_group = "nevertreated",
-  est_method = "dr", bstrap = FALSE, cband = FALSE
+  est_method = "dr", outcome_pooling = "pooled", bstrap = FALSE, cband = FALSE
 )
 
 fits <- list(unadjusted = fit_unadjusted, ipw = fit_ipw, or = fit_or, dr = fit_dr)
@@ -194,7 +191,7 @@ A variation shows what DR protects. Replace `0.3 * cov_panel$x` by `0.3 * cov_pa
 | `fit$DIDparams$est_method`, `fit$DIDparams$xformla` | the requested method and the formula with its environment |
 | `fit$chained$estimator` | the estimator label: `"chained IPW-GMM"`, `"chained outcome regression/control-mean GMM"` or `"chained doubly robust GMM"`, with a suffix for change imputation or the augmented correction |
 | `fit$chained$selection` | for OR and DR, the outcome and treatment model descriptions, the step convention, the assumptions and model counts such as `n_regression_fits`, `n_regression_blocks`, `n_local_intercepts`, `n_shared_slopes` and `n_treatment_fits` |
-| `fit$chained$nuisance_diagnostics` | for OR and DR, the shared slopes, block intercepts, fitted comparisons and step convention |
+| `fit$chained$nuisance_diagnostics` | for OR and DR, the separate or shared slopes, block intercepts, fitted comparisons and step convention |
 | `fit$chained$outcome_design` | original, retained and removed design columns |
 
 `tidy()` and `ggdid()` show the estimator label for OR and DR fits and for the imputation and augmented routes.

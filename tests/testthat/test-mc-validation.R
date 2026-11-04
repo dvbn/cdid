@@ -17,8 +17,8 @@ verify_strict_cdid_namespace <- function(pkg = "cdid", env_override = NULL) {
   if (!isNamespace(ns) || !identical(unname(getNamespaceName(ns)), "cdid")) {
     stop("Target environment is not the `cdid` package namespace.", call. = FALSE)
   }
-  if (!identical(unname(getNamespaceVersion(ns)), "1.1.0.1")) {
-    stop("`cdid` namespace version must be 1.1.0.1.", call. = FALSE)
+  if (!identical(unname(getNamespaceVersion(ns)), "2.0.0.0")) {
+    stop("`cdid` namespace version must be 2.0.0.0.", call. = FALSE)
   }
   if (!environmentIsLocked(ns) || !environmentIsLocked(parent.env(ns))) {
     stop("`cdid` namespace and its imports environment must be locked.",

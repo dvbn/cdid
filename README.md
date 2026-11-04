@@ -4,7 +4,7 @@
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://davidbenatia.com/research/)
 
-The current CRAN release is 0.1.1. This repository contains version 1.1.0.1,
+The current CRAN release is 0.1.1. This repository contains version 2.0.0.0,
 which is being prepared for the next CRAN update.
 
 ## Installation
@@ -21,7 +21,7 @@ aggregation and plotting. To include it when installing from GitHub, use
 `vignette("cdid", package = "cdid")`. The [full user guide](https://github.com/dvbn/cdid/blob/main/docs/README.md)
 and [practical notebook](https://github.com/dvbn/cdid/blob/main/notebooks/cdid_practical_guide.qmd) provide more examples.
 
-`cdid` 1.1.0.1 requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`. If older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted but have not been tested, so it is not guaranteed that everything works with them or that results are identical. Installation compiles the package's C/C++ code and therefore needs a compiler toolchain: Rtools on Windows, the command-line developer tools on macOS, or a C/C++ compiler and `make` on Linux. The optional [pinned validation setup](https://github.com/dvbn/cdid/blob/main/validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions, for checks of this revision; historical outputs retain their recorded dependency versions.
+`cdid` 2.0.0.0 requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`. If older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted but have not been tested, so it is not guaranteed that everything works with them or that results are identical. Installation compiles the package's C/C++ code and therefore needs a compiler toolchain: Rtools on Windows, the command-line developer tools on macOS, or a C/C++ compiler and `make` on Linux. The optional [pinned validation setup](https://github.com/dvbn/cdid/blob/main/validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions, for checks of this revision; historical outputs retain their recorded dependency versions.
 
 ## What the package does
 
@@ -54,7 +54,7 @@ Chained DiD can also be more precise than RCS comparisons when both are valid. D
 
 - Callaway, B. and Sant'Anna, P. H. C. (2021). Difference-in-Differences with Multiple Time Periods. *Journal of Econometrics*, 225(2), pages 200 to 230. <https://doi.org/10.1016/j.jeconom.2020.12.001>
 
-Chained IPW (`est_method = "ipw"`) and observation weighting for missing outcomes follow Bellégo, Benatia and Dortet-Bernadet. The package extends these papers with chained OR and DR, which carry the OR and DR approaches over to chained comparisons through one pooled regression of the controls' outcome changes, and with change imputation and PT-all. The [augmented correction](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#augmented-correction) for missing outcomes, which combines an observation model with a change imputation model and is used with treatment DR, is a further extension; an accompanying paper is about to be released. The methods pages in the reading path state the assumptions each extension needs.
+Chained IPW (`est_method = "ipw"`) and observation weighting for missing outcomes follow Bellégo, Benatia and Dortet-Bernadet. The package extends these papers with chained OR and DR, which carry the OR and DR approaches over to chained comparisons through regressions of the controls' outcome changes, fitted separately by comparison by default or pooled with `outcome_pooling = "pooled"`, and with change imputation and PT-all. The [augmented correction](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#augmented-correction) for missing outcomes, which combines an observation model with a change imputation model and is used with treatment DR, is a further extension; an accompanying paper is about to be released. The methods pages in the reading path state the assumptions each extension needs.
 
 ## Reading path
 
@@ -87,7 +87,7 @@ For hands-on exploration, use the [editable Quarto source](https://github.com/dv
 | 19 | [Results](https://github.com/dvbn/cdid/blob/main/docs/reference/results.md) | The contents of each result, the uncertainty rules, pretrend tests and export. |
 | 20 | [Diagnose errors and unavailable results](https://github.com/dvbn/cdid/blob/main/docs/help/troubleshooting.md) | Refused requests, failed fits, unavailable effects and surprising results. |
 
-This guide describes version 1.1.0.1. Numerical code output shown on the article pages comes from recorded runs, and each page states the version actually used. Analytical population values are labeled separately.
+This guide describes version 2.0.0.0. Numerical code output shown on the article pages comes from recorded runs, and each page states the version actually used. Analytical population values are labeled separately.
 
 ## Terms used in this guide
 

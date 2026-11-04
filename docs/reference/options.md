@@ -21,7 +21,7 @@ cdid::att_gt(
   selection_justification = NULL, selection_est_method = "ipw",
   imputation_pooling = "separate", gmm_weighting = c("optimal", "identity"),
   gmm_covariance = "tikhonov", pt_assumption = c("post", "all"),
-  pt_start = NULL, control = NULL
+  pt_start = NULL, control = NULL, outcome_pooling = "separate"
 )
 
 cdid::aggte(
@@ -41,7 +41,7 @@ cdid::conditional_did_pretest(
   selection_model = "pair_logit", selection_pooling = "separate",
   selection_xformla = NULL, selection_universe = "F", selection_rho = NULL,
   selection_justification = NULL, selection_est_method = "ipw",
-  imputation_pooling = "separate", control = NULL
+  imputation_pooling = "separate", control = NULL, outcome_pooling = "separate"
 )
 ```
 
@@ -70,6 +70,7 @@ The unit table `frame` is described with the [chained arguments](#chained-argume
 | Argument | Default | Accepted values | Notes for chained mode |
 | --- | --- | --- | --- |
 | `est_method` | `"dr"` | `"dr"`, `"ipw"`, `"reg"` or a custom IPW function | Any other string is refused before the data are read; nothing is substituted. |
+| `outcome_pooling` | `"separate"` | `"separate"` or `"pooled"` | Counterfactual untreated-change regression for `est_method = "reg"` or `"dr"`. Separate fits have comparison-specific slopes; pooled fits share slopes across blocks. Independent of selection and imputation pooling. |
 | `xformla` | `NULL` | one sided formula, such as `~ x1 + x2` | The design must have at least one column: `~ 1` and `~ 0 + x` are accepted, `~ 0` is refused. Covariates must be fixed within units or are read at reference dates. |
 | `...` | | | Passed to a custom `est_method` function; refused when `est_method` is a string. |
 
@@ -103,7 +104,7 @@ A custom function has `did`'s panel IPW interface `f(y1, y0, D, covariates, i.we
 - **Formulas.** `xformla` and `selection_xformla` are one sided formulas whose `stats::terms` intercept and assignment information is respected, including intercept only (`~ 1`) and no intercept (`~ 0 + x`) forms. Only `selection_xformla` accepts a design with no columns (`~ 0`); its observation model then has no parameters and uses the fixed probability 0.5 for each pair, or 0.25 for a product of two dates.
 - **Observation weighting** (`selection_est_method = "ipw"`) fits `selection_model` with `selection_pooling` on the fitting sample selected by `selection_universe`. `"independent_period_logit"` requires `selection_universe = "F"` and the independence of the two dates given cohort and covariates.
 - **Change imputation** (`"imputation"`) requires `selection = "conditional_mtar"`, `selection_universe = "F"`, `selection_rho = NULL`, known cohorts and complete `xformla` covariates on every row of the unit table, and `est_method` equal to `"ipw"`, `"reg"` or `"dr"`. It fits no observation model.
-- **Augmented correction** (`"dr"`) has the requirements of change imputation, requires `est_method = "dr"`, needs complete covariates of both formulas on every row of the unit table and uses every observation model and imputation argument. The two pooling arguments are independent.
+- **Augmented correction** (`"dr"`) has the requirements of change imputation, requires `est_method = "dr"`, needs complete covariates of both formulas on every row of the unit table and uses every observation model and imputation argument. Observation, imputation and counterfactual outcome pooling are independent choices.
 - **Not supported:** known pair probabilities (including a design probability of one), estimated or unnormalized transport ratios, and probit models.
 
 ## Parallel trends and reporting
@@ -210,7 +211,7 @@ A result fitted with `compute_inffunc = FALSE` is refused with class `cdid_chain
 | `bstrap`, `cband` | Validated only. The test always uses multiplier draws and reports no standard errors. |
 | `biters`, `alp` | Number of multiplier draws and level of the reported critical value. |
 | `pl`, `cores` | Parallel draws when `control$workers` declares them; results equal those of `cores = 1`. |
-| `anticipation`, `base_period`, `fix_weights`, `frame`, the `selection` arguments, `imputation_pooling`, `control` | The chained settings of `att_gt()`, with the same meanings; they select the fitted route whose comparisons before treatment are tested. |
+| `anticipation`, `base_period`, `fix_weights`, `frame`, the `selection` arguments, `imputation_pooling`, `outcome_pooling`, `control` | The chained settings of `att_gt()`, with the same meanings; they select the fitted route whose comparisons before treatment are tested. |
 
 GMM weighting and the PT-all settings are not arguments of the test.
 
