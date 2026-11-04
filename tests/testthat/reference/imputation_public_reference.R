@@ -44,7 +44,7 @@ imputation_public_fixture <- function(raw, dates = 1:4) {
     cl = paste0("cl-", (raw$id - 1L) %/% 3L), stringsAsFactors = FALSE)
   frame[["(Intercept)"]] <- raw$x + 1.5
   list(raw = raw, frame = frame, data = panel,
-    args = list(yname = "y", tname = "time", idname = "id", gname = "g",
+    args = list(outcome_pooling = "pooled", yname = "y", tname = "time", idname = "id", gname = "g",
       data = panel, frame = frame, xformla = ~x, weightsname = "w",
       selection = "conditional_mtar", selection_est_method = "imputation",
       imputation_pooling = "separate", est_method = "dr", control_group = "nevertreated",

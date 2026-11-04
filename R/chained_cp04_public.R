@@ -126,17 +126,17 @@ cp04_selection_record <- function(cp04, backend = NULL, reader = NULL) {
     "n_regression_fits", "n_regression_blocks",
     "n_local_intercepts", "n_shared_slopes", "n_supports", "n_treatment_fits")
   if (identical(cp04$dr_method, "baseline")) return(list(method = "none", canonical_assumption = "none",
-    outcome_model = "shared one-period outcome-change control-mean regression",
+    outcome_pooling = cp04$outcome_pooling, outcome_model = outcome_public_model(cp04$outcome_pooling),
     treatment_model = "risk-set treatment propensity logit",
     duration_convention = "stored-calendar transition count L_e = i_t - i_s",
-    assumptions = paste("Either correct shared one-period outcome-change control-mean regression with local block intercepts",
+    assumptions = paste("Either correct counterfactual outcome-change control-mean regressions under the chosen outcome pooling",
       "or correct synthetic risk-set treatment propensity logits under valid observation reconstruction,",
       "chained parallel trends/no anticipation and fixed-weight population law."),
     models = if (is.null(backend)) NULL else backend$accounting[intersect(model_fields, names(backend$accounting))]))
   if (identical(cp04$or_method, "baseline")) return(list(method = "none", canonical_assumption = "none",
-    outcome_model = "shared one-period outcome-change control-mean regression",
+    outcome_pooling = cp04$outcome_pooling, outcome_model = outcome_public_model(cp04$outcome_pooling),
     duration_convention = "stored-calendar transition count L_e = i_t - i_s",
-    assumptions = "Shared one-period outcome-change control-mean regression with local block intercepts, chained parallel trends/no anticipation and fixed-weight population law.",
+    assumptions = "Counterfactual outcome-change control-mean regressions under the chosen outcome pooling, chained parallel trends/no anticipation and fixed-weight population law.",
     models = if (is.null(backend)) NULL else backend$accounting[intersect(model_fields, names(backend$accounting))]))
   sel_model <- if (is.null(cp04$selection_model)) "pair_logit" else cp04$selection_model
   sel_pool <- if (is.null(cp04$selection_pooling)) "separate" else cp04$selection_pooling
@@ -154,7 +154,7 @@ cp04_selection_record <- function(cp04, backend = NULL, reader = NULL) {
            if (!identical(sel_pool, "separate")) paste0(" under ", sel_pool, " slope pooling.") else ".")
   }
   out <- list(method = "corollary1", canonical_assumption = "conditional_mtar",
-    requested_selection = sel_req, selection_model = sel_model, selection_pooling = sel_pool,
+    requested_selection = sel_req, selection_model = sel_model, selection_pooling = sel_pool, outcome_pooling = cp04$outcome_pooling,
     link = "logit", fitting_universe = cp04$universe,
     population = cp04$population, formula = cp04$formula,
     transport = if (is.null(cp04$rho_column)) "rho=1" else paste0("fixed known normalized rho column: ", cp04$rho_column),
@@ -165,14 +165,14 @@ cp04_selection_record <- function(cp04, backend = NULL, reader = NULL) {
     n_selection_parameters = if (is.null(sb_sum)) 0L else sb_sum$n_selection_parameters,
     empirical_repeat_rates = a_rates,
     assumptions = paste(assump_prefix,
-      if (!is.null(cp04$dr_method)) "Either correct shared one-period outcome-change control-mean regression with local block intercepts or correct synthetic risk-set treatment propensity logits under valid observation reconstruction, PT/no anticipation and the fixed-weight population law must also hold; F logit does not imply U logit." else
-      if (!is.null(cp04$or_method)) "Correct shared one-period outcome-change control-mean regression with local block intercepts, PT/no anticipation and the fixed-weight population law must also hold; F logit does not imply U logit." else
+      if (!is.null(cp04$dr_method)) "Either correct counterfactual outcome-change control-mean regressions under the chosen outcome pooling or correct synthetic risk-set treatment propensity logits under valid observation reconstruction, PT/no anticipation and the fixed-weight population law must also hold; F logit does not imply U logit." else
+      if (!is.null(cp04$or_method)) "Correct counterfactual outcome-change control-mean regressions under the chosen outcome pooling, PT/no anticipation and the fixed-weight population law must also hold; F logit does not imply U logit." else
       "Synthetic treatment odds, PT/no anticipation and the fixed-weight population law must also hold; F logit does not imply U logit."),
     if_scale = "phi_F on ALL N roster rows; core psi=(n_A/N)*phi_F with 1/n_A covariance normalization",
     unsupported = c("known pair probabilities (including design p=1)", "custom IPW callbacks without an explicit log_weight_gradient", "estimated or unnormalized transport", "probit"),
     models = if (is.null(backend)) NULL else backend$accounting[intersect(model_fields, names(backend$accounting))])
   if (!is.null(cp04$or_method) || !is.null(cp04$dr_method)) {
-    out$outcome_model <- "shared one-period outcome-change control-mean regression"
+    out$outcome_model <- outcome_public_model(cp04$outcome_pooling)
     out$duration_convention <- "stored-calendar transition count L_e = i_t - i_s"
   }
   if (!is.null(cp04$dr_method)) {
@@ -200,7 +200,7 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
                                        dr_method = NULL, treatment_columns = NULL, imputation = NULL,
                                        augmented = NULL, reference_source = NULL, ipw_method = NULL,
                                        custom_est_method = NULL, custom_dots = list(), aux_spec = NULL,
-                                       pt_assumption = NULL, run_numerical_transfer = NULL) {
+                                       pt_assumption = NULL, run_numerical_transfer = NULL, outcome_pooling = "pooled") {
   M <- if (is.null(metadata)) 0L else nrow(metadata$catalog$rows)
   # CP08/D78 work ownership: the caller's cumulative prefix as received. The
   # descriptor-batch and descriptor-context work below is added to
@@ -271,11 +271,11 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
   backend <- if (!is.null(context) && !is.null(dr_method))
     dr_public_fit(dr_method, reader, context, ctrl, retained_pipeline_entries, external_work_ops,
       automatic_chunk_rows, outcome_recipe = context$outcome_recipe, treatment_columns = treatment_columns,
-      selection_model = selection_model, selection_pooling = selection_pooling, reference = NULL) else
+      selection_model = selection_model, selection_pooling = selection_pooling, reference = NULL, outcome_pooling = outcome_pooling) else
     if (!is.null(context))
     or_public_fit(or_method, reader, context, ctrl, retained_pipeline_entries, external_work_ops,
       automatic_chunk_rows, outcome_recipe = context$outcome_recipe,
-      selection_model = selection_model, selection_pooling = selection_pooling, reference = NULL) else
+      selection_model = selection_model, selection_pooling = selection_pooling, reference = NULL, outcome_pooling = outcome_pooling) else
     if (length(views) && !is.null(augmented))
     augmented_public_fit(augmented, reader, views, ctrl, retained_pipeline_entries, external_work_ops,
       automatic_chunk_rows, reference = reference) else if (length(views) && !is.null(imputation))
@@ -283,11 +283,11 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
       automatic_chunk_rows, reference = reference) else if (length(views) && !is.null(dr_method))
     dr_public_fit(dr_method, reader, views, ctrl, retained_pipeline_entries, external_work_ops,
       automatic_chunk_rows, outcome_recipe = outcome_recipe, treatment_columns = treatment_columns,
-      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference) else
+      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference, outcome_pooling = outcome_pooling) else
     if (length(views) && !is.null(or_method))
     or_public_fit(or_method, reader, views, ctrl, retained_pipeline_entries, external_work_ops,
       automatic_chunk_rows, outcome_recipe = outcome_recipe,
-      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference) else
+      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference, outcome_pooling = outcome_pooling) else
     if (length(views) && !is.null(ipw_method))
     reference_ipw_public_fit(reader, views, ctrl, retained_pipeline_entries, external_work_ops, reference,
       custom_est_method = custom_est_method, custom_dots = custom_dots) else if (length(views) && is.function(custom_est_method))
@@ -326,12 +326,12 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
       c(paste0("IPW:", backend$law, ":rate:", seq_along(backend$supports)),
         paste0("IPW:", backend$law, if (isTRUE(backend$custom)) ":callback:" else ":treatment:",
           seq_along(backend$treatments))) else if (!is.null(dr_method))
-      c(paste0("DR:", backend$law, ":shared_regression:1"),
+      c(if (identical(backend$outcome_pooling, "separate")) paste0("DR:", backend$law, ":regression:", seq_along(backend$regressions)) else paste0("DR:", backend$law, ":shared_regression:1"),
         paste0("DR:", backend$law, ":block:", seq_along(backend$regressions)),
         paste0("DR:", backend$law, ":treatment:", seq_along(backend$treatments)),
         if (length(backend$selections)) paste0("cp04:", backend$universe, ":selection:", seq_along(backend$selections))) else
     if (!is.null(or_method))
-      c(paste0("OR:", backend$law, ":shared_regression:1"),
+      c(if (identical(backend$outcome_pooling, "separate")) paste0("OR:", backend$law, ":regression:", seq_along(backend$regressions)) else paste0("OR:", backend$law, ":shared_regression:1"),
         paste0("OR:", backend$law, ":block:", seq_along(backend$regressions)),
         if (length(backend$selections)) paste0("cp04:", backend$universe, ":selection:", seq_along(backend$selections))) else
       paste0("cp04:", backend$universe, ":selection:", seq_along(backend$selections)),

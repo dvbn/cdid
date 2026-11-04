@@ -66,7 +66,7 @@ drp_public_fixture <- function(route = "none",
     tb <- drp_trans[drp_trans$route == route, ]
     frame$rho <- tb$rho[match(paste(d$cohort, d$x), paste(tb$cohort, tb$x))]
   }
-  args <- list(
+  args <- list(outcome_pooling = "pooled",
     yname = "y", tname = "time", idname = "id", gname = "g",
     data = data, frame = frame, xformla = xformla, weightsname = "w",
     est_method = est_method, control_group = "nevertreated",

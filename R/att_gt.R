@@ -13,7 +13,7 @@ upstream_att_gt_formals <- c(
 cdid_chained_only_formals <- c("mode", "frame", "selection", "selection_model", "selection_pooling",
                                "selection_xformla", "selection_universe", "selection_rho", "selection_justification",
                                "selection_est_method", "imputation_pooling",
-                               "gmm_weighting", "gmm_covariance", "pt_assumption", "pt_start", "control")
+                               "gmm_weighting", "gmm_covariance", "pt_assumption", "pt_start", "control", "outcome_pooling")
 
 att_gt <- function(yname,
                    tname,
@@ -53,7 +53,8 @@ att_gt <- function(yname,
                    gmm_covariance = "tikhonov",
                    pt_assumption = c("post", "all"),
                    pt_start = NULL,
-                   control = NULL) {
+                   control = NULL,
+                   outcome_pooling = "separate") {
   env <- environment()
   mode <- check_mode(mode)
   if (is.null(mode)) {
@@ -99,7 +100,7 @@ att_gt <- function(yname,
     selection = selection, selection_model = selection_model, selection_pooling = selection_pooling,
     selection_xformla = selection_xformla,
     selection_universe = selection_universe, selection_rho = selection_rho, selection_justification = selection_justification,
-    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, gmm_weighting = gmm_weighting,
+    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, gmm_weighting = gmm_weighting,
     gmm_covariance = gmm_covariance, pt_assumption = pt_assumption, pt_start = pt_start, control = control, call = sys.call())
 }
 

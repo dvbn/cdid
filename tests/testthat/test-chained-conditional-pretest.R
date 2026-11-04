@@ -29,7 +29,7 @@ cpt_cases <- list(
     selection_est_method = "dr", imputation_pooling = "within_cohort", selection_model = "independent_period_logit",
     selection_pooling = "within_cohort", selection_xformla = ~sx + sz), routes = c(dr = "aug_dr")))
 
-cpt_defaults <- function(data) list(yname = "y", tname = "time", idname = "id", gname = "G", xformla = ~x + z,
+cpt_defaults <- function(data) list(outcome_pooling = "pooled", yname = "y", tname = "time", idname = "id", gname = "G", xformla = ~x + z,
   data = data, panel = TRUE, allow_unbalanced_panel = NULL, control_group = "notyettreated", weightsname = "w",
   alp = 0.05, bstrap = TRUE, cband = TRUE, biters = 100, clustervars = NULL, est_method = "ipw", print_details = FALSE,
   pl = FALSE, cores = 1, anticipation = 0, base_period = "varying", fix_weights = NULL, mode = NULL, frame = NULL,

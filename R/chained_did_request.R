@@ -62,7 +62,7 @@ chained_request_scope_gate <- function(mode, panel, allow_unbalanced_panel, est_
                                        pt_assumption, pt_start = NULL, gmm_weighting, gmm_covariance = "tikhonov",
                                        fix_weights, compute_inffunc, pl, cores,
                                        faster_mode, print_details, control_group, base_period, anticipation, alp,
-                                       bstrap, cband, biters, dots, entry = c("public", "development")) {
+                                       bstrap, cband, biters, dots, entry = c("public", "development"), outcome_pooling = "separate") {
   entry <- match.arg(entry)
   is_custom_est <- is.function(est_method)
   if (!is_custom_est) {
@@ -99,6 +99,8 @@ chained_request_scope_gate <- function(mode, panel, allow_unbalanced_panel, est_
              "mode = \"ordinary\" for did's Callaway-Sant'Anna estimator unchanged."),
       c("cdid_chained_request_est_method", "cdid_chained_unavailable"))
   }
+  outcome_active <- !is_custom_est && est_method %in% c("reg", "dr")
+  outcome_choice <- if (outcome_active) chained_request_outcome_pooling(outcome_pooling) else NULL
   # ---- observation-correction axis (D52/D54) -----------------------------------
   # "ipw" keeps the existing probability-weighted normalization and never
   # evaluates `imputation_pooling`; "imputation" never evaluates the inactive
@@ -176,9 +178,10 @@ chained_request_scope_gate <- function(mode, panel, allow_unbalanced_panel, est_
        control_group = control_group, is_custom_est = is_custom_est, entry = entry,
        selection = sel_norm$requested, selection_canonical = sel_norm$canonical_assumption,
        selection_model = sel_norm$selection_model, selection_pooling = sel_norm$selection_pooling,
-       selection_est_method = sel_method, imputation_pooling = imp_pooling,
-       inactive_arguments = if (imputation) c("selection_model", "selection_pooling", "selection_xformla") else
-         if (augmented) character(0) else "imputation_pooling",
+       selection_est_method = sel_method, imputation_pooling = imp_pooling, outcome_pooling = outcome_choice,
+       inactive_arguments = c(if (!outcome_active) "outcome_pooling",
+         if (imputation) c("selection_model", "selection_pooling", "selection_xformla") else
+           if (augmented) character(0) else "imputation_pooling"),
        fix_weights = fix_weights, compute_inffunc = compute_inffunc, pl = pl, cores = as.double(cores),
        print_details = print_details, faster_mode = faster_mode,
        # did 2.5.1 att_gt(): compute_inffunc = FALSE sets bstrap and cband to FALSE.
@@ -222,12 +225,12 @@ chained_public_att_gt <- function(yname, tname, idname, gname, xformla, data, pa
                                   selection_est_method = "ipw", imputation_pooling = "separate", gmm_weighting,
                                   gmm_covariance = "tikhonov",
                                   pt_assumption, pt_start = NULL, control, call,
-                                  dots_eval = NULL) {
+                                  dots_eval = NULL, outcome_pooling = "separate") {
   gate <- chained_request_scope_gate(mode = mode, panel = panel, allow_unbalanced_panel = allow_unbalanced_panel,
     est_method = est_method, selection = selection, selection_model = selection_model, selection_pooling = selection_pooling,
     selection_xformla = selection_xformla,
     selection_universe = selection_universe, selection_rho = selection_rho, selection_justification = selection_justification,
-    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, pt_assumption = pt_assumption, pt_start = pt_start,
+    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, pt_assumption = pt_assumption, pt_start = pt_start,
     gmm_weighting = gmm_weighting, gmm_covariance = gmm_covariance, fix_weights = fix_weights,
     compute_inffunc = compute_inffunc, pl = pl, cores = cores,
     faster_mode = faster_mode, print_details = print_details, control_group = control_group, base_period = base_period,
@@ -256,7 +259,7 @@ chained_public_att_gt <- function(yname, tname, idname, gname, xformla, data, pa
     selection_rho = selection_rho, selection_justification = selection_justification,
     outcome_regression = !imputation && !augmented && identical(est_label, "reg"), or_resource = resolved$profile,
     doubly_robust = !imputation && !augmented && identical(est_label, "dr"),
-    selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling,
+    selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
     imputation_est_method = if (imputation) est_label else NULL, fix_weights = gate$fix_weights)
   validate_chained_pt_request(gate$pt_assumption, gate$pt_start, prep$calendar)
   # Every pure-imputation treatment method and the augmented route use the
@@ -279,7 +282,7 @@ chained_public_att_gt <- function(yname, tname, idname, gname, xformla, data, pa
       pt_assumption = gate$pt_assumption, pt_start = gate$pt_start,
       anticipation = as.double(anticipation), alp = alp, bstrap = bstrap, cband = cband, biters = as.double(biters),
       xformla = deparse(prep$xformla), weightsname = weightsname, clustervars = prep$clustervar, est_method = est_label,
-      selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling,
+      selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
       caller_rng = TRUE, run_numerical_transfer = FALSE, compute_inffunc = gate$compute_inffunc,
       multiplier_workers = plan$workers),
     policy = list(profile = resolved$profile, profile_status = resolved$profile_status, source = resolved$source,
@@ -318,7 +321,7 @@ chained_public_att_gt <- function(yname, tname, idname, gname, xformla, data, pa
     request = list(mode = gate$mode, panel = panel, allow_unbalanced_panel = allow_unbalanced_panel, faster_mode = faster_mode,
       print_details = print_details, pl = pl, cores = cores, compute_inffunc = compute_inffunc, selection = gate$selection,
       selection_canonical = gate$selection_canonical, selection_model = gate$selection_model, selection_pooling = gate$selection_pooling,
-      selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling,
+      selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
       inactive_arguments = gate$inactive_arguments,
       est_method = est_label, gmm_weighting = gate$gmm_weighting, gmm_weighting_requested = gate$gmm_weighting_requested,
       gmm_covariance = gate$gmm_covariance, pt_assumption = gate$pt_assumption, pt_start = gate$pt_start, run_numerical_transfer = FALSE,
@@ -384,13 +387,13 @@ chained_att_gt_request <- function(yname,
                                    run_numerical_transfer = TRUE,
                                    target_cohorts = NULL,
                                    fit_aggregations = character(0L),
-                                   call = NULL) {
+                                   call = NULL, outcome_pooling = "separate") {
   if (is.null(call)) call <- sys.call()
   gate <- chained_request_scope_gate(mode = mode, panel = panel, allow_unbalanced_panel = allow_unbalanced_panel,
     est_method = est_method, selection = selection, selection_model = selection_model, selection_pooling = selection_pooling,
     selection_xformla = selection_xformla,
     selection_universe = selection_universe, selection_rho = selection_rho, selection_justification = selection_justification,
-    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, pt_assumption = pt_assumption, pt_start = pt_start,
+    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, pt_assumption = pt_assumption, pt_start = pt_start,
     gmm_weighting = gmm_weighting, gmm_covariance = gmm_covariance, fix_weights = fix_weights,
     compute_inffunc = compute_inffunc, pl = pl, cores = cores,
     faster_mode = faster_mode, print_details = print_details, control_group = control_group, base_period = base_period,
@@ -433,7 +436,7 @@ chained_att_gt_request <- function(yname,
     selection_rho = selection_rho, selection_justification = selection_justification,
     outcome_regression = !imputation && !augmented && identical(est_label, "reg"),
     doubly_robust = !imputation && !augmented && identical(est_label, "dr"),
-    selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling,
+    selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
     imputation_est_method = if (imputation) est_label else NULL, fix_weights = gate$fix_weights)
   validate_chained_pt_request(gate$pt_assumption, gate$pt_start, prep$calendar)
 
@@ -444,7 +447,7 @@ chained_att_gt_request <- function(yname,
       pt_assumption = gate$pt_assumption, pt_start = gate$pt_start,
       anticipation = as.double(anticipation), alp = alp, bstrap = bstrap, cband = cband, biters = as.double(biters),
       xformla = deparse(prep$xformla), weightsname = weightsname, clustervars = prep$clustervar, est_method = est_label,
-      selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling,
+      selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
       caller_rng = TRUE, run_numerical_transfer = run_numerical_transfer, fit_aggregations = fit_aggregations),
     policy = list(inference_accuracy = control$inference_accuracy,
       gmm_accuracy = control$gmm_accuracy[intersect(c("target_error_unit", "max_target_error_abs", "max_target_error_se", "max_loading_error_abs"), names(control$gmm_accuracy))],
@@ -481,7 +484,7 @@ chained_att_gt_request <- function(yname,
     request = list(mode = mode, panel = panel, allow_unbalanced_panel = allow_unbalanced_panel, faster_mode = faster_mode,
       print_details = print_details, pl = pl, cores = cores, compute_inffunc = compute_inffunc, selection = gate$selection,
       selection_canonical = gate$selection_canonical, selection_model = gate$selection_model, selection_pooling = gate$selection_pooling,
-      selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling,
+      selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
       inactive_arguments = gate$inactive_arguments,
       est_method = est_label, gmm_weighting = gmm_weighting, gmm_weighting_requested = gmm_weighting_requested,
       gmm_covariance = gmm_covariance, pt_assumption = pt_assumption, pt_start = gate$pt_start, run_numerical_transfer = run_numerical_transfer,
@@ -525,7 +528,7 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
                                            outcome_regression = FALSE, or_resource = NULL,
                                            doubly_robust = FALSE, selection_est_method = "ipw",
                                            imputation_pooling = NULL, imputation_est_method = NULL,
-                                           fix_weights = NULL) {
+                                           fix_weights = NULL, outcome_pooling = NULL) {
   chained_request_need(is.data.frame(data) && nrow(data) >= 1L, "`data` must be a nonempty data.frame.")
   chained_request_need(chained_request_chr1(idname),
     "Chained (panel) estimation requires `idname`: units are aligned by identity, never by row position.")
@@ -981,6 +984,16 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
     }
   }
 
+  if (!is.null(cp04)) {
+    cp04$outcome_pooling <- outcome_pooling
+    for (role in intersect(c("imputation_design", "augmented_design"), names(cp04))) {
+      cp04[[role]]$outcome_pooling <- outcome_pooling
+      if (identical(outcome_pooling, "separate")) cp04[[role]]$alias_policy <- sub(
+        "shared counterfactual OR", "comparison-specific counterfactual OR", cp04[[role]]$alias_policy, fixed = TRUE)
+      imputation_design <- cp04[[role]]
+    }
+  }
+
   # CP08 common boundary: the exact first eligibility of the prepared owner
   # construction (built-in baseline IPW/OR/DR without selection, imputation or
   # reference inputs; complete full roster F = A with plain finite numeric
@@ -1012,7 +1025,7 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
     n_obs_unit <- row_frame_pos <- ui <- uo <- to <- tt_d <- NULL
   }, add = TRUE)
   list(
-    data_internal = data_internal, xformla = xf, cp04 = cp04, or_basis = or_basis, prepared = prepared,
+    data_internal = data_internal, xformla = xf, cp04 = cp04, outcome_pooling = outcome_pooling, or_basis = or_basis, prepared = prepared,
     fix_weights = fix_weights, weight_reduction = weight_reduction, weight_source = wres$kind,
     reference_source = reference_source, reference_route = reference_route, share_weights = first_w,
     share_law = if (identical(weight_reduction, "reference_recipes")) "first_calendar_masses" else NULL,
@@ -1268,6 +1281,7 @@ chained_request_bind_mp <- function(res, prep, call, params, request, control, p
   cohort_universe <- as.double(res$panel_owner$cohorts)
   # did-facing glist: declared treated panel cohorts, including unavailable ones.
   glist <- sort(unique(c(prep$panel_cohorts[is.finite(prep$panel_cohorts)], prep$target_cohorts)))
+  params$outcome_pooling <- request$outcome_pooling
   params$tlist <- calendar
   params$glist <- glist
   gt <- if (is.null(res$numerical_transfer)) NULL else res$numerical_transfer$gmm_transfer

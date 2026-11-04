@@ -237,12 +237,12 @@ chained_conditional_did_pretest <- function(yname, tname, idname, gname, xformla
                                             selection, selection_model, selection_pooling, selection_xformla,
                                             selection_universe, selection_rho, selection_justification,
                                             selection_est_method, imputation_pooling, control, call = NULL,
-                                            fixed_signs = NULL, keep_rows = FALSE) {
+                                            fixed_signs = NULL, keep_rows = FALSE, outcome_pooling = "separate") {
   gate <- chained_request_scope_gate(mode = mode, panel = panel, allow_unbalanced_panel = allow_unbalanced_panel,
     est_method = est_method, selection = selection, selection_model = selection_model, selection_pooling = selection_pooling,
     selection_xformla = selection_xformla, selection_universe = selection_universe, selection_rho = selection_rho,
     selection_justification = selection_justification, selection_est_method = selection_est_method,
-    imputation_pooling = imputation_pooling, pt_assumption = "post", pt_start = NULL,
+    imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, pt_assumption = "post", pt_start = NULL,
     gmm_weighting = c("optimal", "identity"), gmm_covariance = "tikhonov", fix_weights = fix_weights,
     compute_inffunc = TRUE, pl = pl, cores = cores, faster_mode = TRUE, print_details = print_details,
     control_group = control_group, base_period = base_period, anticipation = anticipation, alp = alp,
@@ -252,7 +252,7 @@ chained_conditional_did_pretest <- function(yname, tname, idname, gname, xformla
   meta$request <- list(est_method = if (isTRUE(gate$is_custom_est)) "custom" else est_method,
     control_group = gate$control_group, anticipation = as.double(anticipation), selection = gate$selection,
     selection_model = gate$selection_model, selection_pooling = gate$selection_pooling,
-    selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling,
+    selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
     fix_weights = gate$fix_weights, biters = as.double(biters), alp = alp,
     bstrap_cband_note = "as in did, the conditional test always uses multiplier draws; bstrap and cband are validated only",
     call = call)
@@ -278,7 +278,7 @@ chained_conditional_did_pretest <- function(yname, tname, idname, gname, xformla
     selection_rho = selection_rho, selection_justification = selection_justification,
     outcome_regression = !imputation && !augmented && identical(est_label, "reg"), or_resource = resolved$profile,
     doubly_robust = !imputation && !augmented && identical(est_label, "dr"),
-    selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling,
+    selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
     imputation_est_method = if (imputation) est_label else NULL, fix_weights = gate$fix_weights)
   if ((imputation || augmented || est_label %in% c("reg", "dr")) && !is.null(prep$cp04))
     prep$cp04$automatic_chunk_rows <- is.null(resolved$chunk_rows)
@@ -289,7 +289,7 @@ chained_conditional_did_pretest <- function(yname, tname, idname, gname, xformla
     settings = list(control_group = gate$control_group, base_period = base_period, anticipation = as.double(anticipation),
       alp = alp, biters = as.double(biters), xformla = deparse(prep$xformla), weightsname = weightsname,
       clustervars = prep$clustervar, est_method = est_label, selection_est_method = gate$selection_est_method,
-      imputation_pooling = gate$imputation_pooling, entry = "conditional_did_pretest", multiplier_workers = plan$workers),
+      imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling, entry = "conditional_did_pretest", multiplier_workers = plan$workers),
     policy = list(profile = resolved$profile, profile_status = resolved$profile_status, source = resolved$source,
       overrides = resolved$overrides, chunk_rows = produced$record$chunk_rows,
       numeric_workspace_entries = produced$record$numeric_workspace_entries,

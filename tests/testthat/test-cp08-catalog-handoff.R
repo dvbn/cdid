@@ -914,7 +914,7 @@ test_that("public IPW/OR/DR with and without covariates: the fused handoff and t
   run <- function(ns, est, form) ns$att_gt(yname = "y", tname = "period", idname = "id", gname = "G", data = d,
     est_method = est, xformla = if (form == "1") ~1 else ~x, control_group = "nevertreated", bstrap = FALSE, cband = FALSE,
     base_period = "varying", mode = "chained", gmm_weighting = "optimal", gmm_covariance = "tikhonov",
-    pt_assumption = "post", control = list(chunk_rows = 7))
+    pt_assumption = "post", control = list(chunk_rows = 7), outcome_pooling = "pooled")
   for (form in c("1", "x")) for (est in c("ipw", "reg", "dr")) {
     info <- paste(est, form)
     before <- ch_snapshot(counted)

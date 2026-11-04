@@ -700,7 +700,7 @@ test_that("public chained DR on a missing panel matches between explicit chunk r
   run <- function(control) cdid::att_gt(
     yname = "y", tname = "t", idname = "id", gname = "g", data = d, panel = TRUE,
     xformla = ~x, est_method = "dr", control_group = "nevertreated", bstrap = FALSE, cband = FALSE,
-    base_period = "varying", mode = "chained", pt_assumption = "post", control = control
+    base_period = "varying", mode = "chained", pt_assumption = "post", control = control, outcome_pooling = "pooled"
   )
   mp_auto <- run(NULL)
   mp_expl <- run(list(chunk_rows = 7L))

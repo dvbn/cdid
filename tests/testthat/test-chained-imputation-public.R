@@ -59,7 +59,7 @@ impp_fixture <- function(balanced = FALSE, reps = 2L) {
 }
 
 impp_args <- function(fx, ...) {
-  args <- list(yname = "y", tname = "time", idname = "id", gname = "g", data = fx$data, frame = fx$frame,
+  args <- list(outcome_pooling = "pooled", yname = "y", tname = "time", idname = "id", gname = "g", data = fx$data, frame = fx$frame,
     xformla = ~x + z, weightsname = "w", est_method = "dr", control_group = "nevertreated",
     bstrap = FALSE, cband = FALSE, gmm_weighting = "identity")
   utils::modifyList(args, list(...))
@@ -202,7 +202,8 @@ testthat::test_that("default selection_est_method = 'ipw' is identical to explic
     testthat::expect_identical(fit_exp$chained$selection, fit_def$chained$selection)
     testthat::expect_identical(fit_exp$chained$request$selection_est_method, "ipw")
     testthat::expect_null(fit_exp$chained$request$imputation_pooling)
-    testthat::expect_identical(fit_exp$chained$request$inactive_arguments, "imputation_pooling")
+    testthat::expect_identical(fit_exp$chained$request$inactive_arguments,
+      c(if (identical(cs$est_method, "ipw")) "outcome_pooling", "imputation_pooling"))
     testthat::expect_false(identical(fit_exp$chained$selection$method, "imputation"))
   }
 })
@@ -231,7 +232,8 @@ testthat::test_that("pure imputation runs for every treatment method and pooling
     testthat::expect_identical(req$imputation_pooling, p)
     testthat::expect_identical(req$est_method, m)
     testthat::expect_null(req$selection_model); testthat::expect_null(req$selection_pooling)
-    testthat::expect_identical(req$inactive_arguments, c("selection_model", "selection_pooling", "selection_xformla"))
+    testthat::expect_identical(req$inactive_arguments,
+      c(if (identical(m, "ipw")) "outcome_pooling", "selection_model", "selection_pooling", "selection_xformla"))
     sel <- fit$chained$selection
     testthat::expect_identical(sel$method, "imputation")
     testthat::expect_identical(sel$canonical_assumption, "conditional_mtar")

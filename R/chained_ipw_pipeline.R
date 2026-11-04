@@ -4963,6 +4963,7 @@ run_chained_ipw_pipeline <- function(
   if (is.null(progress)) progress <- function(...) invisible(NULL) else progress("chained pipeline started")
   pt <- validate_chained_pt_request(pt_assumption, pt_start)
   pt_assumption <- pt$pt_assumption; pt_start <- pt$pt_start
+  if (!is.null(cp04$outcome_pooling)) conventions <- paste0(conventions, "|outcome:", cp04$outcome_pooling)
   if (!is.null(cp04$or_method)) conventions <- paste0(conventions, "|OR-control-mean-", cp04$or_method)
   if (!is.null(cp04$dr_method)) conventions <- paste0(conventions, "|DR-", cp04$dr_method)
   # D60: dated baseline IPW and custom callbacks run on the full-roster reference
@@ -5429,6 +5430,7 @@ run_chained_ipw_pipeline <- function(
       automatic_chunk_rows = isTRUE(cp04$automatic_chunk_rows), outcome_recipe = cp04$outcome_recipe,
       selection_model = if (is.null(cp04$selection_model)) "pair_logit" else cp04$selection_model,
       selection_pooling = if (is.null(cp04$selection_pooling)) "separate" else cp04$selection_pooling,
+      outcome_pooling = if (is.null(cp04$outcome_pooling)) "pooled" else cp04$outcome_pooling,
       dr_method = cp04$dr_method, treatment_columns = cp04$treatment_columns,
       imputation = if (imputation) cp04 else NULL, augmented = if (augmented) cp04 else NULL,
       reference_source = cp04$reference_source, ipw_method = cp04$ipw_method, aux_spec = aux_plan)
@@ -5470,6 +5472,7 @@ run_chained_ipw_pipeline <- function(
       automatic_chunk_rows = isTRUE(cp04$automatic_chunk_rows), outcome_recipe = cp04$outcome_recipe,
       selection_model = if (is.null(cp04$selection_model)) "pair_logit" else cp04$selection_model,
       selection_pooling = if (is.null(cp04$selection_pooling)) "separate" else cp04$selection_pooling,
+      outcome_pooling = if (is.null(cp04$outcome_pooling)) "pooled" else cp04$outcome_pooling,
       dr_method = cp04$dr_method, treatment_columns = cp04$treatment_columns,
       imputation = if (imputation) cp04 else NULL, augmented = if (augmented) cp04 else NULL,
       reference_source = cp04$reference_source, ipw_method = cp04$ipw_method,
@@ -5637,6 +5640,7 @@ run_chained_ipw_pipeline <- function(
       automatic_chunk_rows = isTRUE(cp04$automatic_chunk_rows), outcome_recipe = cp04$outcome_recipe,
       selection_model = if (is.null(cp04$selection_model)) "pair_logit" else cp04$selection_model,
       selection_pooling = if (is.null(cp04$selection_pooling)) "separate" else cp04$selection_pooling,
+      outcome_pooling = if (is.null(cp04$outcome_pooling)) "pooled" else cp04$outcome_pooling,
       dr_method = cp04$dr_method, treatment_columns = cp04$treatment_columns,
       imputation = if (imputation) cp04 else NULL, augmented = if (augmented) cp04 else NULL,
       reference_source = cp04$reference_source, ipw_method = cp04$ipw_method,

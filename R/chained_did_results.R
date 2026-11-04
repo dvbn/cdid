@@ -346,6 +346,7 @@ chained_did_DIDparams <- function(params, call, n, frame, flags, versions) {
   dp$time_periods <- tlist
   dp$treated_groups <- glist
   dp$compute_inffunc <- !identical(params$compute_inffunc, FALSE)
+  dp$outcome_pooling <- params$outcome_pooling
   if (!is.null(params$extra_args)) {
     dp$extra_args <- params$extra_args
   }

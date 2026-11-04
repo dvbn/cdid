@@ -61,6 +61,7 @@ augp_request <- function(cfg) {
   fx <- augp_ref$imputation_public_fixture(augp_raw, dates = dates)
   fx$frame$V <- augp_raw$V
   args <- fx$args
+  args$outcome_pooling <- "pooled"
   args$frame <- fx$frame
   args$selection <- "conditional_mtar"
   args$selection_est_method <- "dr"

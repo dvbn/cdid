@@ -1136,7 +1136,7 @@ test_that("genuine public cdid::att_gt DR calls on ~1 and ~x succeed and match u
       yname = "y", tname = "t", idname = "id", gname = "g", data = d,
       xformla = xf, est_method = "dr", control_group = "nevertreated",
       bstrap = FALSE, cband = FALSE, base_period = "varying",
-      mode = "chained", pt_assumption = "post"
+      mode = "chained", pt_assumption = "post", outcome_pooling = "pooled"
     )
     expect_s3_class(mp, "cdid_MP")
     expect_true(all(is.finite(mp$att)))

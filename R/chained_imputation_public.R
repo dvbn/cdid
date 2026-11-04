@@ -129,7 +129,8 @@ imputation_public_fit <- function(cp04, reader, views, ctrl, retained, work, aut
       outcome_recipe = recipe, treatment_columns = trt,
       est_method = cp04$imputation_est_method, imputation_pooling = cp04$imputation_pooling,
       X_frame = if (is.null(reference)) cp04$X_frame else NULL, retained_external_entries = external, external_work_ops = work,
-      automatic_chunk_rows = automatic_chunk_rows, reference = reference),
+      automatic_chunk_rows = automatic_chunk_rows, reference = reference,
+      outcome_pooling = if (is.null(cp04$outcome_pooling)) "pooled" else cp04$outcome_pooling),
     cdid_or_wls_rank_error = function(e) {
       # The backend message already states that this is not a non-identification claim.
       e$or_columns <- cp04$outcome_recipe$columns
@@ -142,18 +143,19 @@ imputation_public_nuisance_keys <- function(backend) {
   law <- backend$law
   c(if (length(backend$cells)) paste0("IMP:", law, ":cell:", seq_along(backend$cells)),
     if (length(backend$groups)) paste0("IMP:", law, ":group:", seq_along(backend$groups)),
-    if (!is.null(backend$shared_or)) paste0("IMP:", law, ":shared_counterfactual_or:1"),
+    if (!is.null(backend$shared_or)) paste0("IMP:", law, if (reconstruction_separate(backend$shared_or)) ":counterfactual_block:" else ":shared_counterfactual_or:",
+      if (reconstruction_separate(backend$shared_or)) seq_len(backend$shared_or$n_blocks) else 1L),
     if (length(backend$treatments)) paste0("IMP:", law, ":treatment:", seq_along(backend$treatments)))
 }
 
-imputation_public_model_text <- function(est_method, intercept) {
+imputation_public_model_text <- function(est_method, intercept, outcome_pooling = "pooled") {
   list(imputation_model = paste("actual-change imputation: observed pair changes on S_e = 1 with fixed unit weights w,",
       "local cohort/pair intercepts when xformla has one, slopes on d_e = L_e z(X) shared by imputation_pooling;",
       "predictions on every F row of each needed cohort, standardized with empirical repeat rates a_k"),
     counterfactual_model = if (est_method %in% c("reg", "dr"))
-      paste0("shared one-period counterfactual control outcome-change regression on the imputed synthetic control changes (",
+      paste0(if (identical(outcome_pooling, "separate")) "comparison-specific one-period counterfactual control outcome-change regressions on the imputed synthetic control changes (" else "shared one-period counterfactual control outcome-change regression on the imputed synthetic control changes (",
         if (isTRUE(intercept)) "local block intercepts; " else "no intercepts; ",
-        "slope coefficients shared across blocks on their retained basis)") else
+        if (identical(outcome_pooling, "separate")) "unrestricted block slopes on local retained bases)" else "slope coefficients shared across blocks on their retained basis)") else
       "none (est_method = \"ipw\" fits no counterfactual OR)",
     treatment_model = if (est_method %in% c("ipw", "dr"))
       "risk-set treatment propensity logit with synthetic weights w*a_k on F" else
@@ -173,15 +175,18 @@ imputation_public_selection_record <- function(cp04, backend = NULL, reader = NU
     reg = "The shared counterfactual control-mean regression must be correct across all deduplicated blocks.",
     dr = paste("Either the synthetic treatment propensity logit or the shared counterfactual control-mean regression",
       "across all deduplicated blocks must be correct."))
+  if (identical(cp04$outcome_pooling, "separate") && m != "ipw") trt_text <- if (m == "reg")
+    "Each comparison's counterfactual control-mean regression must be correct." else
+      "For each comparison, either the synthetic treatment propensity logit or its counterfactual control-mean regression must be correct."
   c(list(method = "imputation", canonical_assumption = "conditional_mtar",
     requested_selection = cp04$selection_requested, legacy_alias = isTRUE(cp04$legacy_alias),
-    selection_est_method = "imputation", est_method = m, imputation_pooling = pool,
+    selection_est_method = "imputation", est_method = m, imputation_pooling = pool, outcome_pooling = cp04$outcome_pooling,
     observation_model = "none: no observation-probability model is fitted",
     inactive_arguments = c("selection_model", "selection_pooling", "selection_xformla"),
     selection_model = NA_character_, selection_pooling = NA_character_,
     fitting_universe = "F", population = cp04$population, formula = cp04$formula,
     transport = "rho=1", justification = cp04$justification),
-    imputation_public_model_text(m, cp04$outcome_recipe$intercept),
+    imputation_public_model_text(m, cp04$outcome_recipe$intercept, cp04$outcome_pooling),
     list(duration_convention = "stored-calendar transition count L_e = i_t - i_s",
     empirical_repeat_rates = if (!is.null(backend) && !is.null(backend$reference_ref))
       chained_reference_record(chained_backend_reference(backend))$recipe_repeat_rates else if (is.null(reader)) NULL else
@@ -238,6 +243,12 @@ imputation_public_diagnostics <- function(res, control) {
       control_cohorts = vapply(so$blocks, function(r) paste(r$control_cohort_labels, collapse = ","), character(1)),
       synthetic_mass = num(so$blocks, "mass"), stringsAsFactors = FALSE),
     aliased_columns = so$basis$aliased_columns, rss = so$rss, objective = so$objective)
+  if (reconstruction_separate(so)) counterfactual_or <- list(outcome_pooling = "separate",
+    response = "reconstructed control outcome changes", blocks = outcome_public_blocks(b),
+    n_fits = so$n_blocks, has_local_intercepts = isTRUE(b$outcome_recipe$intercept),
+    local_block_intercepts = if (isTRUE(b$outcome_recipe$intercept)) stats::setNames(
+      vapply(so$blocks, `[[`, numeric(1), "alpha"), block_names) else numeric(),
+    rss = so$rss, objective = so$objective)
   treatment <- lapply(b$treatments, function(tr) list(trt_id = tr$trt_id, target_cohort = tr$target_cohort,
     control_cohorts = tr$control_cohorts, s = as.double(tr$pair$s), t = as.double(tr$pair$t),
     coefficients = stats::setNames(as.double(tr$coefficients), tr$column_names), n_risk_F = tr$n_risk_F,
@@ -248,6 +259,7 @@ imputation_public_diagnostics <- function(res, control) {
     has_local_intercepts = icpt,
     # Counterfactual OR fields keep the existing OR/DR diagnostic names.
     shared_slopes = if (is.null(so)) NULL else so$beta,
+    block_slopes = if (reconstruction_separate(so)) lapply(counterfactual_or$blocks, `[[`, "beta") else NULL,
     local_intercepts = if (is.null(counterfactual_or)) NULL else counterfactual_or$local_block_intercepts,
     treatment = lapply(treatment, `[[`, "coefficients"))
   link_ids <- vapply(b$links, `[[`, character(1), "link_id")
@@ -274,10 +286,10 @@ imputation_public_diagnostics <- function(res, control) {
   if (unname(cp04_payload(diag_copy)["entries"]) > bound)
     cp04_abort("Imputation diagnostic copy bound underestimated.", "bound")
   c(list(status = "available", method = "imputation", selection_est_method = "imputation",
-    est_method = b$est_method, imputation_pooling = b$imputation_pooling),
-    imputation_public_model_text(b$est_method, b$outcome_recipe$intercept),
+    est_method = b$est_method, imputation_pooling = b$imputation_pooling, outcome_pooling = b$outcome_pooling),
+    imputation_public_model_text(b$est_method, b$outcome_recipe$intercept, b$outcome_pooling),
     list(fit_structure = paste("one WLS fit per imputation pooling group (", length(b$groups), " group(s), ",
-      length(b$cells), " cell(s))", if (!is.null(so)) ", one joint shared counterfactual OR fit" else "",
+      length(b$cells), " cell(s))", if (reconstruction_separate(so)) paste0(", ", so$n_blocks, " comparison-specific counterfactual OR fits") else if (!is.null(so)) ", one joint shared counterfactual OR fit" else "",
       if (length(b$treatments)) paste0(", ", length(b$treatments), " deduplicated treatment logit(s)") else "", sep = ""),
     duration_convention = "stored-calendar transition count L_e = i_t - i_s",
     selection = "conditional_mtar", selection_route = res$selection,

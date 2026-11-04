@@ -37,7 +37,7 @@ orp_fixture <- function(route = "none", dates = 1:4) {
     tab <- tab[tab$route == route, ]; tab$cohort <- as.numeric(replace(tab$cohort, tab$cohort == "NT", "Inf"))
     frame$rho <- tab$rho[match(paste(d$cohort, d$x), paste(tab$cohort, tab$x))]
   }
-  args <- list(yname = "y", tname = "time", idname = "id", gname = "g", data = data, frame = frame,
+  args <- list(outcome_pooling = "pooled", yname = "y", tname = "time", idname = "id", gname = "g", data = data, frame = frame,
     xformla = ~x, weightsname = "w", est_method = "reg", control_group = "nevertreated",
     bstrap = FALSE, cband = FALSE, gmm_weighting = "identity")
   if (route != "none") {

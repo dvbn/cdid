@@ -10,7 +10,7 @@ upstream_conditional_did_pretest_formals <- c(
 # Ordinary mode neither evaluates nor forwards any of them.
 cdid_conditional_pretest_chained_formals <- c("anticipation", "base_period", "fix_weights", "mode", "frame",
   "selection", "selection_model", "selection_pooling", "selection_xformla", "selection_universe",
-  "selection_rho", "selection_justification", "selection_est_method", "imputation_pooling", "control")
+  "selection_rho", "selection_justification", "selection_est_method", "imputation_pooling", "control", "outcome_pooling")
 
 conditional_did_pretest <- function(yname,
                                     tname,
@@ -45,7 +45,8 @@ conditional_did_pretest <- function(yname,
                                     selection_justification = NULL,
                                     selection_est_method = "ipw",
                                     imputation_pooling = "separate",
-                                    control = NULL) {
+                                    control = NULL,
+                                    outcome_pooling = "separate") {
   env <- environment()
   mode <- check_mode(mode)
   if (is.null(mode)) {
@@ -77,5 +78,5 @@ conditional_did_pretest <- function(yname,
     selection = selection, selection_model = selection_model, selection_pooling = selection_pooling,
     selection_xformla = selection_xformla, selection_universe = selection_universe, selection_rho = selection_rho,
     selection_justification = selection_justification, selection_est_method = selection_est_method,
-    imputation_pooling = imputation_pooling, control = control, call = sys.call())
+    imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, control = control, call = sys.call())
 }

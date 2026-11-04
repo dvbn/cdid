@@ -40,7 +40,7 @@ rid_panel <- function(n = 48, dates = c(1, 2, 4, 5, 7), cohorts = c(4, 5, 0),
 rid_fit <- function(d, xformla = ~x, est_method = "reg", control_group = "nevertreated", ...) {
   rid_ns("att_gt")(yname = "y", tname = "time", idname = "id", gname = "G", data = d, xformla = xformla,
     weightsname = "w", est_method = est_method, control_group = control_group, bstrap = FALSE, cband = FALSE,
-    gmm_weighting = "identity", ...)
+    gmm_weighting = "identity", outcome_pooling = "pooled", ...)
 }
 
 rid_post <- function(fit) which(fit$t >= fit$group)

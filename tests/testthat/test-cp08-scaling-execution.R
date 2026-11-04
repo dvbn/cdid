@@ -400,7 +400,8 @@ test_that("the dated reference reader charges its live source before the require
     orig(src, reader, views, n_post, ctrl, retained, work)
   })
   invisible(cdid::att_gt(yname = "y", tname = "time", idname = "id", gname = "G", data = cp8_rid_panel(), xformla = ~x,
-    weightsname = "w", est_method = "reg", fix_weights = "base_period", bstrap = FALSE, cband = FALSE, gmm_weighting = "identity"))
+    weightsname = "w", est_method = "reg", fix_weights = "base_period", bstrap = FALSE, cband = FALSE, gmm_weighting = "identity",
+    outcome_pooling = "pooled"))
   cp8_rebind("build_chained_reference_reader", orig)
   expect_false(is.null(captured))
   st <- captured$reader$state
@@ -433,7 +434,7 @@ cp8_public_panel <- function() {
   d <- cp8_panel48(); d$g[!is.finite(d$g)] <- 0; d
 }
 cp8_fit <- function(d, ...) cdid::att_gt(yname = "y", tname = "t", idname = "id", gname = "g", data = d, xformla = ~ x,
-  weightsname = "weight", control_group = "notyettreated", ...)
+  weightsname = "weight", control_group = "notyettreated", outcome_pooling = "pooled", ...)
 
 test_that("compute_inffunc = FALSE returns did's point-only result with estimates equal to the full fit on every route", {
   skip_if_not_installed("did")
@@ -448,7 +449,7 @@ test_that("compute_inffunc = FALSE returns did's point-only result with estimate
       selection = "conditional_mtar", selection_est_method = "dr"), dated = TRUE))
   for (r in routes) {
     call <- function(...) if (isTRUE(r$dated)) do.call(cdid::att_gt, c(list(yname = "y", tname = "time", idname = "id", gname = "G",
-      data = r$d, xformla = ~x, weightsname = "w", control_group = "notyettreated"), r$args, list(...))) else
+      data = r$d, xformla = ~x, weightsname = "w", control_group = "notyettreated", outcome_pooling = "pooled"), r$args, list(...))) else
       do.call(cp8_fit, c(list(r$d), r$args, list(...)))
     full <- call(bstrap = FALSE, cband = FALSE)
     pt <- call(compute_inffunc = FALSE)              # bstrap/cband defaults TRUE become FALSE, as in did
