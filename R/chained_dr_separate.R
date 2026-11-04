@@ -114,9 +114,17 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   }
   # The pure OR core needs its own target residual mean, not the DR link mean.
   # This invocation-local shallow record is never resealed or retained.
+  requested <- backend$links[links]
+  link_blocks <- vapply(requested, `[[`, integer(1), "regression")
+  link_models <- vapply(requested, `[[`, integer(1), "model")
+  by_block <- split(seq_along(links), factor(link_blocks, levels = pre$gids))
+  by_model <- split(seq_along(links), factor(link_models, levels = pre$tids))
+  names(by_model) <- as.character(pre$tids)
+  treatment_blocks <- vapply(backend$treatment_specs[pre$tids], `[[`, integer(1), "regression")
+  models_by_block <- split(pre$tids, factor(treatment_blocks, levels = pre$gids))
   or_model <- backend
-  or_model$links <- lapply(backend$links[links], function(l) { l$mu <- l$mu_or; l })
-  link_names <- vapply(backend$links[links], `[[`, character(1), "link_id")
+  or_model$links <- lapply(requested, function(l) { l$mu <- l$mu_or; l })
+  link_names <- vapply(requested, `[[`, character(1), "link_id")
   phi <- matrix(0, B, length(links), dimnames = list(NULL, link_names))
   models <- if (details) vector("list", length(backend$treatments)) else NULL
   if (details) {
@@ -124,14 +132,15 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
     den <- num <- or_phi <- direct_or <- phi; design <- vector("list", length(links)); objective <- numeric(B)
     psi_dir <- psi_or <- psi_ps <- psi_sel <- psi_ipw <- phi
   }
-  for (b in pre$gids) {
-    jj <- which(vapply(backend$links[links], function(l) l$regression == b, logical(1)))
+  for (kb in seq_along(pre$gids)) {
+    b <- pre$gids[kb]; jj <- by_block[[kb]]
+    of <- or_outcome_block_fit(backend$outcome_groups, b)
     local_pre <- pre; local_pre$gids <- local_pre$beta_gids <- b
     # One block's temporary coefficient IF at a time, even for ordinary chunks.
     core <- if (conditional) or_selection_separate_if_core(or_model, N, w, hits, up,
-      local_pre, jj, TRUE) else or_baseline_separate_if_core(or_model, N, w, hits, up,
-      local_pre, jj, TRUE)
-    bf <- core$blocks[[1L]]; of <- or_outcome_block_fit(backend$outcome_groups, b)
+      local_pre, jj, TRUE, block_fits = list(of)) else or_baseline_separate_if_core(or_model, N, w, hits, up,
+      local_pre, jj, TRUE, block_fits = list(of))
+    bf <- core$blocks[[1L]]
     if (details) {
       blocks[[as.character(b)]] <- bf; objective <- objective + core$objective
       if (length(jj)) {
@@ -140,7 +149,7 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
         design[jj] <- core$design
       }
     }
-    tids <- pre$tids[vapply(backend$treatment_specs[pre$tids], function(s) s$regression == b, logical(1))]
+    tids <- models_by_block[[kb]]
     for (tid in tids) {
       spec <- backend$treatment_specs[[tid]]; f <- backend$treatments[[tid]]
       us <- up[, match(if (conditional) f$upstream_ids else spec$support_ids,
@@ -175,7 +184,7 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
       pp <- -as.vector(gamma %*% f$partials$beta[2L, ])
       ps <- as.vector(us %*% (f$partials$upstream[1L, ] - f$partials$upstream[2L, ]))
       value <- pd + po + pp + ps
-      lk <- which(vapply(backend$links[links], function(l) l$model == tid, logical(1)))
+      lk <- by_model[[as.character(tid)]]
       for (j in lk) phi[, j] <- value
       if (details) {
         coord <- direct + us %*% t(f$partials$upstream) + gamma %*% t(f$partials$beta)

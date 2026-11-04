@@ -124,7 +124,7 @@ or_baseline_separate_if_budget <- function(backend, B, links, details) {
 # One bounded original-unit chunk, streamed by unique block. Only details retain
 # the requested chunk's coefficient vectors. hits carry source-recipe slopes;
 # each block selects its own frozen kept columns before using d = L*z.
-or_baseline_separate_if_core <- function(model, N, w, hits, up, pre, links, details) {
+or_baseline_separate_if_core <- function(model, N, w, hits, up, pre, links, details, block_fits = NULL) {
   B <- length(w); icpt <- model$outcome_recipe$intercept
   phi <- direct <- matrix(0, B, length(links))
   blocks <- if (details) vector("list", length(pre$gids)) else NULL
@@ -133,8 +133,12 @@ or_baseline_separate_if_core <- function(model, N, w, hits, up, pre, links, deta
     objective <- numeric(B)
   }
   col <- function(s) match(s, pre$sids)
+  # Requested positions only; do not rescan all links for every block.
+  link_blocks <- vapply(model$links[links], `[[`, integer(1), "regression")
+  by_block <- split(seq_along(links), factor(link_blocks, levels = pre$gids))
   for (k in seq_along(pre$gids)) {
-    b <- pre$gids[k]; f <- or_outcome_block_fit(model$outcome_groups, b)
+    b <- pre$gids[k]
+    f <- if (is.null(block_fits)) or_outcome_block_fit(model$outcome_groups, b) else block_fits[[k]]
     rec <- model$regressions[[b]]; sids <- model$regression_specs[[b]]$support_ids
     resid <- function(s) {
       h <- hits[[col(s)]]; d <- f$L * h$z[, f$keep, drop = FALSE]
@@ -155,7 +159,9 @@ or_baseline_separate_if_core <- function(model, N, w, hits, up, pre, links, deta
     xb <- hb
     if (f$p) {
       rhs <- sweep(hb, 2L, rec$score_mean_beta) + us %*% t(rec$forcing_beta)
-      xb <- t(or_outcome_block_gram_solve(model$outcome_groups, b, t(rhs)))
+      # Reuse this block's fetched frozen fit; the operator is unchanged.
+      xb <- t(if (icpt) or_pooled_wls_gram_solve(f$fit, t(rhs), normalizer = model$outcome_groups$N) else
+        or_wls_gram_solve(f$fit, t(rhs), normalizer = model$outcome_groups$N))
     }
     xa <- if (icpt) (ha - rec$score_mean_alpha + as.vector(us %*% rec$forcing_alpha)) /
       rec$mass - as.vector(xb %*% rec$mean_d) else numeric(B)
@@ -168,7 +174,7 @@ or_baseline_separate_if_core <- function(model, N, w, hits, up, pre, links, deta
       objective <- objective + energy - model$outcome_groups$groups[[f$group_id]]$objective +
         as.vector(us %*% rec$forcing_energy)
     }
-    for (j in which(vapply(model$links[links], function(l) l$regression == b, logical(1)))) {
+    for (j in by_block[[k]]) {
       l <- model$links[[links[j]]]; e <- resid(l$support_id); ix <- e$ix
       if (length(ix)) direct[ix, j] <- e$q * (e$r - l$mu) / l$d
       ul <- up[, col(l$support_id), drop = FALSE]

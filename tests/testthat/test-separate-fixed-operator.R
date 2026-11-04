@@ -275,3 +275,26 @@ testthat::test_that("online common QR preserves each raw support's full all-coef
     }
   }
 })
+
+testthat::test_that("general separate replay groups only requested positions and preserves frozen fits", {
+  a <- fop_case(missing = TRUE); N <- length(a$w)
+  for (method in c("reg", "dr")) {
+    fit <- fop_fit(a, method); testthat::expect_null(fit$separate_complete)
+    frozen <- list(groups = fit$outcome_groups, regressions = fit$regressions,
+      treatments = fit$treatments, support_specs = fit$support_specs)
+    L <- length(fit$links); full <- matrix(0, N, L)
+    for (start in seq.int(1L, N, by = 7L)) {
+      rows <- seq.int(start, min(N, start + 6L))
+      full[rows, ] <- fop_eval(fit, method, rows, seq_len(L))$phi
+    }
+    rows <- 7:1; links <- c(11L, 3L, 1L)
+    plain <- fop_eval(fit, method, rows, links)
+    detailed <- fop_eval(fit, method, rows, links, TRUE)
+    testthat::expect_equal(unname(plain$phi), full[rows, links, drop = FALSE], tolerance = 1e-10)
+    testthat::expect_equal(plain$phi, detailed$phi, tolerance = 1e-10)
+    testthat::expect_equal(detailed$details$link_block_ids,
+      vapply(fit$links[links], `[[`, integer(1), "regression"))
+    testthat::expect_identical(list(groups = fit$outcome_groups, regressions = fit$regressions,
+      treatments = fit$treatments, support_specs = fit$support_specs), frozen)
+  }
+})
