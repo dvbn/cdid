@@ -23,11 +23,11 @@ add diagnostics and adapt presentation metadata where needed. This keeps the fam
 `att_gt()`/`aggte()` interface. No upstream estimation algorithm is copied into
 `cdid`'s R implementation.
 
-`DRDID` 1.3.0, which supplies the Sant'Anna and Zhao (2020) estimators used by `did`, is
-a dependency of `did`. The tested versions are exactly `did` 2.5.1 and `DRDID` 1.3.0, used
+`DRDID` 1.4.0, which supplies the Sant'Anna and Zhao (2020) estimators used by `did`, is
+a dependency of `did`. The tested versions are exactly `did` 2.5.1 and `DRDID` 1.4.0, used
 without local changes.
 
-`validation/vendor/` contains the unmodified CRAN source archives of `DRDID` 1.3.0 and
+`validation/vendor/` contains the unmodified CRAN source archives of `DRDID` 1.4.0 and
 `did` 2.5.1, recorded in `validation/vendor/SOURCES.csv`. They are used only by the
 setup script to install those exact versions. Both archives are licensed under GPL-3,
 as recorded in `SOURCES.csv`, and retain their source creators' authorship and licensing.
