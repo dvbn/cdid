@@ -451,7 +451,16 @@ testthat::test_that("optional native capacity decline keeps original admission a
   }
   for (a in list(fop_case(chunk = 32L, missing = TRUE), fop_case(chunk = 32L, intercept = FALSE))) {
     fit <- fop_fit(a, "reg")
-    testthat::expect_null(fop_ns("chained_full_if_plan")(fit, seq_along(fit$links), 32L))
+    links <- seq_along(fit$links)
+    # These inputs still decline the specialized complete producer, while the
+    # general sparse producer now supports their unchanged scalar equations.
+    testthat::expect_null(fop_ns("separate_complete_native_plan")(fit, links, 32L))
+    plan <- fop_ns("chained_full_if_plan")(fit, links, 32L)
+    testthat::expect_identical(plan$kind, "or_sparse_native_plan")
+    rows <- seq_len(length(a$w))
+    actual <- v14_eval(fit, "reg", rows, links, plan)
+    testthat::expect_identical(actual$diagnostics$execution, "native_sparse_fixed_operator")
+    testthat::expect_equal(actual$phi, v14_eval(fit, "reg", rows, links)$phi, tolerance = 1e-10)
   }
 })
 
