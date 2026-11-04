@@ -929,8 +929,10 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
                             glm_control, rank_tol = or_public_rank_tol(),
                             outcome_recipe, treatment_columns = NULL,
                             retained_external_entries = 0, external_work_ops = 0,
-                            automatic_chunk_rows = FALSE, reference = NULL) {
+                            automatic_chunk_rows = FALSE, reference = NULL, outcome_pooling = "pooled") {
   validate_cp04_reader(reader)
+  outcome_pooling <- or_baseline_outcome_mode(outcome_pooling)
+  separate <- identical(outcome_pooling, "separate")
   if (missing(rank_tol)) dr_baseline_abort("Supply explicit private rank_tol.")
   rank_tol <- or_baseline_rank_tol(rank_tol)
   ctrl <- validate_ipw_owner_control(control)
@@ -1010,6 +1012,8 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
       link_id = v$link_id, source_functional_key = source,
       functional_key = paste0("cmpcat:DR-baseline-shared-slope-WLS-IPW|", substring(source, 8L))
     )
+    if (separate) records[[ell]]$functional_key <- sub("shared-slope", "separate-slopes",
+      records[[ell]]$functional_key, fixed = TRUE)
     if (!is.null(reference)) {
       records[[ell]]$reference <- reference$view_recipe[ell]
       records[[ell]]$functional_key <- paste0(records[[ell]]$functional_key, "|reference:",
@@ -1047,7 +1051,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
   # CP08 stage 3: the route is chosen here from actual facts, before any scan:
   # the OR facts plus each model's exact complete risk-set observer count.
   # Treatment roots are shared only within identical ordered (g, K) groups.
-  complete <- or_baseline_complete_facts(reader, recipe, records, specs, ctrl, reference, trt_recipe,
+  complete <- if (separate) NULL else or_baseline_complete_facts(reader, recipe, records, specs, ctrl, reference, trt_recipe,
     retained_external_entries = retained_external_entries, external_work_ops = external_work_ops,
     metadata_entries = header + metadata)
   if (!is.null(complete) && !all(vapply(ts, function(s) is.integer(s$cohorts) && length(s$cohorts) >= 2L &&
@@ -1059,7 +1063,8 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
     lapply(unique(trt_keys), function(k) which(trt_keys == k))
   }
   name_bytes <- sum(nchar(c(recipe$columns, trt_recipe$columns), type = "bytes"))
-  or_charges <- if (is.null(complete)) or_baseline_fit_charges(
+  or_charge <- if (separate) or_baseline_separate_fit_charges else or_baseline_fit_charges
+  or_charges <- if (is.null(complete)) or_charge(
     S, G, L, p_or, st$N, st$n_A, min(st$N, ctrl$max_chunk_rows),
     metadata, header, name_bytes
   ) else or_baseline_complete_fit_charges(st, specs, S, G, L, p_or, min(st$N, ctrl$max_chunk_rows),
@@ -1104,7 +1109,8 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
   state <- if (is.null(complete)) {
     supports <- lapply(specs, function(s) dr_baseline_support(reader, s, recipe, or_frame_index,
       ctrl, reference, complete))
-    ans <- or_baseline_assemble(
+    assemble <- if (separate) or_baseline_separate_assemble else or_baseline_assemble
+    ans <- assemble(
       recipe, supports, pools, links, rank_tol, st$N,
       function(sid, visit) dr_support_visit(reader, specs[[sid]], ctrl, or_frame_index,
                                             function(rows, S_vec, obs, dy, Z) visit(Z), reference, complete)
@@ -1123,7 +1129,8 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
     lapply(ts, function(s) {
       dr_baseline_treatment_fit(
         reader, s, state$supports, state$regressions[[s$regression]],
-        state$shared, recipe, or_frame_index, trt_recipe, gc, ctrl, reference, complete, share
+        if (separate) or_outcome_block_fit(state$outcome_groups, s$regression) else state$shared,
+        recipe, or_frame_index, trt_recipe, gc, ctrl, reference, complete, share
       )
     })
   } else if (length(trt_groups) <= 1L) {
@@ -1257,6 +1264,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
       control = ctrl,
       glm_control = gc,
       rank_tol = rank_tol,
+      outcome_pooling = outcome_pooling,
       outcome_recipe = recipe,
       or_frame_index = or_frame_index,
       treatment_recipe = trt_recipe,
@@ -1296,10 +1304,10 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
         n_regression_fits = 1L,
         n_regression_blocks = G,
         n_local_intercepts = if (recipe$intercept) G else 0L,
-        n_shared_slopes = state$shared$p,
+        n_shared_slopes = if (separate) 0L else state$shared$p,
         n_slope_columns = p_or,
-        n_aliased_slopes = length(state$shared$basis$aliased_columns),
-        n_support_scans = S * (1L + state$shared$verification_scan),
+        n_aliased_slopes = if (separate) 0L else length(state$shared$basis$aliased_columns),
+        n_support_scans = if (separate) S else S * (1L + state$shared$verification_scan),
         n_treatment_fits = T_count,
         n_treatment_columns = p_trt,
         full_F_masks_per_model = 0L,
@@ -1311,6 +1319,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
     ),
     class = c("cdid_dr_baseline", "cdid_dr_backend")
   )
+  if (separate) obj <- or_selection_separate_record(obj, state)
   if (!is.null(reference)) {
     obj$reference_ref <- reference$ref
     obj$accounting$n_reference_recipes <- nrow(reference$recipes)
@@ -1342,6 +1351,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
 }
 
 dr_baseline_if_envelope <- function(backend, B, links, details = FALSE) {
+  if (dr_separate(backend)) return(dr_separate_if_envelope(backend, B, links, details))
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
@@ -1874,6 +1884,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
 }
 
 evaluate_dr_baseline_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE, plan = NULL) {
+  if (dr_separate(backend)) return(evaluate_dr_separate_if_chunk(backend, rows, links, scale, details))
   validate_dr_baseline_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
@@ -2202,8 +2213,10 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
                               automatic_chunk_rows = FALSE,
                               selection_model = "pair_logit",
                               selection_pooling = "separate",
-                              sel_fit = NULL, reference = NULL) {
+                              sel_fit = NULL, reference = NULL, outcome_pooling = "pooled") {
   validate_cp04_reader(reader)
+  outcome_pooling <- or_selection_outcome_mode(outcome_pooling)
+  separate <- identical(outcome_pooling, "separate")
   if (missing(rank_tol) || !gmm_scalar_numeric(rank_tol) || rank_tol <= 0 || rank_tol >= 1)
     dr_corollary1_abort("Supply explicit finite private rank_tol in (0, 1).")
   ctrl <- validate_ipw_owner_control(control)
@@ -2273,6 +2286,8 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
         "-shared-slope-WLS-IPW-a/(rho*p)|", substring(source, 8L)
       )
     )
+    if (separate) records[[ell]]$functional_key <- sub("shared-slope", "separate-slopes",
+      records[[ell]]$functional_key, fixed = TRUE)
     if (!is.null(reference)) {
       records[[ell]]$reference <- reference$view_recipe[ell]
       records[[ell]]$functional_key <- paste0(records[[ell]]$functional_key, "|reference:",
@@ -2357,7 +2372,8 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
 
   metadata <- unname(cp04_payload(list(specs, pools, links, ts, selection_specs, upstream, sel_fit, trt_recipe))["entries"])
   cohort_n <- vapply(specs, function(s) st$cohort_end[s$cohort] - st$cohort_start[s$cohort] + 1, numeric(1))
-  or_charges <- or_corollary1_fit_charges(
+  or_charge <- if (separate) or_selection_separate_fit_charges else or_corollary1_fit_charges
+  or_charges <- or_charge(
     S, G, L, p_or, max(1L, up_map$d), D, st$n_A, min(st$N, ctrl$max_chunk_rows),
     max(cohort_n), sum(cohort_n), gc$maxit, metadata, header,
     sum(nchar(c(recipe$columns, trt_recipe$columns, if (is.null(reference)) colnames(st$Z) else
@@ -2384,7 +2400,8 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
   supports <- lapply(seq_len(S), function(j) {
     dr_selection_support(reader, specs[[j]], sel_fit, up_map, q_of_s[j], recipe, or_frame_index, ctrl, reference)
   })
-  state <- or_selection_assemble(
+  assemble <- if (separate) or_selection_separate_assemble else or_selection_assemble
+  state <- assemble(
     recipe, supports, pools, links, channels, D, rank_tol, st$N,
     function(sid, visit) dr_support_visit(reader, specs[[sid]], ctrl, or_frame_index,
                                           function(rows, S_vec, obs, dy, Z) visit(Z), reference)
@@ -2394,7 +2411,8 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
   treatments <- lapply(ts, function(s) {
     dr_selection_treatment_fit(
       reader, s, sel_fit, up_map, state$regressions[[s$regression]],
-      state$shared, recipe, or_frame_index, trt_recipe, gc, ctrl, reference
+      if (separate) or_outcome_block_fit(state$outcome_groups, s$regression) else state$shared,
+      recipe, or_frame_index, trt_recipe, gc, ctrl, reference
     )
   })
   links_out <- dr_populate_link_records(links, state$links, treatments, pools)
@@ -2411,6 +2429,7 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
       control = ctrl,
       glm_control = gc,
       rank_tol = rank_tol,
+      outcome_pooling = outcome_pooling,
       outcome_recipe = recipe,
       or_frame_index = or_frame_index,
       treatment_recipe = trt_recipe,
@@ -2456,10 +2475,10 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
         n_regression_fits = 1L,
         n_regression_blocks = G,
         n_local_intercepts = if (recipe$intercept) G else 0L,
-        n_shared_slopes = state$shared$p,
+        n_shared_slopes = if (separate) 0L else state$shared$p,
         n_slope_columns = p_or,
-        n_aliased_slopes = length(state$shared$basis$aliased_columns),
-        n_support_scans = S * (1L + state$shared$verification_scan),
+        n_aliased_slopes = if (separate) 0L else length(state$shared$basis$aliased_columns),
+        n_support_scans = if (separate) S else S * (1L + state$shared$verification_scan),
         n_treatment_fits = T_count,
         n_treatment_columns = p_trt,
         full_F_masks_per_model = 0L,
@@ -2471,12 +2490,14 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
     ),
     class = c("cdid_dr_selection_backend", "cdid_dr_corollary1", "cdid_dr_backend")
   )
+  if (separate) obj <- or_selection_separate_record(obj, state)
   if (!is.null(reference)) {
     obj$reference_ref <- reference$ref
     obj$accounting$n_reference_recipes <- nrow(reference$recipes)
   }
   obj["ref"] <- list(NULL)
   actual <- unname(cp04_payload(obj)["entries"])
+  if (separate && actual > bound) dr_corollary1_abort("Retained separate DR bound underestimated.", "bound")
   obj$accounting$owned_entries <- actual
   obj$accounting$retained_bound <- max(obj$accounting$retained_bound, base + actual)
   cp04_budget(ctrl, c(base, actual), scratch, c(work, external_work_ops), actual,
@@ -2488,6 +2509,7 @@ fit_dr_selection_models <- fit_dr_corollary1
 fit_dr_conditional_mtar <- fit_dr_corollary1
 
 dr_corollary1_if_envelope <- function(backend, B, links, details = FALSE) {
+  if (dr_separate(backend)) return(dr_separate_if_envelope(backend, B, links, details))
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
@@ -2569,6 +2591,7 @@ dr_corollary1_if_budget <- function(backend, B, links, details = FALSE) {
 }
 
 evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE) {
+  if (dr_separate(backend)) return(evaluate_dr_separate_if_chunk(backend, rows, links, scale, details))
   validate_dr_corollary1_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
@@ -2891,7 +2914,7 @@ fit_dr_backend <- function(reader, link_views, control = ipw_owner_control(),
                            selection_pooling = "separate",
                            retained_external_entries = 0, external_work_ops = 0,
                            automatic_chunk_rows = FALSE,
-                           sel_fit = NULL) {
+                           sel_fit = NULL, outcome_pooling = "pooled") {
   if (!is.character(selection) || length(selection) != 1L || is.na(selection) ||
       !selection %in% c("none", "baseline", "conditional_mtar", "corollary1")) {
     dr_baseline_abort('`selection` must be "none" ("baseline") or "conditional_mtar" ("corollary1").', "input")
@@ -2903,7 +2926,7 @@ fit_dr_backend <- function(reader, link_views, control = ipw_owner_control(),
       outcome_recipe = outcome_recipe, treatment_columns = treatment_columns,
       retained_external_entries = retained_external_entries,
       external_work_ops = external_work_ops,
-      automatic_chunk_rows = automatic_chunk_rows
+      automatic_chunk_rows = automatic_chunk_rows, outcome_pooling = outcome_pooling
     )
   } else {
     fit_dr_corollary1(
@@ -2915,7 +2938,7 @@ fit_dr_backend <- function(reader, link_views, control = ipw_owner_control(),
       automatic_chunk_rows = automatic_chunk_rows,
       selection_model = selection_model,
       selection_pooling = selection_pooling,
-      sel_fit = sel_fit
+      sel_fit = sel_fit, outcome_pooling = outcome_pooling
     )
   }
 }
