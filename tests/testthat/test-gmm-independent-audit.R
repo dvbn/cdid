@@ -184,7 +184,7 @@ test_that('Native C backend registration, symbol forcing, arithmetic probes and 
   dll <- base::getLoadedDLLs()[['cdid']]
   expect_false(is.null(dll))
   reg <- base::getDLLRegisteredRoutines(dll, addNames = TRUE)[['.Call']]
-  # Exact current registration table in src/cdid.c (21 routines). The generic
+  # Exact current registration table in src/cdid.c (24 routines). The generic
   # GMM resolver still authenticates its original nine plus each route's arity.
   expected_registry <- c(
     'C_gmm_native_status' = 0L,
@@ -197,6 +197,7 @@ test_that('Native C backend registration, symbol forcing, arithmetic probes and 
     'C_gmm_iv_eigen_residual' = 4L,
     'C_gmm_iv_mat_product' = 5L,
     'C_gmm_ipw_if_chunk' = 18L,
+    'C_gmm_ipw_raw_observer_collect' = 10L,
     'C_gmm_cp08_support_chunk' = 12L,
     'C_gmm_cp08_pair_rows' = 9L,
     'C_gmm_cp08_fit_pass1' = 15L,
@@ -207,7 +208,9 @@ test_that('Native C backend registration, symbol forcing, arithmetic probes and 
     'C_gmm_if_unit_batch' = 10L,
     'C_gmm_cp08_sparse_pair_rows' = 6L,
     'C_gmm_cp08_dr_treatment_batch' = 19L,
-    'C_gmm_cp08_payload' = 3L
+    'C_gmm_cp08_payload' = 3L,
+    'C_gmm_separate_complete_if' = 12L,
+    'C_gmm_or_sparse_if' = 11L
   )
   expect_identical(sort(names(reg)), sort(names(expected_registry)))
   expect_identical(vapply(reg[names(expected_registry)], function(x) as.integer(x$numParameters), 0L), expected_registry)

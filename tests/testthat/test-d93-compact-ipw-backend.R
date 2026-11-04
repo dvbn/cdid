@@ -1128,3 +1128,213 @@ test_that("raw replay plans extract dispatch metadata once inside the original w
     evaluate_ipw_raw_if_chunk(b, 58:60, links[1L])$phi, tolerance = 1e-12)
   expect_identical(calls, before + 1L)
 })
+
+# V25 frozen collector from 7003ddd, verbatim except its test-local name.
+d93_v25_old_observer_collect <- function(frame_owner, panel_owner, pair_summary, coh_desc, n_obs, step) {
+  n_a <- as.integer(frame_owner$n_a_units)
+  p <- as.integer(frame_owner$n_covariates)
+  a_cohort_idx <- frame_owner$a_cohort_index
+  w_a <- frame_owner$w_a
+  Z_a <- frame_owner$Z_a
+  pair_desc <- pair_summary$pair
+  ds <- pair_desc$s_calendar_index
+  dt <- pair_desc$t_calendar_index
+  complete_pair <- isTRUE(pair_summary$complete_pair)
+
+  risk_a_idx <- integer(n_obs)
+  risk_gi <- integer(n_obs)
+  risk_w <- numeric(n_obs)
+  Z_use <- matrix(0.0, nrow = n_obs, ncol = p, dimnames = list(NULL, colnames(Z_a)))
+  obs_s <- integer(n_obs)
+  obs_t <- integer(n_obs)
+
+  pos <- 0L
+  a_start <- 1L
+  while (a_start <= n_a) {
+    ipw_owner_check_interrupt()
+    a_end <- as.integer(min(as.double(n_a), as.double(a_start) + step - 1))
+    hit <- if (complete_pair) {
+      ipw_owner_query_complete_pair_mask(panel_owner, ds, dt, a_start, a_end)
+    } else {
+      ipw_owner_query_pair_mask(
+        panel_owner, pair_desc$s, pair_desc$t,
+        a_start = a_start, a_end = a_end, ds = ds, dt = dt
+      )
+    }
+    a <- hit$a_index
+    if (length(a) > 0L) {
+      gi <- ipw_owner_view_cohort_index(coh_desc, a_cohort_idx[a])
+      in_r <- which(!is.na(gi))
+      k <- length(in_r)
+      if (k > 0L) {
+        if (pos + k > n_obs) {
+          ipw_raw_backend_abort("Observed risk support count changed from its pair summary.", "integrity")
+        }
+        ii <- seq.int(pos + 1L, pos + k)
+        a_sub <- a[in_r]
+        risk_a_idx[ii] <- a_sub
+        risk_gi[ii] <- as.integer(gi[in_r])
+        risk_w[ii] <- w_a[a_sub]
+        Z_use[ii, ] <- Z_a[a_sub, , drop = FALSE]
+        obs_s[ii] <- hit$obs_s[in_r]
+        obs_t[ii] <- hit$obs_t[in_r]
+        pos <- pos + k
+      }
+    }
+    a_start <- as.double(a_end) + 1
+  }
+  if (pos != n_obs) {
+    ipw_raw_backend_abort("Observed risk support count disagreed with its pair summary.", "integrity")
+  }
+  list(
+    risk_a_idx = risk_a_idx,
+    risk_gi = risk_gi,
+    risk_w = risk_w,
+    Z_use = Z_use,
+    obs_s = obs_s,
+    obs_t = obs_t
+  )
+}
+
+
+# Independent raw-record join. Only the canonical observation-position table
+# supplies endpoint row numbers; no posting query or collector supplies truth.
+d93_v25_observer_reference <- function(sim, frame, panel, pair, cohorts) {
+  observed <- sim$data[!is.na(sim$data$y), c("id", "time"), drop = FALSE]
+  ids <- intersect(observed$id[observed$time == pair$s], observed$id[observed$time == pair$t])
+  unit_g <- sim$unit_g[match(panel$a_id, sim$unit_id)]
+  declared <- match(unit_g, cohorts$cohorts)
+  a <- which(panel$a_id %in% ids & !is.na(declared))
+  o <- panel$observations
+  key <- paste(o$unit_index, o$time)
+  ms <- if (length(a)) match(paste(panel$a_unit_index[a], pair$s), key) else integer(0L)
+  mt <- if (length(a)) match(paste(panel$a_unit_index[a], pair$t), key) else integer(0L)
+  list(risk_a_idx = a, risk_gi = declared[a], risk_w = frame$w_a[a],
+    Z_use = frame$Z_a[a, , drop = FALSE], obs_s = ms, obs_t = mt)
+}
+
+test_that("coarse raw observers exactly copy the frozen collector and independent ordered risk-set join", {
+  sim <- make_d93_compact_ipw_test_panel(n_units = 64L, cohorts = c(2, 3, 4, Inf),
+    missing_mode = "partial", unequal_weights = TRUE)
+  sim$data$y[sim$data$time == 3 & sim$data$id %% 11L == 0L] <- NA_real_
+  empty <- sim$data[1L, , drop = FALSE]; empty$time <- 5; empty$y <- NA_real_
+  sim$data <- rbind(sim$data, empty)
+  ctrl <- make_d93_test_pipeline_control(max_chunk_rows = 7L)
+  fitted <- ctrl$fitted_control; fitted$max_chunk_rows <- 3L
+  fitted <- validate_ipw_fitted_view_control(fitted)
+  po <- construct_ipw_panel_owner(sim$data, "id", "time", "y", "g", ctrl$owner_control)
+  calls <- 0L; reads <- 0L; captured <- NULL
+  spy <- new.env(parent = environment(ipw_raw_collect_observer_buffer))
+  address <- ipw_raw_observer_collector_kernel()
+  spy$.Call <- function(.NAME, ...) {
+    if (identical(.NAME, address)) calls <<- calls + 1L
+    out <- base::.Call(.NAME, ...)
+    if (identical(.NAME, address)) captured <<- out
+    out
+  }
+  spy$ipw_owner_read_y_positions <- function(...) { reads <<- reads + 1L; stop("Collector read an outcome.") }
+  collect <- ipw_raw_collect_observer_buffer; environment(collect) <- spy
+  designs <- list(matrix(1.0, 64L, 1L, dimnames = list(NULL, "(Intercept)")),
+    cbind(`(Intercept)` = 1, x1 = sim$unit_x1, x2 = cos(sim$unit_id * 0.23)))
+  for (Z in designs) {
+    fo <- construct_ipw_frame_owner(po, sim$unit_id, Z, sim$unit_w, ctrl$owner_control, frame_g = sim$unit_g)
+    for (K in list(Inf, c(Inf, 4, 3), c(3, Inf, 4))) {
+      cohort <- ipw_owner_make_cohort_descriptor(fo, 2, K)
+      for (t in c(4, 5)) {
+        pair <- ipw_owner_make_pair_descriptor(po, 1, t)
+        summary <- ipw_raw_scan_pair_summary(fo, po, pair, 7L)
+        expected <- d93_v25_observer_reference(sim, fo, po, pair, cohort)
+        n <- length(expected$risk_a_idx)
+        inputs <- serialize(list(po$postings, fo$a_cohort_index, fo$w_a, fo$Z_a, cohort), NULL, version = 3)
+        for (step in c(1L, 7L)) {
+          before <- calls
+          actual <- collect(fo, po, summary, cohort, n, step)
+          expect_identical(calls, before + 1L)
+          expect_identical(actual, d93_v25_old_observer_collect(fo, po, summary, cohort, n, step))
+          expect_identical(actual, expected)
+          expect_identical(reads, 0L)
+          expect_identical(inputs, serialize(list(po$postings, fo$a_cohort_index, fo$w_a, fo$Z_a, cohort), NULL, version = 3))
+          expect_identical(captured$status, 0L)
+          for (field in names(actual)) expect_true(gmm_sexp_aliases(actual[[field]], captured[[field]]))
+          expect_true(gmm_sexp_aliases(colnames(actual$Z_use), colnames(fo$Z_a)))
+          expect_false(gmm_sexp_aliases(actual$Z_use, fo$Z_a))
+          E <- (ncol(Z) + 5) * n + 512
+          borrowed_names <- unname(cp04_payload(colnames(fo$Z_a))["entries"])
+          expect_lte(unname(cp04_payload(captured)["entries"]) - borrowed_names, E)
+          B_f <- min(fo$n_a_units, fitted$max_chunk_rows)
+          O_old <- (ncol(Z) + 6) * n + 32
+          Q_old <- 2 * B_f * ncol(Z) + 88 * B_f + cohort$m_cohorts + 512
+          expect_lte(E, O_old + Q_old)
+          expect_identical(B_f, 3)
+        }
+      }
+    }
+  }
+  # Complete support keeps its existing R path, without resolving the new DLL.
+  full <- make_d93_compact_ipw_test_panel(n_units = 64L, cohorts = c(2, 3, 4, Inf), missing_mode = "complete")
+  po_full <- construct_ipw_panel_owner(full$data, "id", "time", "y", "g", ctrl$owner_control)
+  fo_full <- construct_ipw_frame_owner(po_full, full$unit_id, designs[[1L]], full$unit_w,
+    ctrl$owner_control, frame_g = full$unit_g)
+  cohort <- ipw_owner_make_cohort_descriptor(fo_full, 2, Inf)
+  pair <- ipw_owner_make_pair_descriptor(po_full, 1, 4)
+  summary <- ipw_raw_scan_pair_summary(fo_full, po_full, pair, 7L)
+  n <- length(d93_v25_observer_reference(full, fo_full, po_full, pair, cohort)$risk_a_idx)
+  before <- calls
+  expect_identical(collect(fo_full, po_full, summary, cohort, n, 7L),
+    d93_v25_old_observer_collect(fo_full, po_full, summary, cohort, n, 7L))
+  expect_identical(calls, before)
+})
+
+test_that("coarse raw observers decline unsupported indices and preserve count failures and native bounds", {
+  sim <- make_d93_compact_ipw_test_panel(n_units = 64L, cohorts = c(2, 3, 4, Inf), missing_mode = "partial")
+  ctrl <- make_d93_test_pipeline_control(max_chunk_rows = 7L)
+  po <- construct_ipw_panel_owner(sim$data, "id", "time", "y", "g", ctrl$owner_control)
+  fo <- construct_ipw_frame_owner(po, sim$unit_id, cbind(`(Intercept)` = 1, x1 = sim$unit_x1),
+    sim$unit_w, ctrl$owner_control, frame_g = sim$unit_g)
+  cohort <- ipw_owner_make_cohort_descriptor(fo, 2, c(Inf, 4, 3))
+  pair <- ipw_owner_make_pair_descriptor(po, 1, 4)
+  summary <- ipw_raw_scan_pair_summary(fo, po, pair, 7L)
+  expected <- d93_v25_observer_reference(sim, fo, po, pair, cohort)
+  n <- length(expected$risk_a_idx)
+  for (bad_n in c(n - 1L, n + 1L)) {
+    old <- tryCatch(d93_v25_old_observer_collect(fo, po, summary, cohort, bad_n, 7L), error = identity)
+    actual <- tryCatch(ipw_raw_collect_observer_buffer(fo, po, summary, cohort, bad_n, 7L), error = identity)
+    expect_s3_class(actual, "cdid_ipw_raw_backend_integrity_error")
+    expect_identical(class(actual), class(old)); expect_identical(conditionMessage(actual), conditionMessage(old))
+  }
+  spy <- new.env(parent = environment(ipw_raw_collect_observer_buffer))
+  spy$ipw_raw_observer_collector_kernel <- function() stop("Ineligible collector resolved native code.")
+  fallback <- ipw_raw_collect_observer_buffer; environment(fallback) <- spy
+  for (field in c("post_obs_index", "post_a_index")) {
+    long <- po; long$postings[[field]] <- as.double(long$postings[[field]])
+    expect_identical(fallback(fo, long, summary, cohort, n, 7L),
+      d93_v25_old_observer_collect(fo, long, summary, cohort, n, 7L))
+  }
+  address <- ipw_raw_observer_collector_kernel(); post <- po$postings
+  bounds <- c(post$date_start[pair$s_calendar_index], post$date_end[pair$s_calendar_index],
+    post$date_start[pair$t_calendar_index], post$date_end[pair$t_calendar_index])
+  E <- (fo$n_covariates + 5) * n + 512
+  invoke <- function(bd = bounds, owner = cohort$owner_cohort_index, view = cohort$view_cohort_index,
+                     observations = post$post_obs_index, ctl = as.integer(c(n, 1L, cohort$m_cohorts)), cap = E) {
+    .Call(address, post$post_a_index, observations, bd, fo$a_cohort_index, fo$w_a, fo$Z_a,
+      owner, view, ctl, cap)
+  }
+  expect_identical(invoke()$status, 0L)
+  expect_error(invoke(bd = replace(bounds, 1L, 0L)), class = "cdid_gmm_bound_error")
+  expect_error(invoke(owner = rev(cohort$owner_cohort_index)), class = "cdid_gmm_bound_error")
+  expect_error(invoke(view = replace(cohort$view_cohort_index, 1L, 0L)), class = "cdid_gmm_bound_error")
+  expect_error(invoke(cap = E - 1), class = "cdid_gmm_bound_error")
+  empty <- invoke(bd = c(1L, 0L, 1L, 0L), ctl = as.integer(c(0, 1, cohort$m_cohorts)), cap = 512)
+  expect_identical(empty$status, 0L); expect_length(empty$risk_a_idx, 0L)
+  expect_identical(dim(empty$Z_use), c(0L, as.integer(fo$n_covariates)))
+  # Deliberate valid-shape mutations must fail the independent buffer truth.
+  wrong_view <- cohort$view_cohort_index
+  wrong_view[1:2] <- wrong_view[2:1]
+  expect_false(identical(invoke(view = wrong_view)$risk_gi, expected$risk_gi))
+  expect_false(identical(invoke(observations = post$post_obs_index + 1L)$obs_s, expected$obs_s))
+  # Live registered arity and the exact symbol used by the R collector.
+  dll <- getLoadedDLLs()[["cdid"]]
+  reg <- getDLLRegisteredRoutines(dll, addNames = TRUE)[[".Call"]]
+  expect_identical(reg[["C_gmm_ipw_raw_observer_collect"]]$numParameters, 10L)
+  expect_identical(address, getNativeSymbolInfo("C_gmm_ipw_raw_observer_collect", PACKAGE = dll)$address)
+})

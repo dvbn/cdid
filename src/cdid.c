@@ -569,6 +569,10 @@ SEXP C_gmm_cp08_pair_rows(
 SEXP C_gmm_cp08_sparse_pair_rows(
     SEXP a_sexp, SEXP post_a_sexp, SEXP post_obs_sexp, SEXP bounds_sexp,
     SEXP read_sexp, SEXP max_entries_sexp);
+SEXP C_gmm_ipw_raw_observer_collect(
+    SEXP post_a_sexp, SEXP post_obs_sexp, SEXP bounds_sexp, SEXP cohort_sexp,
+    SEXP weights_sexp, SEXP design_sexp, SEXP owner_map_sexp, SEXP view_map_sexp,
+    SEXP control_sexp, SEXP max_entries_sexp);
 SEXP C_gmm_cp08_or_if_chunk(
     SEXP y_sexp, SEXP date_start_sexp, SEXP post_a_sexp, SEXP post_obs_sexp,
     SEXP rows_sexp, SEXP ci_sexp, SEXP a_sexp, SEXP w_sexp, SEXP dates_sexp,
@@ -2096,6 +2100,124 @@ SEXP C_gmm_cp08_sparse_pair_rows(SEXP a_sexp, SEXP post_a_sexp, SEXP post_obs_se
   Rf_setAttrib(out_sexp, R_NamesSymbol, names_sexp);
   UNPROTECT(nprot);
   return out_sexp;
+}
+
+/* One outcome-free RAW observer collection per exact pair/risk set. Borrow
+   sorted postings and cohort maps, merge two date slices, and copy only the
+   six already-reserved exact-size outputs. No Y, sum, probability, mask array,
+   whole-input coercion, or nuisance arithmetic is present. */
+SEXP C_gmm_ipw_raw_observer_collect(SEXP post_a_sexp, SEXP post_obs_sexp, SEXP bounds_sexp,
+    SEXP cohort_sexp, SEXP weights_sexp, SEXP design_sexp, SEXP owner_map_sexp,
+    SEXP view_map_sexp, SEXP control_sexp, SEXP max_entries_sexp) {
+  static const char *fn = "C_gmm_ipw_raw_observer_collect";
+  gmm_require_valid_arithmetic(0);
+  double cap = gmm_parse_max_entries(0, max_entries_sexp);
+  R_xlen_t np = cp08_len(0, post_a_sexp, INTSXP, fn, "post_a_index");
+  R_xlen_t na = cp08_len(0, cohort_sexp, INTSXP, fn, "a_cohort_index");
+  R_xlen_t m = cp08_len(0, owner_map_sexp, INTSXP, fn, "owner_cohort_index");
+  if (!R_FINITE(cap) || np > INT_MAX || na < 1 || na > INT_MAX || m > INT_MAX ||
+      cp08_len(0, post_obs_sexp, INTSXP, fn, "post_obs_index") != np ||
+      cp08_len(0, weights_sexp, REALSXP, fn, "w_a") != na ||
+      cp08_len(0, view_map_sexp, INTSXP, fn, "view_cohort_index") != m ||
+      cp08_len(0, bounds_sexp, INTSXP, fn, "bounds") != 4 ||
+      cp08_len(0, control_sexp, INTSXP, fn, "control") != 3)
+    cp08_malformed(0, fn, "inconsistent sizes or nonfinite allocation cap");
+  int nr, p;
+  cp08_dims(0, design_sexp, REALSXP, fn, "Z_a", (int) na, 0, &nr, &p);
+  int nobs = INTEGER_ELT(control_sexp, 0), step = INTEGER_ELT(control_sexp, 1);
+  int declared = INTEGER_ELT(control_sexp, 2);
+  if (nobs == NA_INTEGER || nobs < 0 || step == NA_INTEGER || step < 1 ||
+      declared == NA_INTEGER || declared < 1 || m > declared)
+    cp08_malformed(0, fn, "invalid observer count, stream step or declared cohort count");
+  int bd[4];
+  for (int j = 0; j < 4; ++j) bd[j] = INTEGER_ELT(bounds_sexp, j);
+  for (int j = 0; j < 4; j += 2) {
+    if (bd[j] == NA_INTEGER || bd[j + 1] == NA_INTEGER || bd[j] < 1 ||
+        (R_xlen_t) bd[j] > np + 1 || bd[j + 1] < 0 || (R_xlen_t) bd[j + 1] > np ||
+        (int64_t) bd[j] > (int64_t) bd[j + 1] + 1)
+      cp08_malformed(0, fn, "posting slice bounds are invalid");
+  }
+  int previous = 0;
+  for (R_xlen_t j = 0; j < m; ++j) {
+    int owner = INTEGER_ELT(owner_map_sexp, j), view = INTEGER_ELT(view_map_sexp, j);
+    if (owner == NA_INTEGER || owner <= previous || view == NA_INTEGER || view < 1 || view > declared)
+      cp08_malformed(0, fn, "cohort map is not strictly ordered or a declared index is invalid");
+    previous = owner;
+  }
+  uint64_t payload = gmm_checked_mul_u64(0, (uint64_t) nobs, (uint64_t) p + 5ULL, cap,
+                                        "RAW observer buffer");
+  uint64_t design_n = gmm_checked_mul_u64(0, (uint64_t) nobs, (uint64_t) p, cap,
+                                         "RAW observer design");
+  if (cap < 512.0 || (double) payload > cap - 512.0 || design_n > R_XLEN_T_MAX ||
+      design_n > SIZE_MAX / sizeof(double))
+    cp08_malformed(0, fn, "observer outputs and representation exceed their reserved entries");
+  SEXP source_dn = Rf_getAttrib(design_sexp, R_DimNamesSymbol);
+  SEXP columns = R_NilValue;
+  if (source_dn != R_NilValue) {
+    if (TYPEOF(source_dn) != VECSXP || XLENGTH(source_dn) != 2)
+      cp08_malformed(0, fn, "invalid design dimnames");
+    columns = VECTOR_ELT(source_dn, 1);
+    if (columns != R_NilValue && (TYPEOF(columns) != STRSXP || XLENGTH(columns) != p))
+      cp08_malformed(0, fn, "invalid design column names");
+  }
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 7));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 7));
+  const int nprot = 2;
+  static const char *fields[7] = {"risk_a_idx", "risk_gi", "risk_w", "Z_use", "obs_s", "obs_t", "status"};
+  for (int j = 0; j < 6; ++j) {
+    SEXP x = PROTECT(j == 3 ? Rf_allocMatrix(REALSXP, nobs, p) :
+      Rf_allocVector(j == 2 ? REALSXP : INTSXP, nobs));
+    if (j == 3) {
+      SEXP dn = PROTECT(Rf_allocVector(VECSXP, 2));
+      SET_VECTOR_ELT(dn, 0, R_NilValue); SET_VECTOR_ELT(dn, 1, columns);
+      Rf_setAttrib(x, R_DimNamesSymbol, dn);
+      UNPROTECT(1);
+    }
+    SET_VECTOR_ELT(out, j, x); UNPROTECT(1);
+    SET_STRING_ELT(names, j, Rf_mkChar(fields[j]));
+  }
+  SEXP status = PROTECT(Rf_ScalarInteger(0));
+  SET_VECTOR_ELT(out, 6, status); UNPROTECT(1);
+  SET_STRING_ELT(names, 6, Rf_mkChar(fields[6])); Rf_setAttrib(out, R_NamesSymbol, names);
+  int *risk = INTEGER(VECTOR_ELT(out, 0)), *gi = INTEGER(VECTOR_ELT(out, 1));
+  int *os = INTEGER(VECTOR_ELT(out, 4)), *ot = INTEGER(VECTOR_ELT(out, 5));
+  double *w = REAL(VECTOR_ELT(out, 2)), *Z = REAL(VECTOR_ELT(out, 3));
+  int64_t ls = (int64_t) bd[0] - 1, lt = (int64_t) bd[2] - 1;
+  int last_s = 0, last_t = 0; R_xlen_t pos = 0;
+  for (int64_t a_start = 1; a_start <= (int64_t) na; a_start += step) {
+    R_CheckUserInterrupt(); /* same A-range boundaries, including empty chunks */
+    int64_t a_end = a_start + (int64_t) step - 1;
+    if (a_end > (int64_t) na) a_end = (int64_t) na;
+    while (ls < bd[1] && lt < bd[3]) {
+      int a = INTEGER_ELT(post_a_sexp, ls), b = INTEGER_ELT(post_a_sexp, lt);
+      if (a == NA_INTEGER || b == NA_INTEGER || a <= last_s || b <= last_t || a > na || b > na)
+        cp08_malformed(nprot, fn, "visited postings are not strictly increasing A-indices");
+      if (a > a_end && b > a_end) break;
+      if (a < b) { last_s = a; ++ls; continue; }
+      if (b < a) { last_t = b; ++lt; continue; }
+      int cohort = INTEGER_ELT(cohort_sexp, (R_xlen_t) a - 1);
+      if (cohort == NA_INTEGER || cohort < 1) cp08_malformed(nprot, fn, "invalid visited owner cohort");
+      R_xlen_t lo = 0, hi = m;
+      while (lo < hi) {
+        R_xlen_t mid = lo + (hi - lo) / 2;
+        if (INTEGER_ELT(owner_map_sexp, mid) < cohort) lo = mid + 1; else hi = mid;
+      }
+      if (lo < m && INTEGER_ELT(owner_map_sexp, lo) == cohort) {
+        if (pos >= nobs) {
+          INTEGER(VECTOR_ELT(out, 6))[0] = 1; UNPROTECT(nprot); return out;
+        }
+        risk[pos] = a; gi[pos] = INTEGER_ELT(view_map_sexp, lo);
+        w[pos] = REAL_ELT(weights_sexp, (R_xlen_t) a - 1);
+        for (int j = 0; j < p; ++j)
+          Z[(R_xlen_t) j * nobs + pos] = REAL_ELT(design_sexp, (R_xlen_t) j * na + a - 1);
+        os[pos] = INTEGER_ELT(post_obs_sexp, ls); ot[pos] = INTEGER_ELT(post_obs_sexp, lt);
+        ++pos;
+      }
+      last_s = a; last_t = b; ++ls; ++lt;
+    }
+  }
+  if (pos != nobs) INTEGER(VECTOR_ELT(out, 6))[0] = 2;
+  UNPROTECT(nprot); return out;
 }
 
 /* Checked addition is local to the new summary's simultaneous-entry preflight. */
@@ -4921,6 +5043,7 @@ SEXP C_gmm_or_sparse_if(SEXP y_s, SEXP pa_s, SEXP po_s, SEXP rows_s,
 }
 
 static const R_CallMethodDef CallEntries[] = {
+  {"C_gmm_ipw_raw_observer_collect", (DL_FUNC) &C_gmm_ipw_raw_observer_collect, 10},
   {"C_gmm_or_sparse_if", (DL_FUNC) &C_gmm_or_sparse_if, 11},
   {"C_gmm_native_status", (DL_FUNC) &C_gmm_native_status, 0},
   {"C_gmm_test_arithmetic_probe", (DL_FUNC) &C_gmm_test_arithmetic_probe, 5},

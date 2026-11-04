@@ -353,6 +353,19 @@ ipw_raw_verify_pair_masks_equal <- function(frame_owner, panel_owner, pair1_summ
 # Stream ONE observer buffer (`risk_a_idx`, `risk_gi`, `risk_w`, `Z_use`,
 # `obs_s`, `obs_t`) for `(pair_summary, coh_desc)` in bounded chunks of `step`.
 # No outcome values (`y`) are read here.
+ipw_raw_observer_collector_kernel <- function() {
+  gmm_require_native_dll()
+  owner <- environment(sys.function())
+  dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
+  si <- tryCatch(base::getNativeSymbolInfo("C_gmm_ipw_raw_observer_collect", PACKAGE = dlls[["cdid"]]),
+    error = function(e) NULL)
+  if (is.null(si) || !inherits(si, "NativeSymbolInfo") || is.null(si$address) ||
+      !identical(as.integer(si$numParameters), 10L))
+    cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_ipw_raw_observer_collect`.",
+      c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
+  si$address
+}
+
 ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summary, coh_desc, n_obs, step) {
   n_a <- as.integer(frame_owner$n_a_units)
   p <- as.integer(frame_owner$n_covariates)
@@ -363,6 +376,47 @@ ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summa
   ds <- pair_desc$s_calendar_index
   dt <- pair_desc$t_calendar_index
   complete_pair <- isTRUE(pair_summary$complete_pair)
+
+  if (!complete_pair) {
+    post <- panel_owner$postings
+    plain_integer <- function(x) is.integer(x) && !is.object(x) && is.null(dim(x))
+    eligible <- plain_integer(post$post_a_index) && plain_integer(post$post_obs_index) &&
+      length(post$post_a_index) == length(post$post_obs_index) &&
+      length(post$post_a_index) <= .Machine$integer.max &&
+      plain_integer(post$date_start) && plain_integer(post$date_end) &&
+      plain_integer(a_cohort_idx) && is.double(w_a) && !is.object(w_a) && is.null(dim(w_a)) &&
+      is.double(Z_a) && is.matrix(Z_a) && !is.object(Z_a) &&
+      plain_integer(coh_desc$owner_cohort_index) && plain_integer(coh_desc$view_cohort_index) &&
+      length(coh_desc$owner_cohort_index) == length(coh_desc$view_cohort_index) &&
+      !is.na(ds) && !is.na(dt)
+    if (eligible) {
+      n <- ipw_owner_int_bound(n_obs, "raw observer count", min_val = 0)
+      chunk <- ipw_owner_int_bound(step, "raw observer chunk rows")
+      declared <- ipw_owner_int_bound(coh_desc$m_cohorts, "raw observer declared cohorts")
+      entries <- ipw_owner_safe_sum(c(ipw_owner_safe_product(p + 5, n), 512))
+      # O_old=(p+6)n+32 and Q_old>=2p+88+m+512 (B_f>=1), regardless
+      # of the independently chosen stream step. Spend only that old slice.
+      old_slice <- ipw_owner_safe_sum(c(ipw_owner_safe_product(p + 6, n), 32,
+        2 * p, 88, declared, 512))
+      ipw_owner_check_matrix_dims(n, p, label = "raw observer design")
+      if (n <= .Machine$integer.max && chunk <= .Machine$integer.max &&
+          declared <= .Machine$integer.max && entries <= old_slice &&
+          entries <= frame_owner$control$max_matrix_entries) {
+        bounds <- c(post$date_start[ds], post$date_end[ds], post$date_start[dt], post$date_end[dt])
+        out <- .Call(ipw_raw_observer_collector_kernel(), post$post_a_index, post$post_obs_index,
+          bounds, a_cohort_idx, w_a, Z_a, coh_desc$owner_cohort_index, coh_desc$view_cohort_index,
+          as.integer(c(n, chunk, declared)), entries)
+        if (identical(out$status, 1L))
+          ipw_raw_backend_abort("Observed risk support count changed from its pair summary.", "integrity")
+        if (identical(out$status, 2L))
+          ipw_raw_backend_abort("Observed risk support count disagreed with its pair summary.", "integrity")
+        if (!identical(out$status, 0L))
+          ipw_raw_backend_abort("Native observer collection returned an invalid status.", "integrity")
+        out$status <- NULL
+        return(out)
+      }
+    }
+  }
 
   risk_a_idx <- integer(n_obs)
   risk_gi <- integer(n_obs)
