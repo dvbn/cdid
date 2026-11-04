@@ -2,7 +2,7 @@
 
 ## Package and authorship
 
-This is version 1.1.0.0 of the existing `cdid` package maintained by David Benatia. It is
+This is version 1.1.0.1 of the existing `cdid` package maintained by David Benatia. It is
 an update of the package after version 0.1.1 on CRAN (version 1.0.0.0 was an intermediate
 development release not submitted to CRAN). The title and author list in DESCRIPTION are
 retained: David Benatia (maintainer), Christophe Bellégo, Joel Cuerrier and Vincent
