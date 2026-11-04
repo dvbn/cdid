@@ -1337,9 +1337,12 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
 
   read_cell_score <- reconstruction_cached_cell_reader(read_cell_score, sets$score_cache, n_cells)
 
-  xi_beta_imp <- if (details) vector("list", n_groups) else NULL
-  if (details) for (gid in seq_len(n_groups)) {
+  forward_imp <- !details && isTRUE(sets$stage1_forward$enabled)
+  use_imp_forward <- details || forward_imp
+  xi_beta_imp <- if (use_imp_forward) vector("list", n_groups) else NULL
+  if (use_imp_forward) for (gid in seq_len(n_groups)) {
     gf <- groups[[gid]]
+    if (!details && !gid %in% sets$gids) next
     h_beta <- matrix(0.0, B, gf$p, dimnames = list(NULL, gf$kept_columns))
     if (gf$p > 0L) {
       for (cid in gf$cell_ids) {
@@ -1449,7 +1452,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
           rhs_alpha_a[, apos] <- rhs_alpha_a[, apos] + bf$a_force_alpha[idx_k] * xi_ak
         }
         if (p_or > 0L) rhs_beta_a <- rhs_beta_a + outer(xi_ak, bf$a_force_beta[, idx_k])
-        if (details) {
+        if (use_imp_forward) {
           xi_ac <- alpha_if(cid)
           xi_br <- xi_beta_imp[[cf$group_id]]
           if (recipe$intercept && !is.na(apos)) {
@@ -1475,7 +1478,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       if (recipe$intercept) rhs_alpha_dir[, 1L] <- rhs_alpha_dir[, 1L] - bf$score_mean_alpha
       if (p_or) rhs_beta_dir <- sweep(rhs_beta_dir, 2L, bf$score_mean_beta)
     }
-    if (!details) {
+    if (!use_imp_forward) {
       # Global shared-slope j forcing collects every contributing block before
       # each scalar pullback (row width p_OR, independent of the cell count).
       if (p_or) for (qq in seq_len(p_or)) {
@@ -1633,8 +1636,8 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
     psi_denplus <- w_plus + st$mass_F[ci_g] * xi_a[, ci_g]
     direct_T <- w_plus * (Z_g_vec - lf$T_gl) / lf$d_plus
     a_T <- lf$a_coeff_T_g * xi_a[, ci_g]
-    j_T_adj <- eval_adjoint_chunk(lf$adjoint_T)
-    j_T <- if (details) {
+    j_T_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_T)
+    j_T <- if (use_imp_forward) {
       lf$lam_T * alpha_if(lf$target_cell_id) +
         (if (length(lf$nu_T)) as.vector(xi_beta_imp[[cf_g$group_id]] %*% lf$nu_T) else 0.0)
     } else {
@@ -1683,15 +1686,15 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       a_C <- a_C + lf$a_coeff_C_k[idx_k] * xi_ak
       a_Bo <- a_Bo + lf$a_coeff_Bo_k[idx_k] * xi_ak
       a_denminus <- a_denminus + ((lf$d_minus * lf$m_minus_k[idx_k]) / a_k) * xi_ak
-      if (details) {
+      if (use_imp_forward) {
         gf_k <- groups[[cf_k$group_id]]
         j_C_fwd <- j_C_fwd + lf$lam_C_k[idx_k] * alpha_if(cid_k) +
           (if (gf_k$p > 0L) as.vector(xi_beta_imp[[cf_k$group_id]] %*% lf$nu_C_k[[idx_k]]) else 0.0)
       }
     }
     direct_C <- w_minus * (Z_k_vec - lf$C_ol) / lf$d_minus
-    j_C_adj <- eval_adjoint_chunk(lf$adjoint_C)
-    j_C <- if (details) j_C_fwd else j_C_adj
+    j_C_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_C)
+    j_C <- if (use_imp_forward) j_C_fwd else j_C_adj
     sel_C <- load_theta(lf$sel_C_ids, lf$sel_C)
     trt_C_dir <- as.vector(tif$direct %*% lf$g_C_gamma)
     trt_C_a <- as.vector(tif$a %*% lf$g_C_gamma)

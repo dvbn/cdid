@@ -44,7 +44,25 @@ reconstruction_fit_extra <- function(cat, recipe, st) {
 # its fixed rows, cell/group fits, X and weights. Only declared needed cells
 # persist, including NULL nonobserver records. Named-row designs retain the
 # original path rather than replicating unbounded row-label metadata.
-reconstruction_score_cache_plan <- function(backend, B, cids, X_F, n_links) {
+reconstruction_stage1_forward_plan <- function(backend, B, gids, X_F, n_links, details) {
+  declined <- list(enabled = FALSE, gids = integer(0L), entries = 0)
+  if (details || !reconstruction_separate(backend$shared_or) || !length(gids) ||
+      !is.null(rownames(X_F))) return(declined)
+  rows <- min(B, backend$control$max_chunk_rows)
+  p <- vapply(backend$groups[gids], `[[`, integer(1L), "p")
+  column_bytes <- sum(vapply(backend$groups[gids], function(g)
+    sum(nchar(g$kept_columns, type = "bytes")), numeric(1L)))
+  peak <- max(c(0, p))
+  # Retained group rows, names and the peak score/RHS/transposed/pivoted
+  # triangular solves, scaling, reorder and returned transpose coexist.
+  # Fund ALL needed groups or leave the exact V6 scalar adjoint route intact.
+  entries <- 1024 + 4 * rows * sum(p) + 16 * rows * peak +
+    4 * peak^2 + 256 * length(gids) + 8 * column_bytes
+  if (!is.finite(entries) || entries > 32 * rows * n_links) return(declined)
+  list(enabled = TRUE, gids = gids, entries = entries)
+}
+
+reconstruction_score_cache_plan <- function(backend, B, cids, X_F, n_links, reserved_entries = 0) {
   declined <- list(enabled = FALSE, cids = integer(0L), entries = 0)
   if (!reconstruction_separate(backend$shared_or) || !length(cids) || !is.null(rownames(X_F)))
     return(declined)
@@ -56,7 +74,7 @@ reconstruction_score_cache_plan <- function(backend, B, cids, X_F, n_links) {
   # per-link records and per-link vectors keep their separate old charges.
   # Cache records, including names/headers, fit entirely in the other half.
   # Use the core-subchunk cap even when the envelope's B is layout-expanded.
-  funding <- 32 * rows * n_links
+  funding <- 32 * rows * n_links - reserved_entries
   if (funding <= 1024) return(declined)
   p <- vapply(backend$cells[cids], function(cf) backend$groups[[cf$group_id]]$p, integer(1))
   column_bytes <- vapply(backend$cells[cids], function(cf)
@@ -131,7 +149,9 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
     channels * sum(local_p + 1) + nt * 5 * pt + 64 * nl + nu + 8 else 0
   output <- metadata + B * width
   X_F <- if (augmented) augmented_backend_X_F(backend) else imputation_backend_X_F(backend, reader)
-  score_cache <- reconstruction_score_cache_plan(backend, B, sets$cids, X_F, nl)
+  stage1_forward <- reconstruction_stage1_forward_plan(backend, B, sets$gids, X_F, nl, details)
+  score_cache <- reconstruction_score_cache_plan(backend, B, sets$cids, X_F, nl,
+    reserved_entries = stage1_forward$entries)
   # xi_a/tau/eta, requested treatment rows and X_chunk exist in ordinary replay;
   # stage1 forcing uses scalar adjoints and one local OR operator at a time.
   scratch <- maps + output + 2 * operator_peak + 16 * B * (3 * J + length(backend$design_columns) +
@@ -147,5 +167,6 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
     sp <- selection_if_budget(backend$selection_backend, B, sets$q_ids, details = details)
     scratch <- scratch + sp$output + sp$scratch; work <- work + sp$work
   }
-  c(sets, list(output = output, scratch = scratch, work = work, score_cache = score_cache))
+  c(sets, list(output = output, scratch = scratch, work = work, score_cache = score_cache,
+    stage1_forward = stage1_forward))
 }

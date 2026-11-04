@@ -54,6 +54,29 @@ rsc_run <- function(fit, kind, rows, links, cached, details = TRUE) {
   fn <- rsc_ns(if (kind == "augmented") "evaluate_augmented_if_chunk" else "evaluate_imputation_if_chunk")
   list(output = fn(fit, rows, links, details = details), calls = calls, cache_cids = cache_cids)
 }
+rsc_forward_run <- function(fit, kind, rows, links, forward, details = FALSE) {
+  planner <- rsc_ns("reconstruction_stage1_forward_plan")
+  pooled_solve <- rsc_ns("or_pooled_wls_gram_solve")
+  plain_solve <- rsc_ns("or_wls_gram_solve")
+  gram_calls <- 0L; plans <- list()
+  testthat::local_mocked_bindings(
+    reconstruction_stage1_forward_plan = function(...) {
+      plan <- if (forward) planner(...) else list(enabled = FALSE, gids = integer(0L), entries = 0)
+      plans[[length(plans) + 1L]] <<- plan
+      plan
+    },
+    or_pooled_wls_gram_solve = function(...) {
+      gram_calls <<- gram_calls + 1L
+      pooled_solve(...)
+    },
+    or_wls_gram_solve = function(...) {
+      gram_calls <<- gram_calls + 1L
+      plain_solve(...)
+    }, .package = "cdid")
+  fn <- rsc_ns(if (kind == "augmented") "evaluate_augmented_if_chunk" else "evaluate_imputation_if_chunk")
+  out <- fn(fit, rows, links, details = details)
+  list(output = out, gram_calls = gram_calls, plans = plans)
+}
 
 testthat::test_that("score reader caches exact records and NULL only within its own row invocation", {
   columns <- c("(Intercept)", paste0("long-", strrep("x", 400L)))
@@ -62,6 +85,16 @@ testthat::test_that("score reader caches exact records and NULL only within its 
     groups = list(list(p = 2L, kept_columns = columns)))
   X <- matrix(1, 4L, 2L, dimnames = list(NULL, columns))
   plan <- rsc_ns("reconstruction_score_cache_plan")(meta, 4L, 1:3, X, 100L)
+  forward <- rsc_ns("reconstruction_stage1_forward_plan")(meta, 4L, 1L, X, 100L, FALSE)
+  testthat::expect_true(forward$enabled)
+  joint <- rsc_ns("reconstruction_score_cache_plan")(meta, 4L, 1:3, X, 100L,
+    reserved_entries = forward$entries)
+  testthat::expect_lte(forward$entries + joint$entries, 32 * 4L * 100L)
+  testthat::expect_lt(length(joint$cids), length(plan$cids))
+  testthat::expect_identical(rsc_ns("reconstruction_stage1_forward_plan")(
+    meta, 12L, 1L, X, 100L, FALSE), forward)
+  testthat::expect_false(rsc_ns("reconstruction_stage1_forward_plan")(meta, 4L, 1L, X, 1L, FALSE)$enabled)
+  testthat::expect_false(rsc_ns("reconstruction_stage1_forward_plan")(meta, 4L, 1L, X, 100L, TRUE)$enabled)
   calls <- integer(3L)
   raw <- function(cid) {
     calls[cid] <<- calls[cid] + 1L
@@ -80,9 +113,11 @@ testthat::test_that("score reader caches exact records and NULL only within its 
   named <- X; rownames(named) <- paste0("named-", 1:4)
   no <- rsc_ns("reconstruction_score_cache_plan")(meta, 4L, 1:3, named, 100L)
   testthat::expect_false(no$enabled)
+  testthat::expect_false(rsc_ns("reconstruction_stage1_forward_plan")(meta, 4L, 1L, named, 100L, FALSE)$enabled)
   testthat::expect_identical(rsc_ns("reconstruction_cached_cell_reader")(raw, no, 3L), raw)
   meta$shared_or$outcome_pooling <- "pooled"
   testthat::expect_false(rsc_ns("reconstruction_score_cache_plan")(meta, 4L, 1:3, X, 100L)$enabled)
+  testthat::expect_false(rsc_ns("reconstruction_stage1_forward_plan")(meta, 4L, 1L, X, 100L, FALSE)$enabled)
 })
 
 testthat::test_that("pure and augmented complete IF channels reuse each funded score at most once", {
@@ -111,9 +146,10 @@ testthat::test_that("pure and augmented complete IF channels reuse each funded s
     testthat::expect_equal(partial$phi, full$phi[32:1, c(3L, 1L), drop = FALSE], tolerance = 1e-10)
     budget <- rsc_ns(if (kind == "augmented") "augmented_if_budget" else "imputation_if_budget")
     pre <- budget(fit, 32L, 1:3, FALSE)
-    testthat::expect_true(pre$score_cache$enabled)
+    testthat::expect_true(pre$score_cache$enabled || pre$stage1_forward$enabled)
     testthat::expect_true(all(pre$score_cache$cids %in% pre$cids))
-    testthat::expect_lte(pre$score_cache$entries, 32 * 32L * 3L)
+    optional_entries <- pre$score_cache$entries + pre$stage1_forward$entries
+    testthat::expect_lte(optional_entries, 32 * 32L * 3L)
     testthat::expect_lte(unname(rsc_ns("cp04_payload")(full)["entries"]), pre$output)
     # Preserve the original finding witness: adding an unfunded cache would
     # make the original admitted buffers fail. The implemented bounded cache
@@ -125,13 +161,15 @@ testthat::test_that("pure and augmented complete IF channels reuse each funded s
       limit, fit$control$max_work_ops, fit$control$max_output_entries)
     testthat::expect_true(rsc_ns("cp04_budget")(bounded, owned,
       pre$scratch, work, pre$output, "funded resource witness"))
-    testthat::expect_error(rsc_ns("cp04_budget")(bounded, owned, pre$scratch + pre$score_cache$entries,
+    testthat::expect_error(rsc_ns("cp04_budget")(bounded, owned, pre$scratch + optional_entries,
       work, pre$output, "unfunded resource witness"), class = "cdid_ipw_owner_bound_error")
     retained <- fit$control$max_matrix_entries - sum(owned) - pre$output - pre$scratch
     plan <- rsc_ns("cp04_preflight_links")(fit, 1:3, retained, chunk_rows = 32L)
     original <- function() {
       testthat::local_mocked_bindings(reconstruction_score_cache_plan = function(...) {
         list(enabled = FALSE, cids = integer(0L), entries = 0)
+      }, reconstruction_stage1_forward_plan = function(...) {
+        list(enabled = FALSE, gids = integer(0L), entries = 0)
       }, .package = "cdid")
       list(pre = budget(fit, 32L, 1:3, FALSE),
         plan = rsc_ns("cp04_preflight_links")(fit, 1:3, retained, chunk_rows = 32L))
@@ -142,6 +180,24 @@ testthat::test_that("pure and augmented complete IF channels reuse each funded s
     testthat::expect_identical(plan$chunk_rows, 32)
     testthat::expect_error(rsc_ns("cp04_preflight_links")(fit, 1:3, retained + 1,
       chunk_rows = 32L), class = "cdid_ipw_owner_bound_error")
+
+    # Ordinary forward mode reuses the already accepted detailed score/Gram
+    # formulas; the declined reference retains the exact V6 adjoint route.
+    reused <- rsc_forward_run(fit, kind, 1:32, 1:3, TRUE)
+    adjoint <- rsc_forward_run(fit, kind, 1:32, 1:3, FALSE)
+    detailed <- rsc_forward_run(fit, kind, 1:32, 1:3, TRUE, TRUE)
+    testthat::expect_length(reused$plans, 1L)
+    testthat::expect_true(all(vapply(reused$plans, `[[`, logical(1L), "enabled")))
+    testthat::expect_equal(reused$output, adjoint$output, tolerance = 1e-10)
+    testthat::expect_equal(reused$output$phi, detailed$output$phi, tolerance = 1e-10)
+    testthat::expect_lt(reused$gram_calls, adjoint$gram_calls)
+    testthat::expect_false(any(vapply(detailed$plans, `[[`, logical(1L), "enabled")))
+    testthat::expect_identical(pre$stage1_forward$gids, pre$gids)
+    declined <- rsc_forward_run(fit, kind, c(33L, 1L, 18L), c(3L, 1L), TRUE)
+    legacy <- rsc_forward_run(fit, kind, c(33L, 1L, 18L), c(3L, 1L), FALSE)
+    testthat::expect_false(any(vapply(declined$plans, `[[`, logical(1L), "enabled")))
+    testthat::expect_identical(declined$output, legacy$output)
+    testthat::expect_identical(declined$gram_calls, legacy$gram_calls)
     testthat::expect_identical(list(cells = fit$cells, groups = fit$groups, shared_or = fit$shared_or,
       treatments = fit$treatments, reader_ref = fit$reader_ref), frozen)
   }

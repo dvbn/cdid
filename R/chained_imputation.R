@@ -1522,12 +1522,14 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
   read_cell_score <- reconstruction_cached_cell_reader(read_cell_score, sets$score_cache, n_cells)
 
   # Solve per-group slope IFs xi_{i,beta_r}^imp and per-cell intercept IFs xi_{i,alpha_c}^imp
-  xi_beta_imp <- if (details) vector("list", n_groups) else NULL
+  forward_imp <- !details && isTRUE(sets$stage1_forward$enabled)
+  use_imp_forward <- details || forward_imp
+  xi_beta_imp <- if (use_imp_forward) vector("list", n_groups) else NULL
 
-  if (details) for (gid in seq_len(n_groups)) {
+  if (use_imp_forward) for (gid in seq_len(n_groups)) {
     gf <- core_fit$groups[[gid]]
     if (!gid %in% sets$gids) {
-      xi_beta_imp[[gid]] <- matrix(0.0, B, gf$p, dimnames = list(NULL, gf$kept_columns))
+      if (details) xi_beta_imp[[gid]] <- matrix(0.0, B, gf$p, dimnames = list(NULL, gf$kept_columns))
       next
     }
     h_beta <- matrix(0.0, B, gf$p, dimnames = list(NULL, gf$kept_columns))
@@ -1683,7 +1685,7 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
           rhs_beta_a <- rhs_beta_a + outer(xi_ak, bf$a_force_beta[, idx_k])
         }
 
-        if (details) {
+        if (use_imp_forward) {
           # Imputation forcing on (xi_{alpha_c}^imp, xi_{beta_r}^imp)
           xi_ac <- alpha_if(cid)
           xi_br <- xi_beta_imp[[cf$group_id]]
@@ -1708,7 +1710,7 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
       if (recipe$intercept) rhs_alpha_dir[, 1L] <- rhs_alpha_dir[, 1L] - bf$score_mean_alpha
       if (p_or) rhs_beta_dir <- sweep(rhs_beta_dir, 2L, bf$score_mean_beta)
     }
-    if (!details) {
+    if (!use_imp_forward) {
       # Global shared-slope forcing collects every contributing block before
       # each scalar pullback. The row width is p_OR, independent of cell count.
       if (p_or) for (q in seq_len(p_or)) {
@@ -1883,8 +1885,8 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
 
     direct_T <- w_plus * (j_g_vec - lf$T_gl) / lf$d_plus
     a_T <- lf$a_coeff_T_g * xi_a[, ci_g]
-    j_T_adj <- eval_adjoint_chunk(lf$adjoint_T)
-    j_T <- if (details) (if (recipe$intercept) alpha_if(lf$target_cell_id) else 0.0) +
+    j_T_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_T)
+    j_T <- if (use_imp_forward) (if (recipe$intercept) alpha_if(lf$target_cell_id) else 0.0) +
       (if (gf_g$p > 0L) as.vector(xi_beta_imp[[cf_g$group_id]] %*% lf$d_bar_plus_j) else 0.0) else j_T_adj
     psi_T <- direct_T + a_T + j_T
 
@@ -1974,7 +1976,7 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
 
         xi_ak <- xi_a[, ci_k]
         a_C_vec <- a_C_vec + lf$a_coeff_C_k[idx_k] * xi_ak
-        if (details) j_C_vec <- j_C_vec +
+        if (use_imp_forward) j_C_vec <- j_C_vec +
           (if (recipe$intercept) lf$m_minus_k[idx_k] * alpha_if(cid_k) else 0.0) +
           (if (gf_k$p > 0L) as.vector(xi_beta_imp[[cf_k$group_id]] %*% lf$d_bar_minus_j_k[[idx_k]]) else 0.0)
         if (!is.null(sh)) {
@@ -1986,8 +1988,8 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
 
       direct_C <- w_minus * (j_k_vec - lf$C_ol) / lf$d_minus
       a_C <- a_C_vec
-      j_C_adj <- eval_adjoint_chunk(lf$adjoint_C)
-      j_C <- if (details) j_C_vec else j_C_adj
+      j_C_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_C)
+      j_C <- if (use_imp_forward) j_C_vec else j_C_adj
       trt_C_dir <- as.vector(tif$direct %*% lf$g_C_gamma)
       trt_C_a <- as.vector(tif$a %*% lf$g_C_gamma)
       psi_C <- direct_C + a_C + j_C + trt_C_dir + trt_C_a
