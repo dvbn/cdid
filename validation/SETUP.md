@@ -11,13 +11,13 @@ Install `cdid` 1.1.0.0 from GitHub:
 remotes::install_github("dvbn/cdid")
 ```
 
-`cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.3.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
+`cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
 
 This is all that is needed to use the package. Version 1.1.0.0 is the next release after 0.1.1 and is not yet available from CRAN.
 
 ## Optional: pinned validation setup
 
-The setup script `validation/setup.R` installs `cdid` together with exactly the tested versions, `did` 2.5.1 and `DRDID` 1.3.0, into a dedicated library and checks the result. Use it to reproduce the recorded results of the guide or to check the package against its tested baseline; it is not required to install or load `cdid`.
+The setup script `validation/setup.R` installs `cdid` together with exactly the tested versions, `did` 2.5.1 and `DRDID` 1.4.0, into a dedicated library and checks the result. Use it to check this revision against its tested baseline; historical guide outputs record their original dependency versions. It is not required to install or load `cdid`.
 
 The repository includes the unchanged CRAN source archives of these two versions in `validation/vendor/`. `remotes::install_github()` or `R CMD INSTALL` alone does not install these exact versions: they resolve `did` and `DRDID` from your libraries or the current CRAN repository, which may provide later versions. The setup script installs the archived versions, the other dependencies and `cdid` itself into the dedicated library.
 

@@ -3,8 +3,8 @@
 # are accepted, but they are untested: a larger version number is not evidence
 # of compatibility. A version is added to `tested_upstream` only after the
 # ordinary-mode parity tests pass against it.
-minimum_upstream <- c(did = "2.5.1", DRDID = "1.3.0")
-tested_upstream <- c(did = "2.5.1", DRDID = "1.3.0")
+minimum_upstream <- c(did = "2.5.1", DRDID = "1.4.0")
+tested_upstream <- c(did = "2.5.1", DRDID = "1.4.0")
 
 namespace_path <- function(pkg) {
   normalizePath(getNamespaceInfo(pkg, "path"), winslash = "/",

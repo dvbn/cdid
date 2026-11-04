@@ -71,7 +71,7 @@ assert_source_identity <- function(repo_path, formals_path, source_sha) {
   if (!all(c("att_gt", "aggte", "conditional_did_pretest") %in% checked)) stop("Public source functions were not verified", call. = FALSE)
   list(source_sha = source_sha, n_functions = length(checked), functions_hash = obj_md5(sort(checked)))
 }
-# Verify R >= 4.1 and exact package guard: cdid 1.1.0.0, did 2.5.1, DRDID 1.3.0
+# Verify R >= 4.1 and exact package guard: cdid 1.1.0.0, did 2.5.1, DRDID 1.4.0
 setup_and_assert <- function(lib_paths = character(), frozen_runtime = NULL, repo_path, formals_path, source_sha) {
   if (length(lib_paths) > 0L) {
     norm_libs <- vapply(lib_paths[nzchar(lib_paths)], normalizePath, character(1L), mustWork = TRUE)
@@ -80,7 +80,7 @@ setup_and_assert <- function(lib_paths = character(), frozen_runtime = NULL, rep
   ver <- function(p) as.character(getNamespaceVersion(p))
   path_of <- function(p) normalizePath(find.package(p, quiet = FALSE, verbose = FALSE), mustWork = TRUE); checks <- list(
     R_ge_4_1 = isTRUE(r_ok), cdid_version = identical(ver("cdid"), "1.1.0.0"), did_version = identical(ver("did"), "2.5.1"),
-    DRDID_version = identical(ver("DRDID"), "1.3.0")
+    DRDID_version = identical(ver("DRDID"), "1.4.0")
   ); pkgs <- c("cdid", "did", "DRDID"); pkg_meta <- lapply(stats::setNames(pkgs, pkgs), function(p) {
     pp <- path_of(p); list(
       version = ver(p), description_portable_hash = description_portable_hash(file.path(pp, "DESCRIPTION")),

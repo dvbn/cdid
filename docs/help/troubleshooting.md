@@ -41,7 +41,7 @@ if (inherits(res, "cdid_error")) {
 | `cdid_chained_public_control_error`, `cdid_chained_public_accuracy_deferred` | An invalid `control` list, or the entry `relative_accuracy`, which is not provided | [The control list](../reference/options.md#the-control-list) |
 | `cdid_custom_ipw_error` | Malformed or nonfinite output of a custom IPW function | [Treatment adjustment](../reference/options.md#treatment-adjustment) |
 | `cdid_chained_request_no_inffunc_error` | `aggte()` on a fit with `compute_inffunc = FALSE` | That fit has point estimates only |
-| `cdid_untested_upstream` | `did` older than 2.5.1 or `DRDID` older than 1.3.0 | The library your session loads |
+| `cdid_untested_upstream` | `did` older than 2.5.1 or `DRDID` older than 1.4.0 | The library your session loads |
 
 An upstream-version refusal can occur while loading the package, before the call inside this handler starts; inspect the loaded library versions separately. R's own dependency check can refuse an older `did` first, with its own message instead of this class. Later versions of `did` and `DRDID` load but have not been tested with this release.
 

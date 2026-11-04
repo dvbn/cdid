@@ -24,8 +24,8 @@ adds an estimation mode for panel data with missing outcomes.
     (\code{selection_est_method = "ipw"}).
 }
 
-cdid requires did 2.5.1 or later and DRDID 1.3.0 or later, and has been
-tested with did 2.5.1 and DRDID 1.3.0. Later versions are accepted without a
+cdid requires did 2.5.1 or later and DRDID 1.4.0 or later, and has been
+tested with did 2.5.1 and DRDID 1.4.0. Later versions are accepted without a
 guarantee that everything works with them or that results are unchanged. The
 optional pinned setup in \file{validation/SETUP.md} of the source repository
 installs exactly the tested versions and verifies their library paths. Use

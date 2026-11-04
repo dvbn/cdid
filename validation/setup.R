@@ -76,7 +76,7 @@ main <- function() {
     fields <- c("Package", "Version", "Depends", "Imports", "LinkingTo")
     description <- function(path) as.list(read.dcf(path, fields = fields)[1L, ])
     cdid <- description(file.path(project, "DESCRIPTION"))
-    pins <- c(DRDID = "1.3.0", did = "2.5.1", cdid = "1.1.0.0")
+    pins <- c(DRDID = "1.4.0", did = "2.5.1", cdid = "1.1.0.0")
     if (!identical(cdid$Package, "cdid") || !identical(cdid$Version, pins[["cdid"]]))
       stop("Expected selected cdid source version 1.1.0.0.")
     if (!all(file.exists(file.path(project, c("NAMESPACE", "R", "src")))))
