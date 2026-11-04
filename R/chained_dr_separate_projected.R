@@ -44,7 +44,7 @@ dr_separate_baseline_replay_plan <- function(backend, links, B) {
   tail <- N %% B; min_B <- if (tail) min(B, tail) else B
   bound <- retained + peak
   if (!is.finite(bound) || bound > 16 * min_B * nl) return(NULL)
-  starts <- function(n) cumsum(c(1, head(n, -1L)))
+  starts <- function(n) cumsum(c(1, utils::head(n, -1L)))
   model_order <- order(model_b, seq_along(model_b))
   r_n <- p[model_b]; c_n <- control_n[model_b]
   rm(model_b)

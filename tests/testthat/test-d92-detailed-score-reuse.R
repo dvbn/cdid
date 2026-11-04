@@ -30,6 +30,10 @@ d92_core <- function(kind, old = FALSE, reads = NULL) {
   b <- as.list(body(fn))
   at <- function(name) which(vapply(b, function(x) is.call(x) &&
     identical(x[[1L]], quote(`<-`)) && identical(x[[2L]], as.name(name)), logical(1L)))
+  reader_at <- which(vapply(b, function(x) is.call(x) &&
+    identical(x[[1L]], quote(`<-`)) && identical(x[[2L]], as.name("read_cell_score")) &&
+    is.call(x[[3L]]) && identical(x[[3L]][[1L]], as.name("function")), logical(1L)))
+  stopifnot(length(reader_at) == 1L)
   if (old) {
     a <- b[[at("alpha_if")]][[3L]]
     stopifnot(identical(a[[2L]], as.pairlist(alist(cid = , obs_rec = NULL))))
@@ -55,7 +59,7 @@ d92_core <- function(kind, old = FALSE, reads = NULL) {
     b[[length(b) - 1L]][[3L]] <- db
   }
   if (!is.null(reads)) {
-    r <- b[[at("read_cell_score")]][[3L]]
+    r <- b[[reader_at]][[3L]]
     rb <- as.list(r[[3L]])
     last <- rb[[length(rb)]]
     rb[[length(rb)]] <- substitute({
@@ -69,7 +73,7 @@ d92_core <- function(kind, old = FALSE, reads = NULL) {
       if (exists("xi_alpha_imp", envir = parent.env(environment()), inherits = FALSE))
         d92_reads$detailed <- c(d92_reads$detailed, cid)
     })), rb[-1L]))
-    b[[at("read_cell_score")]][[3L]] <- r
+    b[[reader_at]][[3L]] <- r
     environment(fn) <- list2env(list(d92_reads = reads), parent = environment(fn))
   }
   body(fn) <- as.call(b)
@@ -88,7 +92,9 @@ d92_run <- function(fit, kind, rows, old = FALSE, details = TRUE, scale = "frame
 
 d92_fit <- function(case, formula = ~x + z) {
   cd <- cpt_case_data(case)
-  ov <- utils::modifyList(cd$cs$args, list(est_method = "dr", xformla = formula))
+  # This legacy detailed-read contract predates the separate score cache.
+  ov <- utils::modifyList(cd$cs$args, list(est_method = "dr", xformla = formula,
+    outcome_pooling = "pooled"))
   state <- cpt_state
   environment(state) <- list2env(list(chained_conditional_did_pretest =
     aug_ns("chained_conditional_did_pretest")), parent = environment(state))
@@ -168,7 +174,7 @@ testthat::test_that("D92 retains conditional processes, fixed signs and existing
   for (case in c("B2", "B3")) {
     cd <- cpt_case_data(case)
     signs <- cpt_signs(cd$fx$unit_rademacher_signs)[seq_len(9L), , drop = FALSE]
-    ov <- utils::modifyList(cd$cs$args, list(est_method = "dr"))
+    ov <- utils::modifyList(cd$cs$args, list(est_method = "dr", outcome_pooling = "pooled"))
     seed <- get0(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
     fast <- fixed(cd$data, ov, signs)
     old <- local({

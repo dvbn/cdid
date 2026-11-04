@@ -166,9 +166,10 @@ d92_expect_parity <- function(a, b, info = NULL) {
 }
 
 d92_run_public <- function(d, chunk = 5L, ns = api, ...) {
+  # The shared/global coefficient and beta-only checks retain their pooled model.
   ns$att_gt(
     yname = "y", tname = "time", idname = "id", gname = "G", data = d,
-    bstrap = FALSE, cband = FALSE, control = list(chunk_rows = chunk), ...
+    bstrap = FALSE, cband = FALSE, outcome_pooling = "pooled", control = list(chunk_rows = chunk), ...
   )
 }
 

@@ -105,7 +105,8 @@ testthat::test_that("att_gt adds selection_est_method and imputation_pooling as 
   testthat::expect_identical(f$imputation_pooling, "separate")
   testthat::expect_identical(f$est_method, "dr")
   testthat::expect_identical(f$selection, "none")
-  testthat::expect_identical(names(f)[length(f)], "control")
+  testthat::expect_identical(utils::tail(names(f), 2L), c("control", "outcome_pooling"))
+  testthat::expect_identical(f$outcome_pooling, "separate")
 })
 
 testthat::test_that("ordinary mode neither evaluates nor forwards either new chained-only argument", {
