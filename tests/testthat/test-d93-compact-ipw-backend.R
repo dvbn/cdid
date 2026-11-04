@@ -1025,3 +1025,106 @@ test_that("complete pair summary reuse preserves raw chunk-order masses, fingerp
     expect_identical(b$accounting$work_ops_bound, old$accounting$work_ops_bound)
   }
 })
+
+test_that("raw replay plans extract dispatch metadata once inside the original workspace reservation", {
+  sim <- make_d93_compact_ipw_test_panel(n_units = 60L, missing_mode = "partial")
+  ctrl <- make_d93_test_pipeline_control(max_chunk_rows = 7L)
+  po <- construct_ipw_panel_owner(sim$data, "id", "time", "y", "g", ctrl$owner_control)
+  fo <- construct_ipw_frame_owner(po, sim$unit_id,
+    cbind(`(Intercept)` = 1, x1 = sim$unit_x1), sim$unit_w, ctrl$owner_control, frame_g = sim$unit_g)
+  catalog <- build_owner_comparison_catalog(po, targets = c(2, 3), anticipation = 0L,
+    control_group = "notyettreated", conventions = "D10_D13_admissible_frame", control = ctrl$owner_control,
+    catalog_bounds = ctrl$catalog_bounds, frame_owner = fo, build_design = TRUE,
+    pt_assumption = "all", pt_start = po$all_times[1L])
+  registry <- build_ipw_raw_backend_registry(catalog, fo, catalog$design,
+    owner_control = ctrl$owner_control, fitted_control = ctrl$fitted_control, point_control = ctrl$point_control,
+    glm_control = ctrl$glm_control, class_bounds = ctrl$class_bounds,
+    weighting = "identity", reduce_structural_redundancy = FALSE)
+  b <- registry$raw_ipw
+  links <- rev(seq_along(b$links))[seq.int(1L, length(b$links), by = 2L)]
+  calls <- 0L
+  spy <- new.env(parent = environment(ipw_raw_if_plan))
+  spy$ipw_raw_if_metadata <- function(...) {
+    calls <<- calls + 1L
+    ipw_raw_if_metadata(...)
+  }
+  planner <- ipw_raw_if_plan; environment(planner) <- spy
+  evaluator <- evaluate_ipw_raw_if_chunk; environment(evaluator) <- spy
+  plan <- planner(b, links, 7L)
+  expect_identical(calls, 1L)
+  expect_false(is.null(plan$replay_index))
+  # Independent table invariant: both active pair order and each pair's support
+  # order agree with the original backend descriptors, including a link subset.
+  expect_identical(plan$replay_index$pair_cohorts, lapply(plan$pids, function(pid) {
+    specs <- b$support_specs[plan$sids]
+    vapply(Filter(function(s) s$pair_id == pid, specs), `[[`, integer(1L), "cohort")
+  }))
+  expect_identical(plan$replay_index$treatment_pair_pos,
+    vapply(b$treatment_specs[plan$tids], function(s) match(s$pair_id, plan$pids), integer(1L)))
+  expect_identical(plan$replay_index$nuisance_ids,
+    vapply(b$treatment_specs[plan$tids], `[[`, integer(1L), "nuisance_idx"))
+  for (rows in list(7:1, 58:60)) {
+    indexed <- evaluator(b, rows, links, plan = plan)
+    expect_identical(calls, 1L)
+    direct <- evaluate_ipw_raw_if_chunk(b, rows, links, details = TRUE)
+    expect_equal(indexed$phi, direct$phi, tolerance = 1e-12)
+    expect_identical(indexed$id, direct$id)
+    expect_identical(indexed$link_ids, direct$link_ids)
+  }
+  bad <- plan
+  bad$replay_index$pair_cohorts[[1L]][1L] <- bad$replay_index$pair_cohorts[[1L]][1L] + 1L
+  expect_error(evaluator(b, 1:7, links, plan = bad), class = "cdid_ipw_raw_backend_integrity_error")
+  expect_error(evaluator(b, 1:7, rev(links), plan = plan), class = "cdid_ipw_raw_backend_integrity_error")
+
+  # The exact extra native-counted payload is funded inside the old scratch,
+  # including the funded_entries field itself. An external consumer may fill
+  # every remaining entry without increasing the original simultaneous peak.
+  old <- plan; old$replay_index <- NULL; old$funded_entries <- NULL; old$ref <- NULL
+  old$entries <- unname(cp04_payload(old)["entries"])
+  expect_identical(plan$entries - plan$funded_entries, old$entries)
+  expect_identical(plan$pre, ipw_raw_if_budget(b, 7L, links))
+  S <- length(plan$sids); P <- length(plan$pids); T <- length(plan$tids); L <- length(links)
+  metadata <- 16 * (S + T + L + b$p + 16)
+  expect_lte(plan$funded_entries + 7 * S + 4 * P + 4 * T + 256 + 2 * L + 64, metadata)
+  expect_lte(plan$funded_entries + 4 * (S + T + L + b$p) + 128, metadata)
+  base_retained <- sum(c(b$accounting$owned_entries, b$accounting$borrowed_entries, old$entries))
+  old_peak <- base_retained + old$pre$output + old$pre$scratch
+  external <- b$control$max_matrix_entries - old_peak
+  expect_equal(external + b$accounting$owned_entries + b$accounting$borrowed_entries +
+    plan$entries - plan$funded_entries + plan$pre$output + plan$pre$scratch,
+    b$control$max_matrix_entries)
+  # Exact matrix/work caps still admit the index because it spends the old
+  # reservation; neither cap grows and neither row partition changes.
+  for (cap in c("max_matrix_entries", "max_work_ops")) {
+    pressure <- b
+    pressure$control[[cap]] <- if (cap == "max_matrix_entries") old_peak else old$pre$work
+    pressure <- ipw_owner_seal(pressure, "ipw_raw_backend")
+    before <- calls
+    indexed <- planner(pressure, links, 7L)
+    expect_false(is.null(indexed$replay_index))
+    expect_identical(calls, before + 1L)
+    actual <- evaluator(pressure, 7:1, links, plan = indexed)
+    expect_identical(calls, before + 1L)
+    expect_equal(actual$phi, evaluate_ipw_raw_if_chunk(b, 7:1, links)$phi, tolerance = 1e-12)
+  }
+  # The extra retention cap can independently decline, before extracting any
+  # metadata. The original plan shape and one-extraction chunk remain valid.
+  pressure <- b; pressure$control$max_retained_entries <- base_retained
+  pressure <- ipw_owner_seal(pressure, "ipw_raw_backend")
+  before <- calls
+  plain <- planner(pressure, links, 7L)
+  expect_null(plain$replay_index); expect_null(plain$funded_entries)
+  expect_identical(calls, before)
+  actual <- evaluator(pressure, 7:1, links, plan = plain)
+  expect_identical(calls, before + 1L)
+  expect_equal(actual$phi, evaluate_ipw_raw_if_chunk(b, 7:1, links)$phi, tolerance = 1e-12)
+  # One small request cannot fund this conservative construction inventory.
+  # Declining the map preserves the original preflight and direct behavior.
+  before <- calls
+  small <- planner(b, links[1L], 7L)
+  expect_null(small$replay_index); expect_null(small$funded_entries)
+  expect_identical(calls, before)
+  expect_equal(evaluator(b, 58:60, links[1L], plan = small)$phi,
+    evaluate_ipw_raw_if_chunk(b, 58:60, links[1L])$phi, tolerance = 1e-12)
+  expect_identical(calls, before + 1L)
+})
