@@ -137,7 +137,8 @@ testthat::test_that("att_gt signature and chained-only formals include selection
   testthat::expect_identical(eval(f$selection), "none")
   testthat::expect_identical(eval(f$selection_model), "pair_logit")
   testthat::expect_identical(eval(f$selection_pooling), "separate")
-  testthat::expect_identical(names(f)[length(f)], "control")
+  testthat::expect_identical(tail(names(f), 2L), c("control", "outcome_pooling"))
+  testthat::expect_identical(eval(f$outcome_pooling), "separate")
   testthat::expect_null(f$control)
 })
 
