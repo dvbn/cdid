@@ -4,6 +4,7 @@
 * Apply the same outcome choice to observation-weighted, imputed and augmented changes. `selection_pooling` continues to control observation probabilities; `imputation_pooling` continues to control actual-change imputation. Neither is changed by `outcome_pooling`.
 * Carry comparison-specific regression uncertainty through the original-unit influence functions, aggregation and conditional pretrend test. Separate regressions retain prediction-preserving alias handling and report insufficient control support without switching to pooling.
 * Reuse common regression calculations on eligible complete panels for separate OR and DR, preserving comparison-specific coefficients and original-unit inference.
+* Speed up incomplete-panel regression and missing-outcome inference by reusing pair support and shared influence contributions within the existing workspace limits.
 * Update help and the practical guide to explain the two outcome specifications. Historical article outputs retain their recorded versions and explicitly request the pooled specification where used.
 
 # cdid 1.1.0.1
