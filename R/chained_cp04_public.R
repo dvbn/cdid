@@ -316,6 +316,7 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
   list(cp04 = backend, cp04_reader = reader, cp04_aux = aux, cp04_aux_index = aux_index,
     cp04_aux_errors = aux_errors, point_links = points[seq_len(M)], cp04_points = points,
     cp04_construction = construction, cp04_work_accounting = work_accounting,
+    cp04_memory_accounting = cp04_registry_memory_accounting(retained_pipeline_entries, reader, backend),
     nuisance_keys = if (is.null(backend)) character() else
     if (inherits(backend, "cdid_augmented_backend")) augmented_public_nuisance_keys(backend) else
     if (inherits(backend, "cdid_imputation_backend")) imputation_public_nuisance_keys(backend) else
@@ -336,6 +337,51 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
         if (length(backend$selections)) paste0("cp04:", backend$universe, ":selection:", seq_along(backend$selections))) else
       paste0("cp04:", backend$universe, ":selection:", seq_along(backend$selections)),
     nuisance_views = list(), fitted_views = list())
+}
+
+# The static baseline OR/DR adapter embeds X=max(0,E0-O) in borrowed_entries,
+# where E0 is this registry's pipeline prefix and O the reader's borrowed owners.
+# Bind that exact lineage once. Standalone CP04 budgets never use this record.
+cp04_registry_memory_accounting <- function(prefix, reader, backend) {
+  if (is.null(backend) || !inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline")) ||
+      !is.null(backend$reference_ref)) return(NULL)
+  if (inherits(backend, "cdid_or_baseline")) validate_or_baseline_backend(backend) else validate_dr_baseline_backend(backend)
+  prefix <- ipw_owner_int_bound(prefix, "registry retained pipeline prefix", min_val = 0)
+  validate_cp04_reader(reader)
+  acc <- backend$accounting
+  external <- ipw_owner_int_bound(acc$retained_external_entries, "backend retained external prefix", min_val = 0)
+  expected <- max(0, prefix - reader$accounting$borrowed_owner_entries)
+  if (!identical(backend$reader_ref, reader$ref) || external != expected ||
+      acc$borrowed_entries != ipw_owner_safe_sum(c(reader$accounting$owned_entries,
+        reader$accounting$borrowed_owner_entries, external)))
+    cp04_abort("Registry memory prefix differs from the fitted baseline backend's source reservation.", "integrity")
+  if (external == 0) return(NULL)
+  cp04_budget(backend$control, c(acc$owned_entries, acc$borrowed_entries),
+    512, 0, 512, "registry memory-prefix metadata")
+  ipw_owner_seal(list(kind = "cp04_registry_memory_prefix", backend_ref = backend$ref,
+    reader_ref = reader$ref, pipeline_prefix_entries = prefix, embedded_external_entries = external),
+    "cp04_registry_memory_prefix")
+}
+
+# Only source call sites whose retained argument extends this registry's E0
+# invoke this helper. Remove exactly recorded X; all backend, reader and owner
+# charges remain. A numerically equal arbitrary caller reservation grants no
+# reuse, and the standalone preflight/stream APIs are unchanged.
+cp04_registry_retained_entries <- function(registry, retained) {
+  retained <- ipw_owner_int_bound(retained, "pipeline retained entries", min_val = 0)
+  rec <- registry$cp04_memory_accounting
+  if (is.null(rec)) return(retained)
+  backend <- registry$cp04; reader <- registry$cp04_reader
+  if (!ipw_owner_seal_ok(rec, "cp04_registry_memory_prefix") ||
+      !identical(rec$kind, "cp04_registry_memory_prefix") || !is.list(backend) || !is.list(reader) ||
+      !identical(backend$ref, rec$backend_ref) || !identical(reader$ref, rec$reader_ref) ||
+      !identical(backend$reader_ref, reader$ref))
+    cp04_abort("Pipeline retained-prefix composition requires its same sealed registry backend and reader.", "integrity")
+  if (inherits(backend, "cdid_or_baseline")) validate_or_baseline_backend(backend) else validate_dr_baseline_backend(backend)
+  if (backend$accounting$retained_external_entries != rec$embedded_external_entries ||
+      retained < rec$pipeline_prefix_entries)
+    cp04_abort("Pipeline retained reservation does not extend its recorded registry prefix.", "integrity")
+  retained - rec$embedded_external_entries
 }
 
 # ---------------------------------------------------------------------------
