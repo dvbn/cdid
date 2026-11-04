@@ -1,4 +1,3 @@
-# ALL TESTS UNRUN in the implementation workspace: execution is prohibited.
 # Use the installed package namespace; no route fixtures or extra dependencies.
 outcome_blocks_private <- function(name) getFromNamespace(name, "cdid")
 
@@ -94,7 +93,7 @@ outcome_blocks_alias_case <- function(duplicate = FALSE, failing = FALSE) {
       list(name = "second", support_ids = 1L, L = 1)), links)
 }
 
-# UNRUN: separate fits versus independent per-block WLS, scales and full N.
+# separate fits versus independent per-block WLS, scales and full N.
 testthat::test_that("separate blocks retain heterogeneous control slopes and normalized operators", {
   case <- outcome_blocks_heterogeneous(); fit <- outcome_blocks_fit(case, "separate")
   block_fit <- outcome_blocks_private("or_outcome_block_fit")
@@ -125,7 +124,7 @@ testthat::test_that("separate blocks retain heterogeneous control slopes and nor
   testthat::expect_equal(block_fit(twice, 1)$mass, block_fit(fit, 1)$mass / 2, tolerance = 1e-10)
 })
 
-# UNRUN: independently assembled pooled joint fit and exact old-helper result.
+# independently assembled pooled joint fit and exact old-helper result.
 testthat::test_that("pooled mode delegates the unchanged joint fit", {
   case <- outcome_blocks_heterogeneous(); fit <- outcome_blocks_fit(case, "pooled")
   ref <- outcome_blocks_reference(case, 1:2)
@@ -144,7 +143,7 @@ testthat::test_that("pooled mode delegates the unchanged joint fit", {
   testthat::expect_equal(f$alpha, ref$coefficients[2L], tolerance = 1e-10)
 })
 
-# UNRUN: multiple retained coordinates, matrix RHS and a non-leading intercept.
+# multiple retained coordinates, matrix RHS and a non-leading intercept.
 testthat::test_that("block accessors preserve recipe order and multi-column operators", {
   recipe <- outcome_blocks_private("or_pooled_outcome_recipe")(
     c("x", "(Intercept)", "v"), TRUE, c("v", "x"))
@@ -182,7 +181,7 @@ testthat::test_that("block accessors preserve recipe order and multi-column oper
   }
 })
 
-# UNRUN: no-intercept separate and pooled numeric references and Gram scaling.
+# no-intercept separate and pooled numeric references and Gram scaling.
 testthat::test_that("no-intercept recipes keep uncentered fits and add no alpha", {
   case <- outcome_blocks_heterogeneous(FALSE)
   block_fit <- outcome_blocks_private("or_outcome_block_fit")
@@ -204,7 +203,7 @@ testthat::test_that("no-intercept recipes keep uncentered fits and add no alpha"
   }
 })
 
-# UNRUN: intercept-only keeps zero-width slopes and the existing mean solve.
+# intercept-only keeps zero-width slopes and the existing mean solve.
 testthat::test_that("intercept-only fits preserve means and zero-width operators", {
   recipe <- outcome_blocks_recipe(TRUE, character())
   rows <- list(outcome_blocks_rows(recipe, numeric(), c(2, 4, 8), c(1, 2, 1), scale = 3),
@@ -230,7 +229,7 @@ testthat::test_that("intercept-only fits preserve means and zero-width operators
   }
 })
 
-# UNRUN: modeled-calendar duration, rather than numeric date-label gaps.
+# modeled-calendar duration, rather than numeric date-label gaps.
 testthat::test_that("calendar durations scale the fitted design and predictions", {
   recipe <- outcome_blocks_recipe(); x <- c(-2, -1, 1, 3)
   pair <- list(s_calendar_index = 2L, t_calendar_index = 5L,
@@ -252,7 +251,7 @@ testthat::test_that("calendar durations scale the fitted design and predictions"
     tolerance = 1e-10)
 })
 
-# UNRUN: local aliases, original support/link IDs and required row domains.
+# local aliases, original support/link IDs and required row domains.
 testthat::test_that("separate alias checks use only local controls and consuming treated rows", {
   case <- outcome_blocks_alias_case(); fit <- outcome_blocks_fit(case, "separate")
   testthat::expect_identical(fit$group_map[[1L]]$support_ids, c(2L, 4L))
@@ -279,7 +278,7 @@ testthat::test_that("separate alias checks use only local controls and consuming
   testthat::expect_equal(fit$groups[[2L]]$basis$block_constants[1L, 1L], 4, tolerance = 1e-10)
 })
 
-# UNRUN: a later link of original block 2 must not be lost in local remapping.
+# a later link of original block 2 must not be lost in local remapping.
 testthat::test_that("every consuming prediction domain must preserve a local exact alias", {
   case <- outcome_blocks_alias_case(failing = TRUE)
   testthat::expect_error(outcome_blocks_fit(case, "separate"),
@@ -287,7 +286,7 @@ testthat::test_that("every consuming prediction domain must preserve a local exa
   testthat::expect_identical(case$visits$ids, c(2L, 4L, 1L, 5L, 6L))
 })
 
-# UNRUN: link duplication changes the mapping only, not fits or replay work.
+# link duplication changes the mapping only, not fits or replay work.
 testthat::test_that("duplicated consuming links deterministically reuse the caller block", {
   one <- outcome_blocks_alias_case(); many <- outcome_blocks_alias_case(duplicate = TRUE)
   fit_one <- outcome_blocks_fit(one, "separate"); fit_many <- outcome_blocks_fit(many, "separate")
@@ -299,7 +298,7 @@ testthat::test_that("duplicated consuming links deterministically reuse the call
   testthat::expect_identical(fit_many$retained, fit_one$retained)
 })
 
-# UNRUN: equal fitted numbers are insufficient to merge distinct source fits.
+# equal fitted numbers are insufficient to merge distinct source fits.
 testthat::test_that("distinct caller blocks remain separate when their fitted numbers coincide", {
   recipe <- outcome_blocks_recipe(); r <- outcome_blocks_rows(recipe, c(-1, 0, 2), c(1, 3, 7))
   case <- outcome_blocks_case(recipe, list(r, r),
@@ -311,7 +310,7 @@ testthat::test_that("distinct caller blocks remain separate when their fitted nu
   testthat::expect_equal(fit$groups[[1L]]$beta, fit$groups[[2L]]$beta, tolerance = 1e-10)
 })
 
-# UNRUN: no-intercept exact aliases keep a zero constant and refuse violations.
+# no-intercept exact aliases keep a zero constant and refuse violations.
 testthat::test_that("no-intercept local aliases require prediction support without a constant", {
   recipe <- outcome_blocks_recipe(FALSE, c("x", "alias")); x <- c(-2, -1, 1, 2)
   control <- outcome_blocks_rows(recipe, cbind(x, 2 * x), 3 * x, L = 2)
@@ -331,7 +330,7 @@ testthat::test_that("no-intercept local aliases require prediction support witho
     "required treated predictions", class = "cdid_or_wls_rank_error")
 })
 
-# UNRUN: block-local dimensions may differ, including a zero-slope mean fit.
+# block-local dimensions may differ, including a zero-slope mean fit.
 testthat::test_that("local retained dimensions can differ across separate blocks", {
   recipe <- outcome_blocks_recipe()
   rows <- list(outcome_blocks_rows(recipe, c(2, 2, 2), c(1, 3, 5)),
@@ -348,7 +347,7 @@ testthat::test_that("local retained dimensions can differ across separate blocks
   testthat::expect_identical(fit$retained[[2L]]$operator_dimension, c(1L, 1L))
 })
 
-# UNRUN: retain existing rank/roundoff policy, without a new residual-df rule.
+# retain existing rank/roundoff policy, without a new residual-df rule.
 testthat::test_that("exactly determined fits remain allowed and near aliases remain subject to rank checks", {
   recipe <- outcome_blocks_recipe()
   rows <- list(outcome_blocks_rows(recipe, c(0, 1), c(2, 5)))
@@ -366,7 +365,7 @@ testthat::test_that("exactly determined fits remain allowed and near aliases rem
     "no retained columns", class = "cdid_or_wls_rank_error")
 })
 
-# UNRUN: metadata preflight describes dimensions without fitting or scanning.
+# metadata preflight describes dimensions without fitting or scanning.
 testthat::test_that("preflight retains original IDs and rejects invalid local-map inputs", {
   case <- outcome_blocks_alias_case()
   layout <- outcome_blocks_private("or_outcome_group_layout")
