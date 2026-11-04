@@ -219,7 +219,7 @@ chained_full_if_plan <- function(backend, links, B) {
     return(separate_complete_native_plan(backend, links, B))
   if (inherits(backend, "cdid_dr_baseline") && dr_separate(backend) &&
       !isTRUE(backend$uses_selection_models) && is.null(backend$reference_ref) &&
-      is.null(backend$separate_complete)) return(dr_separate_baseline_replay_plan(backend, links, B))
+      is.null(backend$separate_complete)) return(dr_separate_sparse_replay_plan(backend, links, B))
   if (inherits(backend, "cdid_or_baseline") && is.null(backend$complete_support) &&
       is.null(backend$separate_complete) && is.null(backend$reference_ref))
     return(or_sparse_native_plan(backend, links, B))

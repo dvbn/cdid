@@ -3,8 +3,8 @@
 * Add `outcome_pooling` to chained `att_gt()` and `conditional_did_pretest()`. The default, `"separate"`, fits the untreated outcome-change regression separately for each distinct comparison. Identical comparisons reuse their fitted regression. This changes the default working outcome model for treatment OR and DR and can change estimates and inference. Set `outcome_pooling = "pooled"` to retain the shared-slope specification of version 1.1.0.1.
 * Apply the same outcome choice to observation-weighted, imputed and augmented changes. `selection_pooling` continues to control observation probabilities; `imputation_pooling` continues to control actual-change imputation. Neither is changed by `outcome_pooling`.
 * Carry comparison-specific regression uncertainty through the original-unit influence functions, aggregation and conditional pretrend test. Separate regressions retain prediction-preserving alias handling and report insufficient control support without switching to pooling.
-* Reuse common regression calculations on eligible complete panels for separate OR and DR, preserving comparison-specific coefficients and original-unit inference.
-* Speed up incomplete-panel regression and missing-outcome inference by reusing pair support and shared influence contributions within the existing workspace limits.
+* Batch eligible complete and incomplete panel calculations for IPW, OR and DR, reusing fixed operators and sparse data reads while preserving comparison-specific coefficients and original-unit inference.
+* Account for workspace by fitting, covariance and reporting phase, retaining configured limits and releasing temporary inference buffers before later phases.
 * Update help and the practical guide to explain the two outcome specifications. Historical article outputs retain their recorded versions and explicitly request the pooled specification where used.
 
 # cdid 1.1.0.1

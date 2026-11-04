@@ -82,6 +82,9 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   if (!details && !isTRUE(backend$uses_selection_models) && !is.null(backend$separate_complete))
     return(if (is.null(plan)) dr_separate_complete_if(backend, reader, rows, links, scale, pre) else
       separate_complete_native_if(backend, reader, rows, links, scale, pre, plan))
+  if (!details && !isTRUE(backend$uses_selection_models) && is.null(backend$reference_ref) &&
+      !is.null(plan) && !identical(plan$kind, "dr_separate_baseline_replay_plan"))
+    return(dr_separate_sparse_if(backend, reader, rows, links, scale, pre, plan))
   B <- length(rows); N <- st$N; conditional <- isTRUE(backend$uses_selection_models)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   ref <- chained_backend_reference(backend); ci <- st$cohort_index[rows]

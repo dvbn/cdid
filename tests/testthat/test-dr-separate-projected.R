@@ -152,7 +152,7 @@ testthat::test_that("frozen separate DR replay operators match V8 and detailed I
     fit <- a$fit; links <- rev(seq_along(fit$links)); rows <- rev(seq_len(a$N))
     frozen <- list(groups = fit$outcome_groups, regressions = fit$regressions,
       treatments = fit$treatments, reader_ref = fit$reader_ref)
-    plan <- dsp("chained_full_if_plan")(fit, links, 50L)
+    plan <- dsp("dr_separate_baseline_replay_plan")(fit, links, 50L)
     testthat::expect_true(is.list(plan))
     testthat::expect_lte(unname(dsp("cp04_payload")(plan)["entries"]), plan$entries)
     testthat::expect_lte(plan$entries, plan$retained_bound)
@@ -196,7 +196,7 @@ testthat::test_that("frozen separate DR replay operators match V8 and detailed I
 testthat::test_that("one compact plan serves duplicate consumers and the admitted short tail", {
   a <- dsp_case(chunk_rows = 50L, copies = 40L, long_ids = TRUE)
   fit <- a$fit; links <- rev(seq_along(fit$links))
-  plan <- dsp("chained_full_if_plan")(fit, links, 16L)
+  plan <- dsp("dr_separate_baseline_replay_plan")(fit, links, 16L)
   testthat::expect_true(is.list(plan))
   testthat::expect_equal(plan$min_B, 2)
   testthat::expect_lte(plan$reservation, 16 * 2L * length(links))
@@ -215,7 +215,7 @@ testthat::test_that("one compact plan serves duplicate consumers and the admitte
     direct[rows, ] <- old$phi
   }
   subset <- seq.int(1L, length(links), by = 2L)
-  partial_plan <- dsp("chained_full_if_plan")(fit, links[subset], 50L)
+  partial_plan <- dsp("dr_separate_baseline_replay_plan")(fit, links[subset], 50L)
   testthat::expect_true(is.list(partial_plan))
   partial <- dsp("chained_full_if_chunk")(fit, rev(seq_len(a$N)), links[subset], "core", partial_plan)
   testthat::expect_equal(unname(partial$phi), direct[rev(seq_len(a$N)), subset, drop = FALSE], tolerance = 1e-10)
@@ -357,4 +357,194 @@ testthat::test_that("static incomplete OR and DR phase stores preserve original-
     testthat::expect_identical(list(ref = fit$ref, reader_ref = fit$reader_ref, regressions = fit$regressions,
       outcome_groups = fit$outcome_groups, treatments = fit$treatments), frozen)
   }
+})
+
+
+# V28 exact original V11 planned transport, independent of the new C worker.
+dsp28_native <- function(a, plan, rows, data = plan$data, op = plan$v11, y = NULL, cap = NULL) {
+  fit <- a$fit; reader <- a$reader; st <- reader$state
+  panel <- get("panel_owner", reader$panel_ref, inherits = FALSE)
+  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+  if (is.null(y)) y <- panel$observations$y
+  if (is.null(cap)) cap <- dsp("dr_separate_sparse_live")(length(rows), length(plan$sids),
+    length(plan$dates), length(plan$tids), length(plan$links))
+  .Call(dsp("or_baseline_native_kernel")("C_gmm_dr_separate_sparse_if"), y,
+    panel$postings$post_a_index, panel$postings$post_obs_index, as.integer(rows), st$cohort_index,
+    st$a_index, st$w, plan$bounds, frame$Z_a, data, op, as.double(cap))
+}
+
+testthat::test_that("native projected separate DR matches frozen V11, local bases and raw derivatives", {
+  for (args in list(list(), list(intercept = FALSE), list(slopes = FALSE), list(alias = TRUE))) {
+    a <- do.call(dsp_case, c(args, list(chunk_rows = 50L))); fit <- a$fit
+    links <- rev(seq_along(fit$links)); rows <- rev(seq_len(a$N))
+    old <- dsp("dr_separate_baseline_replay_plan")(fit, links, 50L)
+    plan <- dsp("chained_full_if_plan")(fit, links, 50L)
+    testthat::expect_identical(plan$kind, "dr_separate_sparse_plan")
+    testthat::expect_true(dsp("ipw_owner_seal_ok")(plan, "dr_separate_sparse_plan"))
+    # Actual borrowed identity, not merely equal coefficients or fitted weights.
+    for (field in c("or_adj", "or_center", "or_up", "eta", "prop_up"))
+      testthat::expect_true(dsp("gmm_sexp_aliases")(plan$v11[[field]],
+        get("dr_separate_baseline_replay_plan", plan$v11$ref, inherits = FALSE)[[field]]))
+    frozen <- list(groups = fit$outcome_groups, regressions = fit$regressions,
+      treatments = fit$treatments, state = a$reader$state)
+    direct <- dsp28_native(a, plan, rows)
+    testthat::expect_identical(direct$status[1L], 0L)
+    out <- dsp("chained_full_if_chunk")(fit, rows, links, "frame", plan)
+    ref <- dsp("chained_full_if_chunk")(fit, rows, links, "frame", old)
+    testthat::expect_equal(out, ref, tolerance = 1e-10)
+    testthat::expect_equal(unname(out$phi), direct$phi, tolerance = 1e-10)
+    testthat::expect_equal(out$phi, dsp_eval(a, rows, links, TRUE)$phi, tolerance = 1e-10)
+    testthat::expect_equal(dsp("chained_full_if_chunk")(fit, rows, links, "core", plan)$phi,
+      a$reader$state$lambda * out$phi, tolerance = 1e-10)
+    testthat::expect_equal(crossprod(out$phi) / a$N, crossprod(ref$phi) / a$N, tolerance = 1e-10)
+    testthat::expect_equal(out$phi[match(49:50, rows), ], ref$phi[match(49:50, rows), ], tolerance = 1e-10)
+    testthat::expect_identical(list(groups = fit$outcome_groups, regressions = fit$regressions,
+      treatments = fit$treatments, state = a$reader$state), frozen)
+    pre <- dsp("dr_baseline_if_budget")(fit, 50L, links, FALSE)
+    testthat::expect_lte(plan$entries, plan$retained_bound)
+    testthat::expect_gte(plan$reservation, plan$v11$reservation)
+    testthat::expect_lte(plan$reservation + dsp("dr_separate_sparse_inventory")(50L,
+      length(plan$sids), length(plan$dates), length(plan$tids), length(links), plan$metadata), pre$scratch)
+    if (!length(args)) {
+      numerical <- t(vapply(seq_len(a$N), function(i) {
+        direction <- rep(-1, a$N); direction[i] <- a$N - 1
+        (dsp_raw(a, 1 + 1e-6 * direction) - dsp_raw(a, 1 - 1e-6 * direction)) / 2e-6
+      }, numeric(length(links))))
+      testthat::expect_equal(unname(out$phi[match(seq_len(a$N), rows), ]),
+        numerical[, links, drop = FALSE], tolerance = 2e-6)
+      # Deliberately remove one actual rate contraction from the old operators.
+      no_rate <- plan$v11; no_rate$or_up[] <- 0; no_rate$prop_up[] <- 0
+      testthat::expect_gt(max(abs(dsp28_native(a, plan, rows, op = no_rate)$phi - direct$phi)), 1e-6)
+      # The centering channel is an ALL-F scalar, including both off-A units.
+      shifted <- plan$v11; shift <- seq_along(shifted$or_center) / 100
+      shifted$or_center <- shifted$or_center + shift
+      expected <- direct$phi
+      for (j in seq_along(links)) {
+        t <- match(fit$links[[links[j]]]$model, plan$tids)
+        expected[, j] <- expected[, j] + shift[t]
+      }
+      testthat::expect_equal(dsp28_native(a, plan, rows, op = shifted)$phi, expected, tolerance = 1e-10)
+      testthat::expect_gt(max(abs(expected[match(49:50, rows), ] - direct$phi[match(49:50, rows), ])), 1e-6)
+    }
+  }
+})
+
+testthat::test_that("projected native DR preserves finite-phi negative-logit and unused-coordinate contracts", {
+  a <- dsp_case(chunk_rows = 50L); fit <- a$fit; links <- seq_along(fit$links); rows <- seq_len(a$N)
+  # A deliberate frozen-operator numeric witness, NOT another fitted model:
+  # raw eta overflows negatively on observed rows, while p=odds=0 and phi is
+  # finite under the CURRENT V11 projected arithmetic.
+  changed <- fit; changed$ref <- NULL
+  for (j in seq_along(changed$treatments)) changed$treatments[[j]]$coefficients[] <- -.Machine$double.xmax
+  changed <- dsp("ipw_owner_seal")(changed, "dr_baseline_backend")
+  b <- a; b$fit <- changed
+  old <- dsp("dr_separate_baseline_replay_plan")(changed, links, 50L)
+  plan <- dsp("chained_full_if_plan")(changed, links, 50L)
+  testthat::expect_identical(plan$kind, "dr_separate_sparse_plan")
+  frame <- get("frame_owner", a$reader$frame_ref, inherits = FALSE)
+  eta <- as.vector(frame$Z_a[, changed$treatment_recipe$index, drop = FALSE] %*% changed$treatments[[1L]]$coefficients)
+  testthat::expect_true(any(is.infinite(eta) & eta < 0))
+  ref <- dsp("chained_full_if_chunk")(changed, rows, links, "frame", old)
+  testthat::expect_true(all(is.finite(ref$phi)))
+  testthat::expect_equal(dsp("chained_full_if_chunk")(changed, rows, links, "frame", plan), ref, tolerance = 1e-10)
+  # Fields not consumed by ordinary V11 may not acquire new finite guards.
+  changed <- fit; changed$ref <- NULL
+  for (j in seq_along(changed$treatments)) {
+    changed$treatments[[j]]$partials$beta[c(1L, 3L, 4L), ] <- Inf
+    changed$treatments[[j]]$partials$upstream[3:4, ] <- Inf
+  }
+  changed <- dsp("ipw_owner_seal")(changed, "dr_baseline_backend")
+  old <- dsp("dr_separate_baseline_replay_plan")(changed, links, 50L)
+  plan <- dsp("chained_full_if_plan")(changed, links, 50L)
+  testthat::expect_identical(plan$kind, "dr_separate_sparse_plan")
+  ref <- dsp("chained_full_if_chunk")(changed, rows, links, "frame", old)
+  testthat::expect_true(all(is.finite(ref$phi)))
+  testthat::expect_equal(dsp("chained_full_if_chunk")(changed, rows, links, "frame", plan), ref, tolerance = 1e-10)
+  # p=0 returns its zero outcome projection before touching those operators.
+  b <- dsp_case(chunk_rows = 50L, slopes = FALSE); links <- seq_along(b$fit$links)
+  old <- dsp("dr_separate_baseline_replay_plan")(b$fit, links, 50L); old$ref <- NULL
+  old$or_center[] <- Inf; old$or_up[] <- Inf
+  old <- dsp("ipw_owner_seal")(old, "dr_separate_baseline_replay_plan")
+  plan <- dsp("dr_separate_sparse_plan")(b$fit, links, 50L, old)
+  testthat::expect_identical(plan$kind, "dr_separate_sparse_plan")
+  ref <- dsp("chained_full_if_chunk")(b$fit, rows, links, "frame", old)
+  testthat::expect_true(all(is.finite(ref$phi)))
+  testthat::expect_equal(dsp("chained_full_if_chunk")(b$fit, rows, links, "frame", plan), ref, tolerance = 1e-10)
+})
+
+testthat::test_that("projected native DR covers subsets, short tails and exact source/capacity refusals", {
+  a <- dsp_case(chunk_rows = 50L, copies = 40L, long_ids = TRUE); fit <- a$fit
+  links <- rev(seq_along(fit$links)); plan <- dsp("chained_full_if_plan")(fit, links, 16L)
+  testthat::expect_identical(plan$kind, "dr_separate_sparse_plan")
+  testthat::expect_equal(plan$min_B, 2)
+  testthat::expect_lte(length(plan$tids), 9L); testthat::expect_lte(length(plan$gids), 9L)
+  testthat::expect_false(any(c("backend_snapshot", "reader_snapshot", "fit", "labels") %in% names(plan)))
+  full <- matrix(0, a$N, length(links))
+  for (first in seq.int(1L, a$N, by = 16L)) {
+    rows <- seq.int(first, min(a$N, first + 15L))
+    out <- dsp("chained_full_if_chunk")(fit, rows, links, "core", plan)
+    old <- dsp("chained_full_if_chunk")(fit, rows, links, "core", plan$v11)
+    testthat::expect_equal(out, old, tolerance = 1e-10); full[rows, ] <- out$phi
+  }
+  sub <- seq.int(1L, length(links), by = 3L)
+  partial <- dsp("chained_full_if_plan")(fit, links[sub], 50L)
+  testthat::expect_identical(partial$kind, "dr_separate_sparse_plan")
+  rows <- rev(seq_len(a$N))
+  testthat::expect_equal(unname(dsp("chained_full_if_chunk")(fit, rows, links[sub], "core", partial)$phi),
+    full[rows, sub, drop = FALSE], tolerance = 1e-10)
+  broken <- plan; broken$v11$or_adj[1L] <- broken$v11$or_adj[1L] + .1
+  testthat::expect_error(dsp("chained_full_if_chunk")(fit, 1:16, links, "core", broken),
+    class = "cdid_dr_baseline_integrity_error")
+  broken <- plan; broken$kind <- "bad-kind"
+  testthat::expect_error(dsp("chained_full_if_chunk")(fit, 1:16, links, "core", broken),
+    class = "cdid_dr_baseline_integrity_error")
+  testthat::expect_error(dsp("chained_full_if_chunk")(fit, 1:15, links, "core", plan),
+    class = "cdid_dr_baseline_integrity_error")
+  testthat::expect_error(dsp("chained_full_if_chunk")(fit, 1:16, rev(links), "core", plan),
+    class = "cdid_dr_baseline_integrity_error")
+  broken <- fit; broken$treatments[[1L]]$coefficients[1L] <- broken$treatments[[1L]]$coefficients[1L] + .1
+  testthat::expect_error(dsp("chained_full_if_chunk")(broken, 1:16, links, "core", plan),
+    class = "cdid_dr_baseline_integrity_error")
+  invalid <- plan$data; invalid$keep[1L] <- 0L
+  testthat::expect_error(dsp28_native(a, plan, 1:16, invalid), class = "cdid_gmm_bound_error")
+  testthat::expect_error(dsp28_native(a, plan, 1:16, cap = 16 * length(links) - 1), class = "cdid_gmm_bound_error")
+  # Source endpoint and raw-difference refusals retain precedence even p=0.
+  p0 <- dsp_case(chunk_rows = 50L, slopes = FALSE); ll <- seq_along(p0$fit$links)
+  p <- dsp("chained_full_if_plan")(p0$fit, ll, 50L)
+  testthat::expect_identical(p$kind, "dr_separate_sparse_plan")
+  panel <- get("panel_owner", p0$reader$panel_ref, inherits = FALSE)
+  y <- panel$observations$y; y[1L] <- Inf
+  testthat::expect_identical(dsp28_native(p0, p, 1:50, y = y)$status[1L], 2L)
+  s <- p0$fit$support_specs[[p$sids[1L]]]; st <- p0$reader$state
+  cohort_rows <- which(st$cohort_index == s$cohort)
+  observed <- which(!is.na(p0$Y[cohort_rows, s$pair$s_calendar_index]) & !is.na(p0$Y[cohort_rows, s$pair$t_calendar_index]))[1L]
+  row <- cohort_rows[observed]; ai <- st$a_index[row]
+  ix <- vapply(c(s$pair$s_calendar_index, s$pair$t_calendar_index), function(d) {
+    r <- seq.int(panel$postings$date_start[d], panel$postings$date_end[d])
+    panel$postings$post_obs_index[r[match(ai, panel$postings$post_a_index[r])]]
+  }, integer(1))
+  y <- panel$observations$y; y[ix] <- c(-.Machine$double.xmax, .Machine$double.xmax)
+  testthat::expect_identical(dsp28_native(p0, p, 1:50, y = y)$status[1L], 3L)
+  # Final-phi failure is still R's original cp04_numeric error and message.
+  bad <- p; bad$ref <- NULL; bad$v11 <- p$v11; bad$v11$ref <- NULL
+  bad$v11$eta[] <- NaN
+  bad$v11 <- dsp("ipw_owner_seal")(bad$v11, "dr_separate_baseline_replay_plan")
+  bad <- dsp("ipw_owner_seal")(bad, "dr_separate_sparse_plan")
+  err <- tryCatch(dsp("chained_full_if_chunk")(p0$fit, 1:50, ll, "frame", bad), error = identity)
+  testthat::expect_s3_class(err, "cdid_cp04_numeric_error")
+  testthat::expect_identical(conditionMessage(err), "Nonfinite complete separate DR original-unit IF.")
+  # Optional added lifetime cannot create a caller refusal. A source-bound
+  # inventory pressure probe returns the exact existing V11 plan instead.
+  v11 <- dsp("dr_separate_baseline_replay_plan")(fit, links, 16L)
+  original <- dsp("dr_separate_sparse_inventory")
+  pre <- dsp("dr_baseline_if_budget")(fit, 16L, links)
+  testthat::local_mocked_bindings(dr_separate_sparse_inventory = function(...) pre$scratch + 1,
+    .package = "cdid")
+  declined <- dsp("dr_separate_sparse_plan")(fit, links, 16L, v11)
+  testthat::expect_identical(declined, v11)
+  expected_declined <- full[1:16, , drop = FALSE]
+  dimnames(expected_declined) <- list(NULL,
+    vapply(fit$links[links], `[[`, character(1), "link_id"))
+  testthat::expect_equal(dsp("chained_full_if_chunk")(fit, 1:16, links, "core", declined)$phi,
+    expected_declined, tolerance = 1e-10)
 })

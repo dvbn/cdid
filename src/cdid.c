@@ -5417,7 +5417,289 @@ SEXP C_gmm_dr_sparse_assemble(SEXP up_s, SEXP or_s, SEXP direct_s, SEXP xi_s,
   UNPROTECT(nprot); return out_s;
 }
 
+/* V28 companion to the existing V11 projected separate-DR plan. There are
+   deliberately NO additional eta/probability/odds/Gamma/coordinate checks:
+   the original R final-phi guard remains after every model has run. */
+static SEXP dr28_field(SEXP op, int at, const char *name, int type, R_xlen_t length) {
+  static const char *fn = "C_gmm_dr_separate_sparse_if";
+  SEXP nm = Rf_getAttrib(op, R_NamesSymbol);
+  if (TYPEOF(op) != VECSXP || Rf_isObject(op) || XLENGTH(op) < 34 ||
+      TYPEOF(nm) != STRSXP || XLENGTH(nm) != XLENGTH(op) ||
+      STRING_ELT(nm, at) == NA_STRING || strcmp(CHAR(STRING_ELT(nm, at)), name) != 0)
+    cp08_malformed(0, fn, "V11 field layout differs from its issued plan");
+  SEXP x = VECTOR_ELT(op, at);
+  if (cp08_len(0, x, type, fn, name) != length) cp08_malformed(0, fn, "V11 field length differs");
+  return x;
+}
+
+static int dr28_start(double start, int count, R_xlen_t length) {
+  if (!R_FINITE(start) || start < 1 || start > INT_MAX || start != floor(start))
+    cp08_malformed(0, "C_gmm_dr_separate_sparse_if", "noninteger V11 offset");
+  sep14_span((int) start, count, length); return (int) start - 1;
+}
+
+static void dr28_positions(const double *x, R_xlen_t n, int upper) {
+  for (R_xlen_t i = 0; i < n; ++i) if (!R_FINITE(x[i]) || x[i] < 1 || x[i] > upper || x[i] != floor(x[i]))
+    cp08_malformed(0, "C_gmm_dr_separate_sparse_if", "V11 position outside its source index");
+}
+
+SEXP C_gmm_dr_separate_sparse_if(SEXP y_s, SEXP pa_s, SEXP po_s, SEXP rows_s,
+    SEXP ci_s, SEXP a_s, SEXP w_s, SEXP bounds_s, SEXP X_s, SEXP data_s, SEXP op_s, SEXP cap_s) {
+  static const char *fn = "C_gmm_dr_separate_sparse_if";
+  R_CheckUserInterrupt(); gmm_require_valid_arithmetic(0);
+  double cap = gmm_parse_max_entries(0, cap_s);
+  cp08_chunk_t g; cp08_chunk_args(0, fn, &g, rows_s, ci_s, a_s, w_s);
+  R_xlen_t ny = cp08_len(0, y_s, REALSXP, fn, "outcomes");
+  R_xlen_t npost = cp08_len(0, pa_s, INTSXP, fn, "posting A indices");
+  if (npost < 1 || npost > INT_MAX || cp08_len(0, po_s, INTSXP, fn, "posting outcomes") != npost)
+    cp08_malformed(0, fn, "empty, oversized or unequal postings");
+  int nd, nx, px, ns, ng, nt, pt, tmp;
+  sep14_matrix(bounds_s, INTSXP, 2, -1, "date bounds", &tmp, &nd);
+  sep14_matrix(X_s, REALSXP, -1, -1, "source design", &nx, &px);
+  if (nd < 1 || nd > INT_MAX / 2 || nx < 1 || px < 1 ||
+      TYPEOF(data_s) != VECSXP || Rf_isObject(data_s) || XLENGTH(data_s) != 13)
+    cp08_malformed(0, fn, "invalid sparse projected descriptor record");
+  SEXP ic_s = VECTOR_ELT(data_s, 0), su_s = VECTOR_ELT(data_s, 1), sp_s = VECTOR_ELT(data_s, 2);
+  SEXP bl_s = VECTOR_ELT(data_s, 3), bp_s = VECTOR_ELT(data_s, 4), keep_s = VECTOR_ELT(data_s, 5);
+  SEXP beta_s = VECTOR_ELT(data_s, 6), mean_s = VECTOR_ELT(data_s, 7), mb_s = VECTOR_ELT(data_s, 8);
+  SEXP tb_s = VECTOR_ELT(data_s, 9), means_s = VECTOR_ELT(data_s, 10), sel_s = VECTOR_ELT(data_s, 11);
+  SEXP tc_s = VECTOR_ELT(data_s, 12);
+  if (cp08_len(0, ic_s, INTSXP, fn, "intercept") != 1 ||
+      (INTEGER(ic_s)[0] != 0 && INTEGER(ic_s)[0] != 1)) cp08_malformed(0, fn, "invalid intercept flag");
+  int icpt = INTEGER(ic_s)[0];
+  sep14_matrix(su_s, INTSXP, 3, -1, "supports", &tmp, &ns);
+  sep14_matrix(sp_s, REALSXP, 3, ns, "support quantities", &tmp, &tmp);
+  sep14_matrix(bl_s, INTSXP, 2, -1, "local blocks", &tmp, &ng);
+  sep14_matrix(bp_s, REALSXP, 2, ng, "local block parameters", &tmp, &tmp);
+  R_xlen_t nt_x = cp08_len(0, mb_s, INTSXP, fn, "model local blocks");
+  R_xlen_t pt_x = cp08_len(0, tc_s, INTSXP, fn, "treatment columns");
+  R_xlen_t P = cp08_len(0, keep_s, INTSXP, fn, "local kept columns");
+  if (ns < 1 || ng < 1 || nt_x < 1 || nt_x > INT_MAX || pt_x < 1 || pt_x > INT_MAX ||
+      P > INT_MAX || (uint64_t) pt_x * nt_x > INT_MAX ||
+      cp08_len(0, beta_s, REALSXP, fn, "local coefficients") != P ||
+      cp08_len(0, mean_s, REALSXP, fn, "local mean design") != P)
+    cp08_malformed(0, fn, "invalid local coefficient/model dimensions");
+  nt = (int) nt_x; pt = (int) pt_x;
+  sep14_matrix(tb_s, REALSXP, pt, nt, "actual fitted treatment coefficients", &tmp, &tmp);
+  sep14_matrix(means_s, REALSXP, 4, nt, "model means and normalizers", &tmp, &tmp);
+  R_xlen_t M = cp08_len(0, sel_s, REALSXP, fn, "selection loadings");
+  if (M > INT_MAX) cp08_malformed(0, fn, "model support incidence exceeds integer capacity");
+  const int *sup = INTEGER(su_s), *bl = INTEGER(bl_s), *keep = INTEGER(keep_s), *mb = INTEGER(mb_s), *tc = INTEGER(tc_s);
+  const double *sp = REAL(sp_s), *bp = REAL(bp_s), *beta = REAL(beta_s), *mean = REAL(mean_s);
+  const double *tb = REAL(tb_s), *means = REAL(means_s), *sel = REAL(sel_s), *X = REAL(X_s), *y = REAL(y_s);
+  const int *old_p = INTEGER(dr28_field(op_s, 10, "p", INTSXP, ng));
+  const int *order = INTEGER(dr28_field(op_s, 11, "model_order", INTSXP, nt));
+  const double *block_start = REAL(dr28_field(op_s, 12, "block_start", REALSXP, ng));
+  const int *block_count = INTEGER(dr28_field(op_s, 13, "block_count", INTSXP, ng));
+  const double *control_start = REAL(dr28_field(op_s, 14, "control_start", REALSXP, ng));
+  const int *control_count = INTEGER(dr28_field(op_s, 15, "control_count", INTSXP, ng));
+  SEXP ctrl_s = VECTOR_ELT(op_s, 16), adj_s = VECTOR_ELT(op_s, 21), ou_s = VECTOR_ELT(op_s, 24);
+  R_xlen_t I = cp08_len(0, ctrl_s, REALSXP, fn, "control_pos");
+  R_xlen_t R = cp08_len(0, adj_s, REALSXP, fn, "or_adj");
+  R_xlen_t C = cp08_len(0, ou_s, REALSXP, fn, "or_up");
+  if (I > INT_MAX || R > INT_MAX || C > INT_MAX) cp08_malformed(0, fn, "V11 operator exceeds integer capacity");
+  const double *control_pos = REAL(dr28_field(op_s, 16, "control_pos", REALSXP, I));
+  SEXP link_s = VECTOR_ELT(op_s, 17); R_xlen_t nl_x = cp08_len(0, link_s, INTSXP, fn, "link_order");
+  if (nl_x < 1 || nl_x > INT_MAX) cp08_malformed(0, fn, "invalid output width");
+  int nl = (int) nl_x;
+  const int *link_order = INTEGER(dr28_field(op_s, 17, "link_order", INTSXP, nl));
+  const double *link_start = REAL(dr28_field(op_s, 18, "link_start", REALSXP, nt));
+  const int *link_count = INTEGER(dr28_field(op_s, 19, "link_count", INTSXP, nt));
+  const double *adj_start = REAL(dr28_field(op_s, 20, "adj_start", REALSXP, nt));
+  const double *adj = REAL(dr28_field(op_s, 21, "or_adj", REALSXP, R));
+  const double *center = REAL(dr28_field(op_s, 22, "or_center", REALSXP, nt));
+  const double *or_up_start = REAL(dr28_field(op_s, 23, "or_up_start", REALSXP, nt));
+  const double *or_up = REAL(dr28_field(op_s, 24, "or_up", REALSXP, C));
+  SEXP eta_s = dr28_field(op_s, 25, "eta", REALSXP, (R_xlen_t) pt * nt);
+  sep14_matrix(eta_s, REALSXP, pt, nt, "V11 eta adjoints", &tmp, &tmp); const double *eta = REAL(eta_s);
+  const double *support_start = REAL(dr28_field(op_s, 26, "support_start", REALSXP, nt));
+  const int *support_count = INTEGER(dr28_field(op_s, 27, "support_count", INTSXP, nt));
+  const double *support_pos = REAL(dr28_field(op_s, 28, "support_pos", REALSXP, M));
+  const double *prop_up = REAL(dr28_field(op_s, 29, "prop_up", REALSXP, M));
+  const int *bd = INTEGER(bounds_s);
+  cp08_range(0, keep, P, 1, px, fn, "local column outside source design");
+  cp08_range(0, tc, pt, 1, px, fn, "treatment column outside source design");
+  cp08_range(0, mb, nt, 1, ng, fn, "model outside local blocks");
+  cp08_range(0, order, nt, 1, nt, fn, "model order outside requested models");
+  cp08_range(0, link_order, nl, 1, nl, fn, "link order outside output");
+  dr28_positions(control_pos, I, ns); dr28_positions(support_pos, M, ns);
+  for (int j = 0; j < nd; ++j) {
+    if (bd[2 * j] == 0 && bd[2 * j + 1] == 0) continue;
+    cp08_range(0, bd + 2 * j, 2, 1, (int) npost, fn, "date bounds outside postings");
+    if (bd[2 * j] > bd[2 * j + 1]) cp08_malformed(0, fn, "reversed date bounds");
+  }
+  for (int j = 0; j < ns; ++j) {
+    cp08_range(0, sup + 3 * (R_xlen_t) j, 1, 1, INT_MAX, fn, "invalid support cohort");
+    cp08_range(0, sup + 3 * (R_xlen_t) j + 1, 2, 1, nd, fn, "support date outside gather");
+  }
+  int64_t models_total = 0, links_total = 0;
+  for (int b = 0; b < ng; ++b) {
+    sep14_span(bl[2 * (R_xlen_t) b], bl[2 * (R_xlen_t) b + 1], P);
+    if (bl[2 * (R_xlen_t) b + 1] != old_p[b]) cp08_malformed(0, fn, "local basis differs from V11 owner");
+    int first = dr28_start(block_start[b], block_count[b], nt);
+    dr28_start(control_start[b], control_count[b], I);
+    for (int j = 0; j < block_count[b]; ++j) if (mb[order[first + j] - 1] != b + 1)
+      cp08_malformed(0, fn, "model order differs from its frozen outcome owner");
+    models_total += block_count[b];
+  }
+  int64_t support_total = 0;
+  for (int t = 0; t < nt; ++t) {
+    int b = mb[t] - 1;
+    dr28_start(adj_start[t], bl[2 * (R_xlen_t) b + 1], R);
+    dr28_start(or_up_start[t], control_count[b], C);
+    dr28_start(support_start[t], support_count[t], M);
+    dr28_start(link_start[t], link_count[t], nl);
+    if (link_start[t] != (double) (links_total + 1) || support_start[t] != (double) (support_total + 1))
+      cp08_malformed(0, fn, "V11 link/support spans are not the original partition");
+    links_total += link_count[t]; support_total += support_count[t];
+    if (support_count[t] < 2) cp08_malformed(0, fn, "empty actual model risk set");
+  }
+  if (models_total != nt || links_total != nl || support_total != M) cp08_malformed(0, fn, "V11 model/link spans do not cover requested outputs");
+  uint64_t out_n = gmm_checked_mul_u64(0, g.B, nl, cap, "projected separate DR output");
+  uint64_t gather_n = gmm_checked_mul_u64(0, g.B, nd, cap, "projected sparse endpoint table");
+  uint64_t up_n = gmm_checked_mul_u64(0, g.B, ns, cap, "projected sparse rate scores");
+  uint64_t model_n = gmm_checked_mul_u64(0, g.B, nt, cap, "projected scalar model IFs");
+  if ((long double) out_n + 3.0L * gather_n + up_n + model_n + nt + nl + 1024.0L > cap ||
+      out_n > SIZE_MAX / sizeof(double) || gather_n > SIZE_MAX / sizeof(double) ||
+      up_n > SIZE_MAX / sizeof(double) || model_n > SIZE_MAX / sizeof(double))
+    gmm_c_abort(0, "Projected separate DR concurrent buffers exceed their explicit bound.", "cdid_gmm_bound_error");
+  SEXP phi_s = PROTECT(Rf_allocMatrix(REALSXP, g.B, nl));
+  SEXP status_s = PROTECT(Rf_allocVector(INTSXP, 4));
+  SEXP out_s = PROTECT(Rf_allocVector(VECSXP, 2));
+  SEXP names_s = PROTECT(Rf_allocVector(STRSXP, 2));
+  const int nprot = 4; double *phi = REAL(phi_s);
+  if (gmm_buffers_overlap(phi, (R_xlen_t) out_n, y, ny) ||
+      gmm_buffers_overlap(phi, (R_xlen_t) out_n, X, XLENGTH(X_s)) ||
+      gmm_buffers_overlap(phi, (R_xlen_t) out_n, g.w, g.n_frame))
+    gmm_c_abort(nprot, "Projected separate DR output aliases source.", "cdid_gmm_bound_error");
+  for (int j = 0; j < 13; ++j) {
+    SEXP v = VECTOR_ELT(data_s, j);
+    if (TYPEOF(v) == REALSXP && gmm_buffers_overlap(phi, (R_xlen_t) out_n, REAL(v), XLENGTH(v)))
+      gmm_c_abort(nprot, "Projected separate DR output aliases descriptors.", "cdid_gmm_bound_error");
+  }
+  for (int j = 0; j < 34; ++j) {
+    SEXP v = VECTOR_ELT(op_s, j);
+    if (TYPEOF(v) == REALSXP && gmm_buffers_overlap(phi, (R_xlen_t) out_n, REAL(v), XLENGTH(v)))
+      gmm_c_abort(nprot, "Projected separate DR output aliases V11 operators.", "cdid_gmm_bound_error");
+  }
+  int *positions = (int *) R_alloc((size_t) gather_n, sizeof(int));
+  double *endpoints = (double *) R_alloc((size_t) gather_n, sizeof(double));
+  unsigned char *state = (unsigned char *) R_alloc((size_t) gather_n, sizeof(unsigned char));
+  double *up = (double *) R_alloc((size_t) up_n, sizeof(double));
+  double *psi = (double *) R_alloc((size_t) model_n, sizeof(double));
+  unsigned char *used = (unsigned char *) R_alloc((size_t) nt + (size_t) nl, sizeof(unsigned char));
+  for (int64_t j = 0; j < (int64_t) nt + nl; ++j) used[j] = 0;
+  for (int j = 0; j < nt; ++j) { if (used[order[j] - 1]) cp08_malformed(nprot, fn, "duplicate model order"); used[order[j] - 1] = 1; }
+  for (int j = 0; j < nl; ++j) { if (used[(R_xlen_t) nt + link_order[j] - 1]) cp08_malformed(nprot, fn, "duplicate link order"); used[(R_xlen_t) nt + link_order[j] - 1] = 1; }
+  for (uint64_t j = 0; j < gather_n; ++j) { positions[j] = -1; state[j] = 0; }
+  for (uint64_t j = 0; j < up_n; ++j) up[j] = 0;
+  int *status = INTEGER(status_s); cp08_status(status, CP08_OK, 0, 0, 0);
+  /* Original support-major endpoint checks, THEN raw-difference checks, even
+     p=0. The full support stage finishes before any projected model replay. */
+  for (int j = 0; j < ns && status[0] == CP08_OK; ++j) {
+    R_CheckUserInterrupt(); const int *s = sup + 3 * (R_xlen_t) j; const double *u = sp + 3 * (R_xlen_t) j;
+    for (int i = 0; i < g.B; ++i) {
+      int row = g.rows[i] - 1, a = g.a[row];
+      if (a == NA_INTEGER || a < 0 || a > nx || g.ci[row] == NA_INTEGER || !R_FINITE(g.w[row]) || !(g.w[row] > 0))
+        cp08_malformed(nprot, fn, "invalid source F row/cohort/weight");
+      if (g.ci[row] != s[0]) continue;
+      int seen = dr27_seen(nprot, fn, pa_s, bd, g.B, i, s, a, positions);
+      if (seen) {
+        int cs = s[1] - 1, ct = s[2] - 1;
+        double ys = or22_endpoint(nprot, fn, po_s, y, ny, g.B, i, cs, positions[(R_xlen_t) cs * g.B + i], endpoints, state);
+        double yt = or22_endpoint(nprot, fn, po_s, y, ny, g.B, i, ct, positions[(R_xlen_t) ct * g.B + i], endpoints, state);
+        if (!R_FINITE(ys) || !R_FINITE(yt)) { cp08_status(status, CP08_ENDPOINT, 1, j + 1, i + 1); break; }
+      }
+      up[(R_xlen_t) j * g.B + i] = gmm_fp_div(gmm_fp_mul(g.w[row],
+        gmm_fp_sub((double) seen, gmm_fp_mul(a > 0 ? 1.0 : 0.0, u[0]))), u[1]);
+    }
+    for (int i = 0; i < g.B && status[0] == CP08_OK; ++i) {
+      int row = g.rows[i] - 1, a = g.a[row];
+      if (g.ci[row] != s[0] || !dr27_seen(nprot, fn, pa_s, bd, g.B, i, s, a, positions)) continue;
+      if (!R_FINITE(dr27_dy(nprot, fn, po_s, y, ny, g.B, i, s, positions, endpoints, state, NULL)))
+        cp08_status(status, CP08_DIFFERENCE, 1, j + 1, i + 1);
+    }
+  }
+  for (int b = 0; b < ng && status[0] == CP08_OK; ++b) {
+    R_CheckUserInterrupt(); int ps = bl[2 * (R_xlen_t) b] - 1, p = bl[2 * (R_xlen_t) b + 1];
+    double L = bp[2 * (R_xlen_t) b], alpha = bp[2 * (R_xlen_t) b + 1];
+    int cf = (int) control_start[b] - 1, bf = (int) block_start[b] - 1;
+    for (int jj = 0; jj < block_count[b]; ++jj) {
+      int t = order[bf + jj] - 1, af = (int) adj_start[t] - 1, of = (int) or_up_start[t] - 1;
+      int sf = (int) support_start[t] - 1;
+      for (int i = 0; i < g.B; ++i) {
+        int row = g.rows[i] - 1, a = g.a[row]; double w = g.w[row], po = 0;
+        if (p) {
+          double value = 0;
+          for (int k = 0; k < control_count[b]; ++k) {
+            int sid = (int) control_pos[cf + k] - 1; const int *s = sup + 3 * (R_xlen_t) sid;
+            if (g.ci[row] != s[0] || !dr27_seen(nprot, fn, pa_s, bd, g.B, i, s, a, positions)) continue;
+            double fitted = 0, projection = 0;
+            for (int q = 0; q < p; ++q) {
+              double d = gmm_fp_mul(L, X[(R_xlen_t) (keep[ps + q] - 1) * nx + a - 1]);
+              fitted = gmm_fp_add(fitted, gmm_fp_mul(d, beta[ps + q]));
+              if (icpt) d = gmm_fp_sub(d, mean[ps + q]);
+              projection = gmm_fp_add(projection, gmm_fp_mul(d, adj[af + q]));
+            }
+            double residual = gmm_fp_sub(gmm_fp_sub(dr27_dy(nprot, fn, po_s, y, ny, g.B, i, s, positions, endpoints, state, NULL), alpha), fitted);
+            double wr = gmm_fp_mul(gmm_fp_mul(w, sp[3 * (R_xlen_t) sid + 2]), residual);
+            value = gmm_fp_add(value, gmm_fp_mul(wr, projection));
+          }
+          value = gmm_fp_sub(value, center[t]); double forced = 0;
+          for (int k = 0; k < control_count[b]; ++k) forced = gmm_fp_add(forced,
+            gmm_fp_mul(up[(R_xlen_t) ((int) control_pos[cf + k] - 1) * g.B + i], or_up[of + k]));
+          po = gmm_fp_neg(gmm_fp_add(value, forced));
+        }
+        double score = 0, d1 = 0, d2 = 0;
+        for (int k = 0; k < support_count[t]; ++k) {
+          int sid = (int) support_pos[sf + k] - 1; const int *s = sup + 3 * (R_xlen_t) sid;
+          if (g.ci[row] != s[0] || !dr27_seen(nprot, fn, pa_s, bd, g.B, i, s, a, positions)) continue;
+          double fitted = 0;
+          for (int q = 0; q < p; ++q) fitted = gmm_fp_add(fitted,
+            gmm_fp_mul(gmm_fp_mul(L, X[(R_xlen_t) (keep[ps + q] - 1) * nx + a - 1]), beta[ps + q]));
+          double residual = gmm_fp_sub(gmm_fp_sub(dr27_dy(nprot, fn, po_s, y, ny, g.B, i, s, positions, endpoints, state, NULL), alpha), fitted);
+          double z = 0, xe = 0;
+          for (int q = 0; q < pt; ++q) {
+            double x = X[(R_xlen_t) (tc[q] - 1) * nx + a - 1];
+            z = gmm_fp_add(z, gmm_fp_mul(x, tb[(R_xlen_t) t * pt + q]));
+            xe = gmm_fp_add(xe, gmm_fp_mul(x, eta[(R_xlen_t) t * pt + q]));
+          }
+          /* ipw_clip_logit, including finite-eta-only high branch. Deliberately
+             no new finite check: negative infinite z may yield finite phi. */
+          double odds = exp(R_FINITE(z) && z > 40.0 ? 0.0 : z), prob = odds / (1.0 + odds);
+          if (R_FINITE(z) && z > 40.0) prob = 1.0 / (1.0 + exp(-z));
+          if (!(prob < 1.0 - CP08_CLIP_EPS)) odds = (1.0 - CP08_CLIP_EPS) / (1.0 - (1.0 - CP08_CLIP_EPS));
+          double D = k == 0 ? 1.0 : 0.0, fw = gmm_fp_mul(w, sp[3 * (R_xlen_t) sid + 2]);
+          double wp = gmm_fp_mul(fw, D), wm = gmm_fp_mul(gmm_fp_mul(fw, 1.0 - D), odds);
+          score = gmm_fp_mul(gmm_fp_mul(fw, gmm_fp_sub(D, prob)), xe);
+          d1 = gmm_fp_div(gmm_fp_mul(wp, gmm_fp_sub(residual, means[4 * (R_xlen_t) t])), means[4 * (R_xlen_t) t + 2]);
+          d2 = gmm_fp_div(gmm_fp_mul(wm, gmm_fp_sub(residual, means[4 * (R_xlen_t) t + 1])), means[4 * (R_xlen_t) t + 3]);
+        }
+        double forced = 0, selected = 0;
+        for (int k = 0; k < support_count[t]; ++k) {
+          double u = up[(R_xlen_t) ((int) support_pos[sf + k] - 1) * g.B + i];
+          forced = gmm_fp_add(forced, gmm_fp_mul(u, prop_up[sf + k]));
+          selected = gmm_fp_add(selected, gmm_fp_mul(u, sel[sf + k]));
+        }
+        double pp = gmm_fp_sub(gmm_fp_neg(score), forced);
+        psi[(R_xlen_t) t * g.B + i] = gmm_fp_add(gmm_fp_add(gmm_fp_add(gmm_fp_sub(d1, d2), po), pp), selected);
+      }
+    }
+  }
+  if (status[0] == CP08_OK) for (int t = 0; t < nt; ++t) {
+    int lf = (int) link_start[t] - 1;
+    for (int k = 0; k < link_count[t]; ++k) {
+      double *dest = phi + (R_xlen_t) (link_order[lf + k] - 1) * g.B;
+      for (int i = 0; i < g.B; ++i) dest[i] = psi[(R_xlen_t) t * g.B + i];
+    }
+  }
+  SET_STRING_ELT(names_s, 0, Rf_mkChar("phi")); SET_STRING_ELT(names_s, 1, Rf_mkChar("status"));
+  SET_VECTOR_ELT(out_s, 0, phi_s); SET_VECTOR_ELT(out_s, 1, status_s); Rf_setAttrib(out_s, R_NamesSymbol, names_s);
+  UNPROTECT(nprot); return out_s;
+}
+
 static const R_CallMethodDef CallEntries[] = {
+  {"C_gmm_dr_separate_sparse_if", (DL_FUNC) &C_gmm_dr_separate_sparse_if, 12},
   {"C_gmm_dr_sparse_prepare", (DL_FUNC) &C_gmm_dr_sparse_prepare, 11},
   {"C_gmm_dr_sparse_assemble", (DL_FUNC) &C_gmm_dr_sparse_assemble, 7},
   {"C_gmm_ipw_raw_observer_collect", (DL_FUNC) &C_gmm_ipw_raw_observer_collect, 10},
