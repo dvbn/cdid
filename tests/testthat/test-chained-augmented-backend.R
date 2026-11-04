@@ -538,16 +538,13 @@ testthat::test_that("retained aliases: outcome aliases reproduce the reference; 
   testthat::expect_lt(aug_mx(alias$col$phi - base$col$phi), 1e-11)
   # The unchanged rank policies refuse aliased treatment and selection designs.
   fx <- alias$fx
-  # Under these unchanged exact-alias inputs and 1e-15 IRLS controls, the
-  # existing solver refuses with convergence or boundary error before a singular-information check.
+  # Two treatment columns are exact linear combinations of the others.
+  # The fitted-rank check refuses this design before convergence/boundary checks.
   err_trt_alias <- testthat::expect_error(
     aug_fit(fx, treatment_columns = colnames(fx$X_frame)),
     class = "cdid_ipw_fit_error"
   )
-  testthat::expect_true(
-    inherits(err_trt_alias, "cdid_cp04_convergence_error") ||
-      inherits(err_trt_alias, "cdid_cp04_boundary_error")
-  )
+  testthat::expect_true(inherits(err_trt_alias, "cdid_cp04_rank_error"))
   x2 <- fx$reader$state$Z[, "x2"]
   Q_alias <- cbind(`(Intercept)` = 1, x2 = x2, x2_twice = 2 * x2, x2_shift = 3 + x2)
   reader_alias <- aug_ns("construct_cp04_frame_reader")(fx$frame, fx$ids, Q_alias, fx$g, fx$w, fx$control,
