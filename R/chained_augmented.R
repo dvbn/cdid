@@ -145,6 +145,15 @@ augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids) {
     treatments = unname(pure["treatments"]), links = links)
 }
 
+augmented_or_local <- function(sh, bid) {
+  out <- reconstruction_or_block(sh, bid)
+  if (reconstruction_separate(sh)) {
+    out$q_beta_ids <- sh$blocks[[bid]]$q_beta_ids
+    out$q_beta <- sh$blocks[[bid]]$q_beta
+  }
+  out
+}
+
 fit_augmented_backend <- function(reader, link_views, control, glm_control, rank_tol,
                                   outcome_recipe, treatment_columns = NULL,
                                   est_method = "dr",
@@ -157,7 +166,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
                                   external_work_ops = 0,
                                   automatic_chunk_rows = FALSE,
                                   pair_outcomes = NULL,
-                                  reference = NULL) {
+                                  reference = NULL, outcome_pooling = "pooled") {
   validate_cp04_reader(reader)
   # D60: every stage runs on the recipe-cohort layout and its sealed layout
   # reader (cohort k under recipe r is one layout cohort with W_g, a_k^{g,F},
@@ -181,6 +190,8 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     ), "method")
   }
   imputation_pooling <- imputation_pooling_choice(imputation_pooling)
+  outcome_pooling <- or_selection_outcome_mode(outcome_pooling)
+  separate_or <- identical(outcome_pooling, "separate")
   validate_selection_mode_args(selection_model, selection_pooling)
   if (missing(rank_tol)) augmented_abort("Supply explicit private `rank_tol`.")
   rank_tol <- or_baseline_rank_tol(rank_tol)
@@ -297,6 +308,8 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
         if (is.null(lay)) "" else paste0("|reference:", reference$recipes$key[reference$view_recipe[ell]]))
     )
   }
+  if (separate_or) for (ell in seq_along(records)) records[[ell]]$functional_key <-
+    paste0(records[[ell]]$functional_key, "|outcome:separate")
   lids <- vapply(records, function(x) if (is.null(x$link_id)) "" else x$link_id, character(1L))
   if (any(!nzchar(lids)) || anyDuplicated(lids)) augmented_abort("Distinct nonempty link IDs required.")
 
@@ -354,6 +367,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
       est_method = "dr",
       dr_method = "dr",
       imputation_pooling = imputation_pooling,
+      outcome_pooling = outcome_pooling,
       selection = "conditional_mtar",
       selection_model = selection_model,
       selection_pooling = selection_pooling,
@@ -449,6 +463,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     ),
     class = c("cdid_augmented_backend", "cdid_chained_augmented")
   )
+  if (separate_or) obj$law <- paste0(obj$law, ":outcome:separate")
   if (!is.null(lay)) {
     obj$reference_ref <- reference$ref
     obj$accounting$n_reference_recipes <- nrow(reference$recipes)
@@ -461,7 +476,8 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   N_scan <- if (is.null(lay)) N else lay$N_layout
   B_chunk <- min(N_scan, ctrl$max_chunk_rows)
   retained_bound <- unname(cp04_payload(obj)["entries"]) - pair_entries +
-    sum(augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids))
+    if (separate_or) reconstruction_bound(sum(augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids)), n_blocks) else
+      sum(augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids))
   d_X <- ncol(X_F)
   d_q_max <- max(c(0L, d_q))
   fit_scratch <- max(
@@ -490,6 +506,10 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     256 * L * (n_groups + 1) * (p_or_raw + 2)^3
   fit_work <- pure_work + aug_work + 128 * retained_bound
 
+  if (separate_or) {
+    fit_scratch <- reconstruction_bound(fit_scratch, n_blocks)
+    fit_work <- reconstruction_bound(fit_work, n_blocks)
+  }
   obj$accounting$retained_bound <- base_entries + retained_bound
   obj$accounting$fit_scratch_bound <- fit_scratch
   obj$accounting$work_ops_bound <- external_work_ops + des$work_ops +
@@ -654,7 +674,8 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     for (start in chunk_starts(ci_s)) visit(X_F[chunk_rows(ci_s, start), or_frame_index, drop = FALSE])
     invisible(NULL)
   }
-  fit_or <- tryCatch(or_pooled_fit_blocks(
+  fit_or_fun <- if (separate_or) function(...) or_outcome_fit_blocks(..., mode = "separate") else or_pooled_fit_blocks
+  fit_or <- tryCatch(fit_or_fun(
     recipe = recipe,
     supports = supports_or,
     blocks = blocks_or_spec,
@@ -668,6 +689,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     e$is_identifiability_claim <- FALSE
     stop(e)
   })
+  if (!separate_or) {
   keep_or <- fit_or$keep
   p_or <- length(keep_or)
   kept_or_cols_F <- if (p_or > 0L) slope_cols_F[keep_or] else integer(0L)
@@ -681,14 +703,26 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   }
   cp04_finite(c(alpha_or, beta_or), "augmented shared counterfactual OR coefficients")
 
+  }
+
   # Forcing of every block constituent: rate (with r = Z - b), j (M^Delta) and
   # q (-R^q). The global shared-slope q forcing collects all blocks once.
-  q_beta_ids <- as.integer(sort(unique(c(integer(0L), unlist(theta_ids[used_ctrl])))))
-  q_beta <- matrix(0.0, p_or, length(q_beta_ids))
+  if (!separate_or) {
+    q_beta_ids <- as.integer(sort(unique(c(integer(0L), unlist(theta_ids[used_ctrl])))))
+    q_beta <- matrix(0.0, p_or, length(q_beta_ids))
+  }
   or_block_fits <- vector("list", n_blocks)
   for (bid in seq_len(n_blocks)) {
     b_spec <- cat$or_blocks[[bid]]
-    reg_b <- fit_or$regressions[[bid]]
+    if (separate_or) {
+      local_or <- fit_or$groups[[bid]]
+      keep_or <- local_or$keep; p_or <- length(keep_or)
+      kept_or_cols_F <- slope_cols_F[keep_or]; kept_or_names <- recipe$slope_columns[keep_or]
+      beta_or <- local_or$beta
+      q_beta_ids <- as.integer(sort(unique(c(integer(0L), unlist(theta_ids[b_spec$control_cell_ids])))))
+      q_beta <- matrix(0, p_or, length(q_beta_ids))
+    }
+    reg_b <- if (separate_or) local_or$regressions[[1L]] else fit_or$regressions[[bid]]
     cids_b <- b_spec$control_cell_ids
     w_sum_b <- sum(vapply(cids_b, function(cid) ctrl_acc[[cid]]$weight_mass, numeric(1L)))
     mass_b <- w_sum_b / N
@@ -780,7 +814,19 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
         q_alpha = q_alpha
       )
     )
+    if (separate_or) {
+      or_block_fits[[bid]]$q_beta_ids <- q_beta_ids
+      or_block_fits[[bid]]$q_beta <- q_beta
+      ak <- vapply(cells[cids_b], `[[`, numeric(1), "a_k")
+      or_block_fits[[bid]]$score_mean_alpha <- sum(ak * a_force_alpha)
+      or_block_fits[[bid]]$score_mean_beta <- as.vector(a_force_beta %*% ak)
+      cp04_finite(q_beta, "augmented block-local selection forcing")
+    }
   }
+  if (separate_or) {
+    shared_or <- list(outcome_pooling = "separate", n_blocks = as.integer(n_blocks), blocks = or_block_fits,
+      outcome_groups = fit_or, slope_cols_F = slope_cols_F, rss = fit_or$rss, objective = fit_or$objective)
+  } else {
   cp04_finite(q_beta, "augmented global shared-slope selection forcing")
   theta_or <- if (recipe$intercept) c(alpha_or, beta_or) else beta_or
   names(theta_or) <- paste0("OR.theta", seq.int(0L, length(theta_or) - 1L))
@@ -803,6 +849,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     rss = fit_or$rss,
     objective = fit_or$objective
   )
+  }
 
   # S6. Links: augmented T/C numerators, unchanged normalizers, M^Delta adjoint
   # weights and merged selection loadings over the theta coordinates.
@@ -838,6 +885,12 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   trt_cols_F <- trt_recipe$index
   for (ell in seq_len(L)) {
     lk <- cat$links[[ell]]
+    if (separate_or) {
+      local_or <- reconstruction_or_block(shared_or, lk$or_block_id)
+      keep_or <- local_or$keep; p_or <- local_or$p
+      kept_or_cols_F <- local_or$kept_cols_F; kept_or_names <- local_or$kept_columns
+      beta_or <- local_or$beta
+    }
     cf_g <- cells[[lk$target_cell_id]]
     a_g <- st$a[lk$target_cohort_index]
     d_plus <- cf_g$M_one
@@ -1024,7 +1077,11 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     cells, groups, shared_or, shared_or, treatments, links
   )
   obj$accounting$n_imputation_slopes_by_group <- vapply(groups, `[[`, integer(1L), "p")
-  obj$accounting$n_or_shared_slopes <- as.integer(p_or)
+  obj$accounting$n_or_shared_slopes <- if (separate_or) 0L else as.integer(p_or)
+  if (separate_or) {
+    obj$accounting$n_or_fits <- n_blocks
+    obj$accounting$n_or_slopes_by_block <- vapply(shared_or$outcome_groups$groups, function(g) length(g$keep), integer(1))
+  }
   payload <- cp04_payload(obj)
   actual <- unname(payload["entries"])
   if (actual > retained_bound + pair_entries) {
@@ -1096,7 +1153,7 @@ augmented_if_needed_sets <- function(backend, links, details = FALSE) {
       vapply(l_sub, `[[`, integer(1L), "target_cell_id"),
       unlist(lapply(l_sub, `[[`, "control_cell_ids"))
     )))
-    bids <- if (sh$p > 0L) {
+    bids <- if (!reconstruction_separate(sh) && sh$p > 0L) {
       seq_len(sh$n_blocks)
     } else {
       sort(unique(vapply(l_sub, `[[`, integer(1L), "or_block_id")))
@@ -1174,6 +1231,11 @@ augmented_if_envelope <- function(backend, B, links = seq_along(backend$links), 
   selection_pre <- selection_if_budget(backend$selection_backend, B, sets$q_ids, details = details)
   scratch <- scratch + selection_pre$output + selection_pre$scratch
   work <- work + selection_pre$work
+  if (reconstruction_separate(backend$shared_or)) {
+    output <- reconstruction_bound(output, length(backend$or_blocks))
+    scratch <- reconstruction_bound(scratch, length(backend$or_blocks))
+    work <- reconstruction_bound(work, length(backend$or_blocks))
+  }
   c(sets, list(output = output, scratch = scratch, work = work))
 }
 
@@ -1348,20 +1410,16 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
   zero_imp_loadings <- function() lapply(cells, function(cf) numeric(groups[[cf$group_id]]$p))
 
   # 5. Shared counterfactual OR rows: direct, rate, j and q channels.
-  or_if <- NULL
-  alpha_bids <- integer(0L)
-  if (length(sets$bids) > 0L) {
+  calculate_or_if <- function(sh, wanted_bids, alpha_bids) {
     p_or <- sh$p
     n_b <- sh$n_blocks
-    alpha_bids <- if (details) seq_len(n_b) else
-      sort(unique(vapply(backend$links[links], `[[`, integer(1L), "or_block_id")))
     n_alpha <- length(alpha_bids)
     rhs_beta_dir <- rhs_beta_a <- rhs_beta_j <- rhs_beta_q <- matrix(0.0, B, p_or)
     rhs_alpha_dir <- rhs_alpha_a <- rhs_alpha_j <- rhs_alpha_q <- matrix(0.0, B, n_alpha)
 
-    for (bid in sets$bids) {
+    for (bid in wanted_bids) {
       apos <- match(bid, alpha_bids)
-      bf <- sh$blocks[[bid]]
+      bf <- backend$shared_or$blocks[[bid]]
       for (idx_k in seq_along(bf$control_cell_ids)) {
         cid <- bf$control_cell_ids[idx_k]
         cf <- cells[[cid]]
@@ -1413,14 +1471,19 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       rhs_beta_q <- up[, pos, drop = FALSE] %*% t(sh$q_beta)
     }
 
+    if (reconstruction_separate(backend$shared_or)) {
+      bf <- backend$shared_or$blocks[[wanted_bids[1L]]]
+      if (recipe$intercept) rhs_alpha_dir[, 1L] <- rhs_alpha_dir[, 1L] - bf$score_mean_alpha
+      if (p_or) rhs_beta_dir <- sweep(rhs_beta_dir, 2L, bf$score_mean_beta)
+    }
     if (!details) {
       # Global shared-slope j forcing collects every contributing block before
       # each scalar pullback (row width p_OR, independent of the cell count).
       if (p_or) for (qq in seq_len(p_or)) {
         lam <- numeric(n_cells)
         nu <- zero_imp_loadings()
-        for (bid in sets$bids) {
-          bf <- sh$blocks[[bid]]
+        for (bid in wanted_bids) {
+          bf <- backend$shared_or$blocks[[bid]]
           for (idx_k in seq_along(bf$control_cell_ids)) {
             cid <- bf$control_cell_ids[idx_k]
             if (recipe$intercept) lam[cid] <- lam[cid] + bf$j_force_beta_alpha[qq, idx_k]
@@ -1430,7 +1493,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
         rhs_beta_j[, qq] <- eval_imp_linear(lam, nu)
       }
       if (recipe$intercept) for (apos in seq_along(alpha_bids)) {
-        bf <- sh$blocks[[alpha_bids[apos]]]
+        bf <- backend$shared_or$blocks[[alpha_bids[apos]]]
         lam <- numeric(n_cells)
         nu <- zero_imp_loadings()
         for (idx_k in seq_along(bf$control_cell_ids)) {
@@ -1456,7 +1519,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       xi_al <- matrix(0.0, B, n_alpha)
       if (recipe$intercept) {
         for (apos in seq_along(alpha_bids)) {
-          bf <- sh$blocks[[alpha_bids[apos]]]
+          bf <- backend$shared_or$blocks[[alpha_bids[apos]]]
           xi_al[, apos] <- (rhs_a_mat[, apos] / bf$mass) -
             (if (p_or > 0L) as.vector(xi_b %*% bf$mean_d) else 0.0)
         }
@@ -1471,13 +1534,34 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
     beta_tot <- ch_dir$beta + ch_a$beta + ch_j$beta + ch_q$beta
     theta_tot <- if (recipe$intercept) cbind(alpha_tot, beta_tot) else beta_tot
     if (ncol(theta_tot) > 0L) colnames(theta_tot) <- paste0("OR.theta", seq.int(0L, ncol(theta_tot) - 1L))
-    or_if <- list(
+    list(
       direct = ch_dir, a = ch_a, j = ch_j, q = ch_q,
       alpha = alpha_tot, beta = beta_tot, theta = theta_tot,
       alpha_block_ids = alpha_bids,
       rhs_beta_score = rhs_beta_dir + rhs_beta_a + rhs_beta_j + rhs_beta_q,
       rhs_alpha_score = rhs_alpha_dir + rhs_alpha_a + rhs_alpha_j + rhs_alpha_q
     )
+  }
+  separate_or <- reconstruction_separate(backend$shared_or)
+  alpha_bids <- if (details) seq_len(backend$shared_or$n_blocks) else
+    sort(unique(vapply(backend$links[links], `[[`, integer(1L), "or_block_id")))
+  or_blocks_if <- NULL
+  or_if <- NULL
+  if (separate_or) {
+    if (details) {
+      or_blocks_if <- lapply(sets$bids, function(bid) calculate_or_if(augmented_or_local(backend$shared_or, bid), bid, bid))
+      names(or_blocks_if) <- as.character(sets$bids)
+    }
+  } else if (length(sets$bids)) or_if <- calculate_or_if(sh, sets$bids, alpha_bids)
+  last_or_bid <- NA_integer_; last_or_if <- NULL
+  local_or_if <- function(bid) {
+    if (!separate_or) return(or_if)
+    if (details) return(or_blocks_if[[as.character(bid)]])
+    if (!identical(bid, last_or_bid)) {
+      last_or_if <<- calculate_or_if(augmented_or_local(backend$shared_or, bid), bid, bid)
+      last_or_bid <<- bid
+    }
+    last_or_if
   }
   or_term <- function(ch, bid, d_bar) {
     p_or <- sh$p
@@ -1518,13 +1602,17 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
   link_names <- vapply(backend$links[links], `[[`, character(1L), "link_id")
   phi <- matrix(0.0, B, nl, dimnames = list(NULL, link_names))
   link_details <- if (details) vector("list", nl) else NULL
-  for (j in seq_along(links)) {
+  link_order <- if (separate_or) order(vapply(backend$links[links], `[[`, integer(1L), "or_block_id")) else seq_along(links)
+  for (j in link_order) {
     lf <- backend$links[[links[j]]]
+    sh <- augmented_or_local(backend$shared_or, lf$or_block_id)
+    or_if <- local_or_if(lf$or_block_id)
+    if (separate_or) alpha_bids <- lf$or_block_id
     cf_g <- cells[[lf$target_cell_id]]
     ci_g <- lf$target_cohort_index
     a_g <- st$a[ci_g]
     bid <- lf$or_block_id
-    bf <- sh$blocks[[bid]]
+    bf <- backend$shared_or$blocks[[bid]]
     p_or <- sh$p
 
     # Treated ratios T and B_g.
@@ -1687,7 +1775,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       imputation_cell_scores = cell_scores,
       selection_theta = up,
       selection_theta_ids = uids,
-      or_if = or_if,
+      or_if = if (separate_or) list(outcome_pooling = "separate", blocks = or_blocks_if) else or_if,
       trt_if = trt_if,
       links = link_details
     )
