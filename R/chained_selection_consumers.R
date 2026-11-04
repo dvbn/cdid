@@ -1086,8 +1086,10 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
                                     automatic_chunk_rows = FALSE,
                                     selection_model = "pair_logit",
                                     selection_pooling = "separate",
-                                    sel_fit = NULL, reference = NULL) {
+                                    sel_fit = NULL, reference = NULL, outcome_pooling = "pooled") {
   validate_cp04_reader(reader)
+  outcome_pooling <- or_selection_outcome_mode(outcome_pooling)
+  separate <- identical(outcome_pooling, "separate")
   if (missing(rank_tol) || !gmm_scalar_numeric(rank_tol) || rank_tol <= 0 || rank_tol >= 1)
     or_corollary1_abort("Supply explicit finite private rank_tol in (0, 1).")
   ctrl <- validate_ipw_owner_control(control)
@@ -1152,6 +1154,8 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
         "-shared-slope-WLS-a/(rho*p)|", substring(source, 8L)
       )
     )
+    if (separate) records[[ell]]$functional_key <- sub("shared-slope", "separate-slopes",
+      records[[ell]]$functional_key, fixed = TRUE)
     if (!is.null(reference)) {
       records[[ell]]$reference <- reference$view_recipe[ell]
       records[[ell]]$functional_key <- paste0(records[[ell]]$functional_key, "|reference:",
@@ -1229,7 +1233,8 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
 
   metadata <- unname(cp04_payload(list(specs, pools, links, selection_specs, upstream, sel_fit))["entries"])
   cohort_n <- vapply(specs, function(s) st$cohort_end[s$cohort] - st$cohort_start[s$cohort] + 1, numeric(1))
-  charges <- or_corollary1_fit_charges(
+  charge <- if (separate) or_selection_separate_fit_charges else or_corollary1_fit_charges
+  charges <- charge(
     S, G, L, p, max(1L, up_map$d), D, st$n_A, min(st$N, ctrl$max_chunk_rows),
     max(cohort_n), sum(cohort_n), gc$maxit, metadata, header,
     sum(nchar(c(recipe$columns, if (is.null(reference)) colnames(st$Z) else
@@ -1247,7 +1252,8 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
   supports <- lapply(seq_len(S), function(j) {
     or_selection_support(reader, specs[[j]], sel_fit, up_map, q_of_s[j], recipe, ctrl, reference)
   })
-  state <- or_selection_assemble(
+  assemble <- if (separate) or_selection_separate_assemble else or_selection_assemble
+  state <- assemble(
     recipe, supports, pools, links, channels, D, rank_tol, st$N,
     function(sid, visit) or_baseline_visit(reader, specs[[sid]], ctrl,
       function(rows, S_vec, obs, dy, Z) visit(Z), reference)
@@ -1266,6 +1272,7 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
       control = ctrl,
       glm_control = gc,
       rank_tol = rank_tol,
+      outcome_pooling = outcome_pooling,
       outcome_recipe = recipe,
       support_specs = specs,
       selection_specs = selection_specs,
@@ -1304,10 +1311,10 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
         n_regression_fits = 1L,
         n_regression_blocks = G,
         n_local_intercepts = if (recipe$intercept) G else 0L,
-        n_shared_slopes = state$shared$p,
+        n_shared_slopes = if (separate) 0L else state$shared$p,
         n_slope_columns = p,
-        n_aliased_slopes = length(state$shared$basis$aliased_columns),
-        n_support_scans = S * (1L + state$shared$verification_scan),
+        n_aliased_slopes = if (separate) 0L else length(state$shared$basis$aliased_columns),
+        n_support_scans = if (separate) S else S * (1L + state$shared$verification_scan),
         n_treatment_fits = 0L,
         full_F_masks_per_model = 0L,
         full_F_by_link_IF_retained = FALSE,
@@ -1318,12 +1325,15 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
     ),
     class = c("cdid_or_selection_backend", "cdid_or_corollary1")
   )
+  if (separate) obj <- or_selection_separate_record(obj, state)
   if (!is.null(reference)) {
     obj$reference_ref <- reference$ref
     obj$accounting$n_reference_recipes <- nrow(reference$recipes)
   }
   obj["ref"] <- list(NULL)
   actual <- unname(cp04_payload(obj)["entries"])
+  if (separate && actual > bound)
+    or_corollary1_abort("Retained separate Corollary 1 OR bound underestimated.", "bound")
   obj$accounting$owned_entries <- actual
   obj$accounting$retained_bound <- max(obj$accounting$retained_bound, base + actual)
   cp04_budget(ctrl, c(base, actual), scratch, c(work, external_work_ops), actual, "retained Corollary 1 OR selection-models")
@@ -1345,7 +1355,9 @@ evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame"
   pre <- or_corollary1_if_budget(backend, length(rows), links, details)
   B <- length(rows)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
-  kept <- backend$outcome_recipe$slope_index[backend$shared$keep]
+  separate <- or_selection_separate(backend)
+  kept <- if (separate) backend$outcome_recipe$slope_index else
+    backend$outcome_recipe$slope_index[backend$shared$keep]
   ref <- chained_backend_reference(backend)
   ci <- st$cohort_index[rows]
   # D60: no common weight; supports read their recipe's W_g on observed rows.
@@ -1382,7 +1394,8 @@ evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame"
     )
   }
 
-  core <- or_pooled_if_core(backend, st$N, w, hits, up, pre, links, details)
+  core <- if (separate) or_selection_separate_if_core(backend, st$N, w, hits, up, pre, links, details) else
+    or_pooled_if_core(backend, st$N, w, hits, up, pre, links, details)
   phi <- core$phi
   dimnames(phi) <- list(NULL, vapply(backend$links[links], `[[`, character(1), "link_id"))
   cp04_finite(phi, "complete Corollary 1 OR link IF")
@@ -1407,13 +1420,22 @@ evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame"
       work_ops_bound = pre$work
     )
   )
+  if (separate) {
+    out$diagnostics$outcome_pooling <- "separate"
+    out$diagnostics$n_global_beta_blocks <- 0L
+    out$diagnostics$n_local_beta_blocks <- length(pre$beta_gids)
+  }
   if (details) {
     tau <- eta <- if (is.null(ref)) matrix(0, B, length(st$cohorts)) else NULL
     if (is.null(ref)) for (k in seq_along(st$cohorts)) {
       tau[, k] <- w * (as.double(ci == k) - st$tau[k]) / st$mean_w
       eta[, k] <- w * A * (as.double(ci == k) - st$eta[k]) / st$mean_wA
     }
-    out$details <- list(
+    out$details <- if (separate) list(outcome_pooling = "separate",
+      blocks = core$blocks, link_block_ids = vapply(backend$links[links], `[[`, integer(1), "regression"),
+      support_ids = pre$sids, upstream_ids = pre$uids, upstream = up, regression_ids = pre$gids,
+      direct = core$direct, denominator = core$denominator, numerator = core$numerator,
+      design = core$design, objective = core$objective, tau = tau, eta = eta, lambda = A - st$lambda) else list(
       support_ids = pre$sids,
       upstream_ids = pre$uids,
       upstream = up,
