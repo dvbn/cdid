@@ -4,7 +4,7 @@
 
 [CRAN package page](https://cran.r-project.org/package=cdid)
 
-The current CRAN release is 0.1.1. This repository contains version 1.1.0.0,
+The current CRAN release is 0.1.1. This repository contains version 1.1.0.1,
 which is being prepared for the next CRAN update.
 
 ## Installation
@@ -14,7 +14,7 @@ which is being prepared for the next CRAN update.
 remotes::install_github("dvbn/cdid")
 ```
 
-`cdid` 1.1.0.0 requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.3.0 or later, and refuses to load with earlier versions of `did` or `DRDID`. If older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2. Later versions are accepted but have not been tested, so it is not guaranteed that everything works with them or that results are identical. Installation compiles the package's C/C++ code and therefore needs a compiler toolchain: Rtools on Windows, the command-line developer tools on macOS, or a C/C++ compiler and `make` on Linux. The optional [pinned validation setup](../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions, for example to reproduce the recorded results of this guide.
+`cdid` 1.1.0.1 requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`. If older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted but have not been tested, so it is not guaranteed that everything works with them or that results are identical. Installation compiles the package's C/C++ code and therefore needs a compiler toolchain: Rtools on Windows, the command-line developer tools on macOS, or a C/C++ compiler and `make` on Linux. The optional [pinned validation setup](../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions, for checks of this revision; historical outputs retain their recorded dependency versions.
 
 ## What the package does
 
@@ -80,7 +80,7 @@ For hands-on exploration, use the [editable Quarto source](../notebooks/cdid_pra
 | 19 | [Results](reference/results.md) | The contents of each result, the uncertainty rules, pretrend tests and export. |
 | 20 | [Diagnose errors and unavailable results](help/troubleshooting.md) | Refused requests, failed fits, unavailable effects and surprising results. |
 
-This guide describes version 1.1.0.0. Numerical code output shown on the article pages comes from recorded runs, and each page states the version actually used. Analytical population values are labeled separately.
+This guide describes version 1.1.0.1. Numerical code output shown on the article pages comes from recorded runs, and each page states the version actually used. Analytical population values are labeled separately.
 
 ## Terms used in this guide
 

@@ -20,6 +20,8 @@ Describe the problem and how the change addresses it. Include an example or test
 
 All changes require maintainer review before merging. A suggested fix or feature is not a commitment to include it in a release.
 
+Every merge updates the package version and its `NEWS.md` entry. The increment reflects the scope of the change: a small increment for a focused fix, and a larger increment for new features or incompatible behavior. State the proposed version in the pull request and keep installation instructions, version checks and current documentation consistent. Historical results retain the versions actually used. A merge does not by itself publish a release or submit it to CRAN.
+
 ## Scoped contributor tasks
 
 A small queue of self-contained tasks is listed in [contributing/TASKS.md](contributing/TASKS.md), separate from release work and not release blockers:
