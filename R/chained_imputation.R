@@ -2558,7 +2558,7 @@ fit_imputation_backend <- function(reader, link_views, control = ipw_owner_contr
   N_scan <- if (is.null(lay)) st$N else lay$N_layout
   B_chunk <- min(N_scan, ctrl$max_chunk_rows)
   retained_bound <- unname(cp04_payload(obj)["entries"]) - pair_entries +
-    if (separate_or) reconstruction_bound(sum(imputation_retained_core_bound(cat, recipe, trt_recipe)), n_blocks) else
+    if (separate_or) reconstruction_retained_bound(cat, recipe, imputation_retained_core_bound(cat, recipe, trt_recipe)) else
       sum(imputation_retained_core_bound(cat, recipe, trt_recipe))
   fit_scratch <- 64 * B_chunk * (p_or + p_trt + G + 8) +
     64 * N_scan * (if (n_trt > 0L) (p_trt + 4) else 2) +
@@ -2571,8 +2571,9 @@ fit_imputation_backend <- function(reader, link_views, control = ipw_owner_contr
   ) + 128 * retained_bound
 
   if (separate_or) {
-    fit_scratch <- reconstruction_bound(fit_scratch, n_blocks)
-    fit_work <- reconstruction_bound(fit_work, n_blocks)
+    extra <- reconstruction_fit_extra(cat, recipe, st)
+    fit_scratch <- fit_scratch + extra$scratch
+    fit_work <- fit_work + extra$work
   }
   obj$accounting$retained_bound <- base_entries + retained_bound
   obj$accounting$fit_scratch_bound <- fit_scratch
@@ -2661,6 +2662,7 @@ imputation_backend_X_F <- function(backend, reader) {
 
 imputation_if_envelope <- function(backend, B, links = seq_along(backend$links), details = FALSE) {
   validate_imputation_backend(backend)
+  if (reconstruction_separate(backend$shared_or)) return(reconstruction_if_envelope(backend, B, links, details))
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- if (is.null(backend$layout)) reader$state else backend$layout$state
   # A recipe-cohort layout evaluates up to (layout rows / original rows) rows
@@ -2697,11 +2699,6 @@ imputation_if_envelope <- function(backend, B, links = seq_along(backend$links),
       nt * ((p_trt + 2)^2 + p_trt * (G + 4)) +
       G + nl * (nc + 1) * (p_or + p_trt + G + 8)
   ) + 64 * metadata
-  if (reconstruction_separate(backend$shared_or)) {
-    output <- reconstruction_bound(output, length(backend$or_blocks))
-    scratch <- reconstruction_bound(scratch, length(backend$or_blocks))
-    work <- reconstruction_bound(work, length(backend$or_blocks))
-  }
   list(
     cids = sets$cids,
     gids = sets$gids,

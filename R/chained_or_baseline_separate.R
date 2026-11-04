@@ -13,9 +13,26 @@ or_baseline_separate <- function(backend) identical(backend$outcome_pooling, "se
 
 # Conservative generic envelope: reserve all G compact fits, alias replays and
 # metadata before creating group layouts. No factor sharing is claimed here.
-or_baseline_separate_fit_charges <- function(S, G, L, p, N, n_A, B, metadata, header, name_bytes) {
-  x <- or_baseline_fit_charges(S, G, L, p, N, n_A, B, metadata, header, name_bytes)
-  lapply(x, function(v) ipw_owner_safe_sum(v * (G + 1), label = "separate OR fit envelope"))
+or_baseline_separate_fit_charges <- function(S, G, L, p, N, n_A, B, metadata, header, name_bytes,
+                                              pools, links, support_rows) {
+  P2 <- p + 2; incidence <- domains <- control_rows <- alias_rows <- 0; peak <- 0
+  for (b in seq_along(pools)) {
+    ctrl <- pools[[b]]$support_ids
+    target <- vapply(links[vapply(links, function(l) l$regression == b, logical(1))], `[[`, integer(1), "support_id")
+    ids <- union(ctrl, target)
+    incidence <- incidence + length(ctrl); domains <- domains + length(ids); peak <- max(peak, length(ids))
+    control_rows <- control_rows + sum(support_rows[ctrl]); alias_rows <- alias_rows + sum(support_rows[ids])
+  }
+  # Each unique block owns one QR/summary/basis and its compact forcing. The
+  # support summaries and one current group's aliases coexist during fitting.
+  models <- 8192 + S * (1024 + 32 * P2^2) + G * (8192 + 128 * P2^2 + 64 * name_bytes) +
+    128 * (incidence + domains + L) * P2 + L * (512 + 16 * p)
+  scratch <- metadata + header + 64 * (S + peak + 2) * P2^2 +
+    64 * B * (P2 + 8) + 128 * P2^2 + 32 * (domains + L + G)
+  work <- 256 * (sum(support_rows) + control_rows + alias_rows) * P2^2 *
+    (1 + ceiling(log2(n_A + 1))) + 256 * G * P2^3 +
+    128 * (incidence + domains + L) * P2^2 + 128 * (metadata + header)
+  list(models = ipw_owner_safe_sum(models), scratch = ipw_owner_safe_sum(scratch), work = ipw_owner_safe_sum(work))
 }
 
 or_baseline_separate_assemble <- function(recipe, supports, pools, links, rank_tol, N, visit_rows) {
@@ -72,21 +89,28 @@ or_baseline_separate_if_budget <- function(backend, B, links, details) {
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   G <- length(backend$regression_specs); S <- length(backend$supports)
   p <- backend$outcome_recipe$p; J <- length(st$cohorts); nl <- length(links)
-  width <- 16 * (S + G * (p + 4) + nl * (p + 8) + J + 16)
-  metadata <- 16384 + 2048 * (S + G + nl + J) + 64 * G * (p + 2)^2 +
-    B * frame$id_byte_metadata$max +
-    16 * sum(nchar(backend$outcome_recipe$columns, type = "bytes")) * (G + nl + 1) +
-    16 * sum(nchar(vapply(backend$links[links], `[[`, character(1), "link_id"), type = "bytes"))
-  output <- B * width + metadata
-  scratch <- 128 * B * width + 256 * (p + 2)^2 + metadata
-  work <- 512 * B * ((S + 1) * (p + 2)^2 * (1 + ceiling(log2(st$n_A + 1))) +
-    G * (p + 2) * (p + S + nl + 2) + J + nl * (p + 2)) + 128 * metadata
-  cp04_budget(backend$control, c(backend$accounting$owned_entries,
-    backend$accounting$borrowed_entries), scratch, work, output, "separate baseline OR IF chunk")
-  gids <- if (details) seq_len(G) else
-    sort(unique(vapply(backend$links[links], `[[`, integer(1), "regression")))
+  incidence <- 0
+  for (r in backend$regression_specs) incidence <- incidence + length(r$support_ids)
+  maps <- 4096 + 32 * (S + G + nl + incidence)
+  cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
+    maps, 64 * maps, 0, "separate baseline OR dependency metadata")
+  gids <- if (details) seq_len(G) else sort(unique(vapply(backend$links[links], `[[`, integer(1), "regression")))
   sids <- sort(unique(c(vapply(backend$links[links], `[[`, integer(1), "support_id"),
     unlist(lapply(backend$regression_specs[gids], `[[`, "support_ids")))))
+  ps <- vapply(backend$outcome_groups$groups[gids], function(g) length(g$keep), integer(1))
+  ns <- length(sids); ng <- length(gids); mp <- max(c(0, ps))
+  name_bytes <- sum(nchar(backend$outcome_recipe$columns, type = "bytes"))
+  link_bytes <- sum(nchar(vapply(backend$links[links], `[[`, character(1), "link_id"), type = "bytes"))
+  metadata <- 8192 + 16 * link_bytes + B * frame$id_byte_metadata$max +
+    if (details) 1536 * (ng + nl + 1) + 32 * name_bytes * (ng + nl + 1) + 32 * (ns + ng) else 128 * nl
+  width <- nl + 8 + if (details) 2 * sum(ps + 1) + ns + nl * (p + 3) + 2 * J + 4 else 0
+  output <- B * width + metadata
+  scratch <- maps + output + 32 * B * (ns * (p + 5) + mp * (mp + ns + 6) + nl + 16) +
+    128 * (mp + 2)^2
+  work <- 128 * maps + 128 * B * ((ns + 1) * (p + 2)^2 * (1 + ceiling(log2(st$n_A + 1))) +
+    sum((ps + 2)^2 * (ns + nl + 2)) + J + nl * (p + 2))
+  cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
+    scratch, work, output, "separate baseline OR IF chunk")
   list(gids = gids, beta_gids = gids, sids = sids, output = output, scratch = scratch, work = work)
 }
 

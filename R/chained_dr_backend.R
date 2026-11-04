@@ -1063,7 +1063,9 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
     lapply(unique(trt_keys), function(k) which(trt_keys == k))
   }
   name_bytes <- sum(nchar(c(recipe$columns, trt_recipe$columns), type = "bytes"))
-  or_charge <- if (separate) or_baseline_separate_fit_charges else or_baseline_fit_charges
+  or_charge <- if (separate) function(...) or_baseline_separate_fit_charges(...,
+    pools = pools, links = links, support_rows = vapply(specs, function(s)
+      st$cohort_end[s$cohort] - st$cohort_start[s$cohort] + 1, numeric(1))) else or_baseline_fit_charges
   or_charges <- if (is.null(complete)) or_charge(
     S, G, L, p_or, st$N, st$n_A, min(st$N, ctrl$max_chunk_rows),
     metadata, header, name_bytes
@@ -2372,7 +2374,8 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
 
   metadata <- unname(cp04_payload(list(specs, pools, links, ts, selection_specs, upstream, sel_fit, trt_recipe))["entries"])
   cohort_n <- vapply(specs, function(s) st$cohort_end[s$cohort] - st$cohort_start[s$cohort] + 1, numeric(1))
-  or_charge <- if (separate) or_selection_separate_fit_charges else or_corollary1_fit_charges
+  or_charge <- if (separate) function(...) or_selection_separate_fit_charges(...,
+    pools = pools, links = links, channels = channels, support_rows = cohort_n) else or_corollary1_fit_charges
   or_charges <- or_charge(
     S, G, L, p_or, max(1L, up_map$d), D, st$n_A, min(st$N, ctrl$max_chunk_rows),
     max(cohort_n), sum(cohort_n), gc$maxit, metadata, header,

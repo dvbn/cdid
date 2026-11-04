@@ -476,7 +476,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   N_scan <- if (is.null(lay)) N else lay$N_layout
   B_chunk <- min(N_scan, ctrl$max_chunk_rows)
   retained_bound <- unname(cp04_payload(obj)["entries"]) - pair_entries +
-    if (separate_or) reconstruction_bound(sum(augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids)), n_blocks) else
+    if (separate_or) reconstruction_retained_bound(cat, recipe, augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids), theta_ids) else
       sum(augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids))
   d_X <- ncol(X_F)
   d_q_max <- max(c(0L, d_q))
@@ -507,8 +507,9 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   fit_work <- pure_work + aug_work + 128 * retained_bound
 
   if (separate_or) {
-    fit_scratch <- reconstruction_bound(fit_scratch, n_blocks)
-    fit_work <- reconstruction_bound(fit_work, n_blocks)
+    extra <- reconstruction_fit_extra(cat, recipe, st)
+    fit_scratch <- fit_scratch + extra$scratch
+    fit_work <- fit_work + extra$work
   }
   obj$accounting$retained_bound <- base_entries + retained_bound
   obj$accounting$fit_scratch_bound <- fit_scratch
@@ -1185,6 +1186,7 @@ augmented_if_needed_sets <- function(backend, links, details = FALSE) {
 # (dr_corollary1_if_envelope template).
 augmented_if_envelope <- function(backend, B, links = seq_along(backend$links), details = FALSE) {
   validate_augmented_backend(backend)
+  if (reconstruction_separate(backend$shared_or)) return(reconstruction_if_envelope(backend, B, links, details, augmented = TRUE))
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
   # The retained layout matrix holds all recipe copies of the original rows,
@@ -1231,11 +1233,6 @@ augmented_if_envelope <- function(backend, B, links = seq_along(backend$links), 
   selection_pre <- selection_if_budget(backend$selection_backend, B, sets$q_ids, details = details)
   scratch <- scratch + selection_pre$output + selection_pre$scratch
   work <- work + selection_pre$work
-  if (reconstruction_separate(backend$shared_or)) {
-    output <- reconstruction_bound(output, length(backend$or_blocks))
-    scratch <- reconstruction_bound(scratch, length(backend$or_blocks))
-    work <- reconstruction_bound(work, length(backend$or_blocks))
-  }
   c(sets, list(output = output, scratch = scratch, work = work))
 }
 

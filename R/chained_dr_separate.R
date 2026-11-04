@@ -9,35 +9,56 @@ dr_separate_if_envelope <- function(backend, B, links, details) {
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   G <- length(backend$regression_specs); S <- length(backend$supports)
   p <- backend$outcome_recipe$p; pt <- backend$treatment_recipe$p
-  reference <- chained_backend_reference(backend)
-  p_ref <- if (is.null(reference)) 0L else length(reference$x_columns)
+  conditional <- isTRUE(backend$uses_selection_models)
+  D <- if (conditional) backend$upstream$D else S
   Tn <- length(backend$treatments); nl <- length(links); J <- length(st$cohorts)
-  D <- if (isTRUE(backend$uses_selection_models)) backend$upstream$D else S
-  d <- if (isTRUE(backend$uses_selection_models)) backend$upstream$d else 0L
-  link_name_bytes <- sum(vapply(links, function(j)
-    nchar(backend$links[[j]]$link_id, type = "bytes"), integer(1)))
-  width <- 64 * (D + S + G * (p + 4) + Tn * (pt + D + 24) + nl * (p + 16) + J + 16)
-  metadata <- 32768 + 4096 * (D + S + G + Tn + nl + J) + 128 * link_name_bytes +
-    B * frame$id_byte_metadata$max + 64 * G * (p + 2)^2 +
-    32 * sum(nchar(c(backend$outcome_recipe$columns, backend$treatment_recipe$columns), type = "bytes")) * (G + Tn + nl + 1)
-  output <- B * width + metadata
-  scratch <- 128 * B * (width + p_ref) +
-    512 * ((p + 2)^2 + (pt + 2)^2 + (d + 2)^2) + metadata
-  work <- 1024 * B * ((S + 1) * ((p + 2)^2 + (d + 2)^2) *
-    (1 + ceiling(log2(st$n_A + 1))) + G * (p + 2) * (p + D + nl + 4) +
-    Tn * (pt + 4) * (pt + p + D + S + 4) + J + nl * (p + pt + 8) +
-    (S + Tn + 1) * p_ref) + 256 * metadata
+  incidence <- 0
+  for (r in backend$regression_specs) incidence <- incidence + length(r$support_ids)
+  for (s in backend$treatment_specs) incidence <- incidence + length(s$support_ids)
+  if (conditional) {
+    for (u in backend$supports) incidence <- incidence + length(u$channels)
+    for (m in backend$treatments) incidence <- incidence + length(m$upstream_ids)
+  }
+  # Only the dependency vectors exist at this admission point. No row buffers
+  # or global treatment-by-upstream matrix is constructed by this evaluator.
+  maps <- 4096 + 32 * (G + S + D + Tn + nl + incidence)
   cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
-    scratch, c(backend$accounting$work_ops_bound, work), output, "separate DR IF preflight")
+    maps, c(backend$accounting$work_ops_bound, 64 * maps), 0, "separate DR dependency metadata")
   gids <- if (details) seq_len(G) else sort(unique(vapply(backend$links[links], `[[`, integer(1), "regression")))
   tids <- sort(unique(vapply(backend$links[links], `[[`, integer(1), "model")))
   sids <- sort(unique(c(vapply(backend$links[links], `[[`, integer(1), "support_id"),
     unlist(lapply(backend$regression_specs[gids], `[[`, "support_ids")),
     unlist(lapply(backend$treatment_specs[tids], `[[`, "support_ids")))))
-  uids <- if (isTRUE(backend$uses_selection_models)) sort(unique(c(
-    unlist(lapply(backend$supports[sids], `[[`, "channels")),
+  uids <- if (conditional) sort(unique(c(unlist(lapply(backend$supports[sids], `[[`, "channels")),
     unlist(lapply(backend$treatments[tids], `[[`, "upstream_ids"))))) else sids
-  if (isTRUE(backend$uses_selection_models)) {
+  ns <- length(sids); nu <- length(uids); ng <- length(gids); nt <- length(tids)
+  ps <- vapply(backend$outcome_groups$groups[gids], function(g) length(g$keep), integer(1))
+  model_u <- vapply(tids, function(t) if (conditional) length(backend$treatments[[t]]$upstream_ids) else
+    length(backend$treatment_specs[[t]]$support_ids), integer(1))
+  max_u <- max(c(0, model_u)); max_p <- max(c(0, ps))
+  # Detailed replay visits outcome blocks outside the requested treatment
+  # models. Their forcing transpose has local slope-by-channel size.
+  operator_peak <- if (conditional) max(c(0, vapply(backend$regressions[gids],
+    function(r) as.double(length(r$forcing_beta)), numeric(1)))) else 0
+  reference <- chained_backend_reference(backend)
+  p_ref <- if (is.null(reference)) 0L else length(reference$x_columns)
+  link_bytes <- sum(vapply(backend$links[links], function(l) nchar(l$link_id, type = "bytes"), integer(1)))
+  name_bytes <- sum(nchar(c(backend$outcome_recipe$columns, backend$treatment_recipe$columns), type = "bytes"))
+  output_meta <- 8192 + 128 * link_bytes + B * frame$id_byte_metadata$max +
+    if (details) 2048 * (ng + nt + nl + 1) + 32 * name_bytes * (ng + nt + nl + 1) +
+      32 * (ns + nu + Tn + ng) else 128 * nl
+  width <- nl + 8 + if (details) 2 * sum(ps + 1) +
+    sum(3 * pt + model_u + 40) + nl * (p + 12) + nu + 2 * J + 4 else 0
+  output <- output_meta + B * width
+  # Hits/upstream rows survive across blocks. OR and treatment temporary rows
+  # use only one local solve at a time; detailed records are output above.
+  scratch <- maps + output + 2 * operator_peak + 32 * B * (ns * (p + 6) + nu +
+    max_p * (max_p + max_u + nl + 8) + 4 * pt + max_u + p_ref + nl + 32) +
+    128 * ((max_p + 2)^2 + (pt + 2)^2) + 64 * (ns + nu + ng + nt)
+  work <- 128 * maps + 128 * B * ((ns + 1) * (p + 2)^2 *
+    (1 + ceiling(log2(st$n_A + 1))) + sum((ps + 2)^2 * (nu + nl + 2)) +
+    nt * (pt + 2) * (pt + max_u + 8) + (ns + nt + 1) * p_ref + J + nl * (p + pt + 8))
+  if (conditional) {
     sp <- selection_if_budget(backend$selection_backend, B, unique(backend$q_of_s[sids]), details = details)
     scratch <- scratch + sp$output + sp$scratch; work <- work + sp$work
   }

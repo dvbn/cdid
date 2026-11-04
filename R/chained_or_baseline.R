@@ -1097,7 +1097,9 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
     retained_external_entries = retained_external_entries, external_work_ops = external_work_ops,
     metadata_entries = header + metadata)
   charges <- if (separate) or_baseline_separate_fit_charges(S, G, L, p, st$N, st$n_A,
-    min(st$N, ctrl$max_chunk_rows), metadata, header, sum(nchar(recipe$columns, type = "bytes"))) else
+    min(st$N, ctrl$max_chunk_rows), metadata, header, sum(nchar(recipe$columns, type = "bytes")),
+    pools = pools, links = links, support_rows = vapply(specs, function(s)
+      st$cohort_end[s$cohort] - st$cohort_start[s$cohort] + 1, numeric(1))) else
     if (is.null(complete)) or_baseline_fit_charges(S, G, L, p, st$N, st$n_A, min(st$N, ctrl$max_chunk_rows),
     metadata, header, sum(nchar(recipe$columns, type = "bytes"))) else
     or_baseline_complete_fit_charges(st, specs, S, G, L, p, min(st$N, ctrl$max_chunk_rows), metadata, header,

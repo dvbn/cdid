@@ -1233,7 +1233,8 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
 
   metadata <- unname(cp04_payload(list(specs, pools, links, selection_specs, upstream, sel_fit))["entries"])
   cohort_n <- vapply(specs, function(s) st$cohort_end[s$cohort] - st$cohort_start[s$cohort] + 1, numeric(1))
-  charge <- if (separate) or_selection_separate_fit_charges else or_corollary1_fit_charges
+  charge <- if (separate) function(...) or_selection_separate_fit_charges(...,
+    pools = pools, links = links, channels = channels, support_rows = cohort_n) else or_corollary1_fit_charges
   charges <- charge(
     S, G, L, p, max(1L, up_map$d), D, st$n_A, min(st$N, ctrl$max_chunk_rows),
     max(cohort_n), sum(cohort_n), gc$maxit, metadata, header,
