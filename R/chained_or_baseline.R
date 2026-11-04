@@ -240,7 +240,8 @@ or_baseline_native_kernel <- function(name) {
   arity <- c(C_gmm_cp08_support_chunk = 12L, C_gmm_cp08_pair_rows = 9L, C_gmm_cp08_fit_pass1 = 15L,
     C_gmm_cp08_fit_pass2 = 15L, C_gmm_cp08_or_if_chunk = 17L, C_gmm_cp08_dr_if_prepare = 14L,
     C_gmm_cp08_dr_if_assemble = 17L, C_gmm_cp08_dr_treatment_batch = 19L,
-    C_gmm_separate_complete_if = 12L, C_gmm_or_sparse_if = 11L)
+    C_gmm_separate_complete_if = 12L, C_gmm_or_sparse_if = 11L,
+    C_gmm_dr_sparse_prepare = 11L, C_gmm_dr_sparse_assemble = 7L)
   syms <- gmm_require_native_dll()
   owner <- environment(sys.function())
   cache <- get0("or_baseline_native_cache", envir = owner, mode = "environment", inherits = FALSE)

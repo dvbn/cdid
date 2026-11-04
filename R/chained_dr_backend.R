@@ -1123,7 +1123,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
     "baseline DR pipeline fit work"
   )
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline DR fits")
-  qr_buffer <- if (separate && automatic_chunk_rows && is.null(reference) && is.null(complete) && is.null(fixed))
+  qr_buffer <- if (automatic_chunk_rows && is.null(reference) && is.null(complete) && is.null(fixed))
     or_baseline_qr_buffer_plan(ctrl, base, bound, scratch, p_or, st$n_A) else NULL
   if (!is.null(qr_buffer)) {
     scratch <- ipw_owner_safe_sum(c(scratch, qr_buffer$extra), ctrl$max_matrix_entries, "baseline DR buffered QR scratch")
@@ -1954,6 +1954,8 @@ evaluate_dr_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
   # requests keep the route below.
   if (!details && !is.null(backend$complete_support))
     return(dr_baseline_native_if_chunk(backend, reader, rows, links, scale, pre, plan))
+  if (!details && !is.null(plan) && is.null(backend$reference_ref))
+    return(dr_sparse_native_if(backend, reader, rows, links, scale, pre, plan))
   B <- length(rows)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   p_or <- backend$shared$p
