@@ -5582,13 +5582,16 @@ run_chained_ipw_pipeline <- function(
     isTRUE(reduce_structural_redundancy) && identical(structural_reduction_stage, "outcome_free")
   # CP08 O14: the conditional pretest state charges no GMM, reporting or draw buffer.
   cpt_mode <- isTRUE(conditional_pretest)
-  # Keep complete full-frame panels on the existing scalar-leaf/batched replay
-  # path. Eligibility is decided from sealed, outcome-free posting counts,
-  # before any fit; the compact raw backend is reserved for incomplete panels.
-  use_raw_ipw <- ipw_pipeline_use_raw_backend(
+  # Retain the complete single-operator scalar/compact route. Existing raw
+  # IPW supports complete multioperator families with the same original class
+  # metric; select that reuse from sealed outcome-free catalog/posting facts.
+  raw_backend_allowed <- ipw_pipeline_use_raw_backend(
     cp04, custom_est_method, run_numerical_transfer, cpt_mode,
     environment(sys.function())
-  ) && (n_a_units != n_total || any(panel_owner$postings$date_count != n_a_units))
+  )
+  incomplete_raw <- n_a_units != n_total || any(panel_owner$postings$date_count != n_a_units)
+  use_raw_ipw <- raw_backend_allowed && incomplete_raw
+  complete_raw_capacity <- NULL
   # CP08 compact canonical basis: on the outcome-free route, the exact
   # complete-roster one-operator/never-treated/PT-post/fixed-X/unit-weight
   # predicate is decided here from the sealed owners and validated catalog,
@@ -5626,6 +5629,12 @@ run_chained_ipw_pipeline <- function(
   # per-original-row and bounded-chunk allowances. Its original M-bound scan
   # work dominates these complete-date reads; the compact reservation below
   # also retains its explicit date-fact charge. Run only after both guards.
+  if (raw_backend_allowed && !incomplete_raw && nrow(metadata_obj$catalog$operators) > 1L) {
+    complete_raw_capacity <- ipw_pipeline_complete_raw_capacity(metadata_obj, frame_owner, ctrl,
+      aux_plan, combined_initial, combined_work, early_reduction, wt_mode,
+      J_bound, R_full, R_rep, n_post_bound)
+    use_raw_ipw <- isTRUE(complete_raw_capacity$admitted)
+  }
   compact_facts <- if (!use_raw_ipw && early_reduction && !cpt_mode)
     ipw_pipeline_compact_basis_facts(metadata_obj, frame_owner, ctrl$owner_control, pt_assumption,
       run_numerical_transfer, n_total) else NULL
@@ -6695,6 +6704,7 @@ run_chained_ipw_pipeline <- function(
           basis_to_loading_column = basis$loading_column, core_target_to_loading_column = core_targets$loading_column)),
       resource_accounting = c(list(initial_envelope_entries=combined_initial,
         simultaneous_entries=combined_live,downstream_work_ops=combined_work,point_producer=point_preflight,
+        complete_raw_capacity=complete_raw_capacity,
         memory_prefix_composition = list(embedded_external_entries = cp04_memory_overlap,
           simultaneous_entries_before_prefix_dedup = ipw_owner_safe_sum(c(combined_live, cp04_memory_overlap)),
           rule = "same registry/backend: embedded external prefix charged once; reader/backend/owner reservations retained"),

@@ -933,6 +933,13 @@ build_ipw_raw_backend_registry <- function(
   pair_cache <- new.env(hash = TRUE, parent = emptyenv())
   distinct_pairs <- list()
   pair_keys <- character()
+  # One invocation, one immutable frame/panel and one fixed stream_step.
+  # Every complete pair visits the identical A positions in identical chunk
+  # order, so counts, weighted masses and modular power sums are identical.
+  # The canonical numeric vectors already persist in distinct_pairs; this
+  # extra reference/header is inside its existing128*(M+1) summary reservation.
+  complete_summary <- NULL
+  complete_summary_reuses <- 0L
 
   get_pair_summary <- function(pair_desc) {
     pkey <- paste0(
@@ -943,9 +950,19 @@ build_ipw_raw_backend_registry <- function(
     pid <- get0(pkey, envir = pair_cache, inherits = FALSE)
     if (is.null(pid)) {
       charge_scans(1, C_bound)
-      ps <- ipw_raw_scan_pair_summary(f_owner, p_owner, pair_desc, stream_step, date_memo)
+      # A new pair must prove BOTH its own dates complete. Equal fitted
+      # weights, equal hashes or an earlier complete pair are not that proof.
+      if (!is.null(complete_summary) &&
+          ipw_owner_pair_complete(p_owner, pair_desc, stream_step, date_memo)) {
+        ps <- complete_summary
+        ps$pair <- pair_desc
+        complete_summary_reuses <<- complete_summary_reuses + 1L
+      } else {
+        ps <- ipw_raw_scan_pair_summary(f_owner, p_owner, pair_desc, stream_step, date_memo)
+      }
       pid <- length(distinct_pairs) + 1L
       ps$pair_id <- as.integer(pid)
+      if (is.null(complete_summary) && isTRUE(ps$complete_pair)) complete_summary <<- ps
       distinct_pairs[[pid]] <<- ps
       pair_keys[pid] <<- pkey
       assign(pkey, pid, envir = pair_cache)
@@ -1875,7 +1892,7 @@ build_ipw_raw_backend_registry <- function(
       registry_entries_reserved = mask_registry_entries + split_cert_entries,
       split_records_bound = split_bound,
       link_support_scans_reused = n_support_reused,
-      complete_pair_fingerprints_reused = 0
+      complete_pair_fingerprints_reused = complete_summary_reuses
     ),
     raw_work_accounting = list(
       mode = "cumulative_includes_prefix",
