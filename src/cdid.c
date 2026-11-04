@@ -3090,8 +3090,9 @@ static int cp08_or_slope_if(int nprotect, const char *fn, cp08_chunk_t *g, int n
   if (!R_FINITE(normalizer) || normalizer <= 0.0) {
     cp08_malformed(nprotect, fn, "slope$normalizer must be positive finite");
   }
-  ng_beta = (int) cp08_len(nprotect, VECTOR_ELT(slope_sexp, 5), INTSXP, fn, "slope$beta_blk");
-  if (ng_beta < 1) cp08_malformed(nprotect, fn, "slope$beta_blk must be nonempty");
+  R_xlen_t ng_beta_len = cp08_len(nprotect, VECTOR_ELT(slope_sexp, 5), INTSXP, fn, "slope$beta_blk");
+  if (ng_beta_len < 1 || ng_beta_len > INT_MAX) cp08_malformed(nprotect, fn, "slope$beta_blk must have an integer-sized nonempty incidence");
+  ng_beta = (int) ng_beta_len;
   const int *beta_blk = INTEGER(VECTOR_ELT(slope_sexp, 5));
   cp08_range(nprotect, beta_blk, ng_beta, 1, ns, fn, "slope$beta_blk outside supports");
   cp08_dims(nprotect, VECTOR_ELT(slope_sexp, 6), REALSXP, fn, "slope$beta_par", 2 + p, ng_beta, &bp_nr, &ng_beta);
@@ -3243,7 +3244,37 @@ SEXP C_gmm_cp08_or_if_chunk(SEXP y_sexp, SEXP date_start_sexp, SEXP post_a_sexp,
   int nr = 0, ns = 0, ng = 0, nl = 0, tmp = 0;
   cp08_dims(0, sup_sexp, INTSXP, fn, "sup", 3, 0, &nr, &ns);
   cp08_dims(0, sup_par_sexp, REALSXP, fn, "sup_par", 3, ns, &nr, &tmp);
-  ng = (int) cp08_len(0, blk_sexp, INTSXP, fn, "blk");
+  /* Singleton NT keeps its original integer encoding. Mixed pools carry
+     list(offsets[ng+1], support_positions[I_g], forcing_alpha[I_g]). */
+  int ragged = TYPEOF(blk_sexp) == VECSXP;
+  const int *blk_offsets = NULL;
+  const double *blk_forcing = NULL;
+  R_xlen_t local_incidence = 0;
+  SEXP blk_support_sexp = blk_sexp;
+  if (ragged) {
+    if (cp08_len(0, blk_sexp, VECSXP, fn, "ragged blk") != 3)
+      cp08_malformed(0, fn, "ragged block descriptor must have three fields");
+    R_xlen_t noff = cp08_len(0, VECTOR_ELT(blk_sexp, 0), INTSXP, fn, "block offsets");
+    blk_support_sexp = VECTOR_ELT(blk_sexp, 1);
+    local_incidence = cp08_len(0, blk_support_sexp, INTSXP, fn, "block support positions");
+    if (noff < 2 || noff > INT_MAX || local_incidence < 1 || local_incidence >= INT_MAX ||
+        cp08_len(0, VECTOR_ELT(blk_sexp, 2), REALSXP, fn, "block forcing") != local_incidence)
+      cp08_malformed(0, fn, "ragged block dimensions are empty or inconsistent");
+    ng = (int) noff - 1;
+    blk_offsets = INTEGER(VECTOR_ELT(blk_sexp, 0));
+    blk_forcing = REAL(VECTOR_ELT(blk_sexp, 2));
+    cp08_range(0, blk_offsets, noff, 1, (int) local_incidence + 1, fn, "block offsets outside incidence");
+    if (blk_offsets[0] != 1 || blk_offsets[ng] != local_incidence + 1)
+      cp08_malformed(0, fn, "ragged block offsets do not cover their incidence");
+    for (int j = 0; j < ng; ++j) if (blk_offsets[j + 1] <= blk_offsets[j])
+      cp08_malformed(0, fn, "empty or reversed local control support span");
+    for (R_xlen_t j = 0; j < local_incidence; ++j) if (!R_FINITE(blk_forcing[j]))
+      cp08_malformed(0, fn, "nonfinite local intercept forcing");
+  } else {
+    R_xlen_t nblk = cp08_len(0, blk_sexp, INTSXP, fn, "blk");
+    if (nblk > INT_MAX) cp08_malformed(0, fn, "too many requested blocks");
+    ng = (int) nblk;
+  }
   if (ng < 1) cp08_malformed(0, fn, "no requested block");
   cp08_dims(0, blk_par_sexp, REALSXP, fn, "blk_par", 3, ng, &nr, &tmp);
   cp08_dims(0, lnk_sexp, INTSXP, fn, "lnk", 2, 0, &nr, &nl);
@@ -3252,7 +3283,7 @@ SEXP C_gmm_cp08_or_if_chunk(SEXP y_sexp, SEXP date_start_sexp, SEXP post_a_sexp,
   SEXP slope_sexp = (dimnames_sexp != R_NilValue) ? VECTOR_ELT(dimnames_sexp, 0) : R_NilValue;
   const int *sup = INTEGER(sup_sexp);
   const double *sp = REAL(sup_par_sexp);
-  const int *blk = INTEGER(blk_sexp);
+  const int *blk = INTEGER(blk_support_sexp);
   const double *bp = REAL(blk_par_sexp);
   const int *lnk = INTEGER(lnk_sexp);
   const double *lp = REAL(lnk_par_sexp);
@@ -3260,7 +3291,7 @@ SEXP C_gmm_cp08_or_if_chunk(SEXP y_sexp, SEXP date_start_sexp, SEXP post_a_sexp,
     cp08_range(0, sup + 3 * (R_xlen_t) j + 1, 2, 1, g.nd, fn, "support gather columns outside the dates");
     if (sup[3 * (R_xlen_t) j] == NA_INTEGER) cp08_malformed(0, fn, "support cohort is NA");
   }
-  cp08_range(0, blk, ng, 1, ns, fn, "block control supports outside the requested supports");
+  cp08_range(0, blk, ragged ? local_incidence : ng, 1, ns, fn, "block control supports outside the requested supports");
   for (int j = 0; j < nl; ++j) {
     cp08_range(0, lnk + 2 * (R_xlen_t) j, 1, 1, ns, fn, "link supports outside the requested supports");
     cp08_range(0, lnk + 2 * (R_xlen_t) j + 1, 1, 1, ng, fn, "link blocks outside the requested blocks");
@@ -3277,7 +3308,8 @@ SEXP C_gmm_cp08_or_if_chunk(SEXP y_sexp, SEXP date_start_sexp, SEXP post_a_sexp,
   SEXP names_sexp = PROTECT(Rf_allocVector(STRSXP, 3));
   const int nprot = 5;
   double *phi = REAL(phi_sexp);
-  if (gmm_buffers_overlap(phi, (R_xlen_t) phi_len, g.y, g.ny) || gmm_buffers_overlap(phi, (R_xlen_t) phi_len, g.w, g.n_frame)) {
+  if (gmm_buffers_overlap(phi, (R_xlen_t) phi_len, g.y, g.ny) || gmm_buffers_overlap(phi, (R_xlen_t) phi_len, g.w, g.n_frame) ||
+      (ragged && gmm_buffers_overlap(phi, (R_xlen_t) phi_len, blk_forcing, local_incidence))) {
     gmm_c_abort(nprot, "Allocated output aliases input in `C_gmm_cp08_or_if_chunk`.", "cdid_gmm_bound_error");
   }
   cp08_set_dimnames(phi_sexp, dimnames_sexp);
@@ -3317,6 +3349,40 @@ SEXP C_gmm_cp08_or_if_chunk(SEXP y_sexp, SEXP date_start_sexp, SEXP post_a_sexp,
     }
   }
   /* 2. Block intercept IF columns. */
+  if (ragged) {
+    for (int b = 0; b < ng && st[0] == CP08_OK; ++b) {
+      R_CheckUserInterrupt();
+      double alpha_b = bp[3 * (R_xlen_t) b], mass = bp[3 * (R_xlen_t) b + 1];
+      double L_b = (sl.p > 0) ? blk_lm[(R_xlen_t) (1 + sl.p) * b] : 0.0;
+      const double *mean_d = (sl.p > 0) ? (blk_lm + (R_xlen_t) (1 + sl.p) * b + 1) : NULL;
+      double *col = alpha + (R_xlen_t) b * B;
+      for (int i = 0; i < B; ++i) {
+        double h = 0.0, forced = 0.0;
+        int r = g.rows[i] - 1, nz = 0;
+        for (int k = blk_offsets[b] - 1; k < blk_offsets[b + 1] - 1; ++k) {
+          int c = blk[k] - 1;
+          const int *support = sup + 3 * (R_xlen_t) c;
+          const double *sv = sp + 3 * (R_xlen_t) c;
+          if (g.ci[r] == support[0]) {
+            double db = 0.0;
+            for (int j = 0; j < sl.p; ++j) {
+              double dj = gmm_fp_mul(L_b, cp08_z_elem(&sl, g.a[r], j));
+              db = gmm_fp_add(db, gmm_fp_mul(dj, sl.beta[j]));
+            }
+            double res = gmm_fp_sub(gmm_fp_sub(cp08_dy(&g, i, support[1] - 1, support[2] - 1), alpha_b), db);
+            h = gmm_fp_add(h, gmm_fp_mul(gmm_fp_mul(g.w[r], sv[2]), res));
+          }
+          /* Keep every rate-forcing channel even when complete facts make
+             its score zero; one full control-pool mass normalizes the sum. */
+          forced = cp08_term(forced, blk_forcing[k], cp08_up(&g, i, support[0], sv[0], sv[1]), &nz);
+        }
+        double xi_md = 0.0;
+        for (int j = 0; j < sl.p; ++j)
+          xi_md = gmm_fp_add(xi_md, gmm_fp_mul(sl.xi_beta[(R_xlen_t) j * B + i], mean_d[j]));
+        col[i] = gmm_fp_sub(gmm_fp_div(gmm_fp_add(h, forced), mass), xi_md);
+      }
+    }
+  } else {
   for (int b = 0; b < ng && st[0] == CP08_OK; ++b) {
     R_CheckUserInterrupt();
     int c = blk[b] - 1;
@@ -3350,6 +3416,7 @@ SEXP C_gmm_cp08_or_if_chunk(SEXP y_sexp, SEXP date_start_sexp, SEXP post_a_sexp,
       }
       col[i] = gmm_fp_sub(gmm_fp_div(gmm_fp_add(h, forced), mass), xi_md);
     }
+  }
   }
   /* 3. Link columns in the requested order, then IF finiteness. */
   for (int j = 0; j < nl && st[0] == CP08_OK; ++j) {

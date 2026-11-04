@@ -108,7 +108,7 @@ or_baseline_complete_facts <- function(reader, recipe, records, specs, ctrl, ref
       is.integer(x$controls) && length(x$controls) >= 1L && !anyNA(x$controls) &&
       all(x$controls >= 1L & x$controls <= n_coh) && !anyDuplicated(x$controls) &&
       !is.unsorted(x$controls) && !(x$target %in% x$controls) &&
-      (if (is.null(treatment)) identical(x$controls, never) else never %in% x$controls)
+      never %in% x$controls
   }, logical(1))))
     return(NULL)
   target <- unique(vapply(records, function(x) as.integer(x$target), integer(1)))
@@ -604,18 +604,43 @@ or_baseline_native_plan <- function(backend, links, B, pre = NULL) {
       (p == 0L && length(pre$beta_gids)) || (p > 0L && !length(pre$beta_gids)))
     or_baseline_abort("The native IF requires the facts of a complete-support fit.", "integrity")
   sa <- or_baseline_native_support_arrays(backend, pre$sids)
-  blk <- vapply(backend$regression_specs[pre$gids], function(s)
-    if (length(s$support_ids) == 1L) as.double(match(s$support_ids, pre$sids)) else NA_real_, numeric(1))
-  blk_par <- vapply(backend$regressions[pre$gids], function(r) c(r$alpha, r$mass,
-    if (length(r$forcing_alpha) == 1L) r$forcing_alpha else NA_real_), numeric(3))
   lk <- backend$links[links]
+  ids <- vapply(lk, `[[`, character(1), "link_id")
+  local_n <- vapply(backend$regression_specs[pre$gids], function(s) length(s$support_ids), integer(1))
+  beta_n <- vapply(backend$regression_specs[pre$beta_gids], function(s) length(s$support_ids), integer(1))
+  I_g <- ipw_owner_safe_sum(local_n); I_beta <- ipw_owner_safe_sum(beta_n)
+  ragged <- any(local_n != 1L)
+  # Count all GLOBAL beta block-support incidences, even for a link subset.
+  # A ragged local block owns offsets/support positions/forcing, plus their
+  # replacement/coercion copies. Expanded beta_par coexists with beta_par_1.
+  extra <- (if (ragged) 128 + 8 * (length(pre$gids) + 1) + 16 * I_g else 0) +
+    if (I_beta > length(beta_n)) (p + 2) * length(beta_n) + 8 * I_beta + 256 else 0
+  bound <- or_baseline_native_plan_bound(length(pre$sids), length(pre$gids), length(links), ids, p, I_beta) + extra
+  ipw_owner_safe_sum(c(bound, or_baseline_native_live(B, length(links), length(pre$gids), length(sa$dates), p)),
+    pre$scratch, "complete-support native OR IF reservation")
+  if (I_beta > .Machine$integer.max)
+    or_baseline_abort("Native global support incidence exceeds integer index capacity.", "bound")
+  if (ragged && I_g >= .Machine$integer.max)
+    or_baseline_abort("Native local support incidence exceeds integer index capacity.", "bound")
+  if (ragged) {
+    local_sids <- unlist(lapply(backend$regression_specs[pre$gids], `[[`, "support_ids"), use.names = FALSE)
+    blk <- list(or_baseline_native_int(c(1, 1 + cumsum(local_n))),
+      or_baseline_native_int(match(local_sids, pre$sids)),
+      as.double(unlist(lapply(backend$regressions[pre$gids], `[[`, "forcing_alpha"), use.names = FALSE)))
+    if (any(vapply(blk, is.null, logical(1))) || length(blk[[3L]]) != I_g ||
+        any(!is.finite(blk[[3L]])))
+      or_baseline_abort("Native ragged intercept descriptors do not match their fitted supports.", "integrity")
+  } else blk <- vapply(backend$regression_specs[pre$gids], function(s)
+    as.double(match(s$support_ids, pre$sids)), numeric(1))
+  blk_par <- vapply(backend$regressions[pre$gids], function(r) c(r$alpha, r$mass,
+    if (ragged) 0 else if (length(r$forcing_alpha) == 1L) r$forcing_alpha else NA_real_), numeric(3))
   lnk <- rbind(match(vapply(lk, `[[`, integer(1), "support_id"), pre$sids),
     match(vapply(lk, `[[`, integer(1), "regression"), pre$gids))
   lnk_par <- vapply(lk, function(l) c(l$mu, l$d, if (length(l$rate_loading) == 1L) l$rate_loading else NA_real_),
     numeric(3))
-  ids <- vapply(lk, `[[`, character(1), "link_id")
   dates <- or_baseline_native_int(sa$dates); sup <- or_baseline_native_int(sa$sup)
-  blk <- or_baseline_native_int(blk); lnk <- or_baseline_native_int(lnk)
+  if (!ragged) blk <- or_baseline_native_int(blk)
+  lnk <- or_baseline_native_int(lnk)
   if (is.null(dates) || is.null(sup) || is.null(blk) || is.null(lnk) || anyNA(blk_par) || anyNA(lnk_par) ||
       anyNA(sa$sup_par))
     or_baseline_abort("Native IF descriptors do not match the fitted supports, blocks and links.", "integrity")
@@ -630,9 +655,6 @@ or_baseline_native_plan <- function(backend, links, B, pre = NULL) {
     slope <- or_baseline_native_slope_desc(backend, pre, list(blk_lm, lnk_c), kept_cols,
       reader$state$N, or_baseline_abort)
   }
-  bound <- or_baseline_native_plan_bound(length(pre$sids), length(pre$gids), length(links), ids, p, length(pre$beta_gids))
-  ipw_owner_safe_sum(c(bound, or_baseline_native_live(B, length(links), length(pre$gids), length(dates), p)),
-    pre$scratch, "complete-support native OR IF reservation")
   plan <- list(kind = "or_baseline_native_plan", backend_ref = backend$ref, links = as.integer(links), B = B,
     sids = pre$sids, gids = pre$gids, dates = dates, sup = sup, sup_par = sa$sup_par, blk = blk,
     blk_par = blk_par, lnk = lnk, lnk_par = lnk_par, dimnames = list(slope, ids), entries = 0)
