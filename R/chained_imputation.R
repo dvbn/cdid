@@ -1519,6 +1519,8 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
     list(rr = rr, d_rr = d_rr, s_rr = w[rr] * (dy_rr - jhat_rr))
   }
 
+  read_cell_score <- reconstruction_cached_cell_reader(read_cell_score, sets$score_cache, n_cells)
+
   # Solve per-group slope IFs xi_{i,beta_r}^imp and per-cell intercept IFs xi_{i,alpha_c}^imp
   xi_beta_imp <- if (details) vector("list", n_groups) else NULL
 

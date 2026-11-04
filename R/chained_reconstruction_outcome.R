@@ -40,6 +40,56 @@ reconstruction_fit_extra <- function(cat, recipe, st) {
       (1 + ceiling(log2(st$n_A + 1)))))
 }
 
+# Exact score records are local to one core invocation: the reader closes over
+# its fixed rows, cell/group fits, X and weights. Only declared needed cells
+# persist, including NULL nonobserver records. Named-row designs retain the
+# original path rather than replicating unbounded row-label metadata.
+reconstruction_score_cache_plan <- function(backend, B, cids, X_F, n_links) {
+  declined <- list(enabled = FALSE, cids = integer(0L), entries = 0)
+  if (!reconstruction_separate(backend$shared_or) || !length(cids) || !is.null(rownames(X_F)))
+    return(declined)
+  rows <- min(B, backend$control$max_chunk_rows)
+  # The unchanged envelope reserves 16*B*(4*nl) = 64*B*nl for row/link
+  # work. Pure replay retains phi, three psi matrices and a scaled phi;
+  # augmented replay retains phi/scaled phi. Layout storage/aggregation adds
+  # at most three such matrices. Leave 32*B*nl for all of these; detailed
+  # per-link records and per-link vectors keep their separate old charges.
+  # Cache records, including names/headers, fit entirely in the other half.
+  # Use the core-subchunk cap even when the envelope's B is layout-expanded.
+  funding <- 32 * rows * n_links
+  if (funding <= 1024) return(declined)
+  p <- vapply(backend$cells[cids], function(cf) backend$groups[[cf$group_id]]$p, integer(1))
+  column_bytes <- vapply(backend$cells[cids], function(cf)
+    sum(nchar(backend$groups[[cf$group_id]]$kept_columns, type = "bytes")), numeric(1))
+  record_entries <- 4 * rows * (p + 2) + 256 + 8 * column_bytes
+  entries <- 1024; selected <- logical(length(cids))
+  for (j in seq_along(cids)) if (record_entries[j] <= funding - entries) {
+    selected[j] <- TRUE
+    entries <- entries + record_entries[j]
+  }
+  if (!any(selected)) return(declined)
+  list(enabled = TRUE, cids = cids[selected], entries = entries)
+}
+
+reconstruction_cached_cell_reader <- function(read, plan, n_cells) {
+  # Force the original reader before its caller rebinds read_cell_score to
+  # this wrapper; retaining an unforced promise would recursively call itself.
+  force(read)
+  if (!isTRUE(plan$enabled)) return(read)
+  position <- integer(n_cells); position[plan$cids] <- seq_along(plan$cids)
+  cache <- vector("list", length(plan$cids)); seen <- logical(length(plan$cids))
+  function(cid) {
+    slot <- position[cid]
+    if (slot == 0L) return(read(cid))
+    if (!seen[slot]) {
+      record <- read(cid)
+      cache[slot] <<- list(record)
+      seen[slot] <<- TRUE
+    }
+    cache[[slot]]
+  }
+}
+
 # Both reconstructed routes retain the same local OR and stage1/treatment row
 # shapes. Selection adds only its existing upstream admission and q channels.
 reconstruction_if_envelope <- function(backend, B, links, details, augmented = FALSE) {
@@ -80,6 +130,8 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
   width <- nl + 8 + if (details) 3 * J + 2 * nc_all + sum(imp_p) +
     channels * sum(local_p + 1) + nt * 5 * pt + 64 * nl + nu + 8 else 0
   output <- metadata + B * width
+  X_F <- if (augmented) augmented_backend_X_F(backend) else imputation_backend_X_F(backend, reader)
+  score_cache <- reconstruction_score_cache_plan(backend, B, sets$cids, X_F, nl)
   # xi_a/tau/eta, requested treatment rows and X_chunk exist in ordinary replay;
   # stage1 forcing uses scalar adjoints and one local OR operator at a time.
   scratch <- maps + output + 2 * operator_peak + 16 * B * (3 * J + length(backend$design_columns) +
@@ -95,5 +147,5 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
     sp <- selection_if_budget(backend$selection_backend, B, sets$q_ids, details = details)
     scratch <- scratch + sp$output + sp$scratch; work <- work + sp$work
   }
-  c(sets, list(output = output, scratch = scratch, work = work))
+  c(sets, list(output = output, scratch = scratch, work = work, score_cache = score_cache))
 }
