@@ -62,8 +62,11 @@ dr_separate_if_envelope <- function(backend, B, links, details) {
     sp <- selection_if_budget(backend$selection_backend, B, unique(backend$q_of_s[sids]), details = details)
     scratch <- scratch + sp$output + sp$scratch; work <- work + sp$work
   }
-  list(gids = gids, beta_gids = gids, tids = tids, sids = sids, uids = uids,
+  pre <- list(gids = gids, beta_gids = gids, tids = tids, sids = sids, uids = uids,
     output = output, scratch = scratch, work = work)
+  if (conditional && !details) pre <- dr_conditional_separate_ordinary_if_envelope(
+    backend, B, links, pre, sp, maps)
+  pre
 }
 
 evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE, plan = NULL) {
