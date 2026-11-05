@@ -427,9 +427,14 @@ drp32_fit_payload <- function(a, model, pooling, mode) {
       value <- base::crossprod(x, y); crosses <<- crosses + 1L
       remember(parent.frame(), list(slice_x = x, slice_y = y, result = value)); value
     }
-    e$selection_pair_cohort_log_deriv <- function(...) {
-      value <- drp_ns("selection_pair_cohort_log_deriv")(...); derivatives <<- derivatives + 1L
-      remember(parent.frame(), list(returned_derivative = value)); value
+    e$selection_prediction_operation <- function(...) {
+      op <- drp_ns("selection_prediction_operation")(...)
+      derivative <- op$deriv
+      op$deriv <- function(...) {
+        value <- derivative(...); derivatives <<- derivatives + 1L
+        remember(parent.frame(), list(returned_derivative = value)); value
+      }
+      op
     }
     value <- do.call(run, args)
     testthat::expect_lte(peak, inv$scratch)

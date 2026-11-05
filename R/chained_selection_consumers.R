@@ -314,97 +314,12 @@ selection_pair_cohort_log_deriv <- function(sel_fit, up_map, q, rows, pred = NUL
 # Reused date/pair cell scores are summed by original unit i within each block
 # inside evaluate_selection_block_if before Fisher-information inversion.
 evaluate_selection_upstream_chunk <- function(sel_fit, up_map, rows, uids, details = FALSE) {
-  reader <- get("cp04_reader", sel_fit$reader_ref, inherits = FALSE)
-  st <- reader$state
-  ref <- chained_backend_reference(sel_fit)
-  B <- length(rows)
-  ci <- st$cohort_index[rows]
-  # D60: no common weight; each rate coordinate and cell reads its recipe's W_g.
-  w <- if (is.null(ref)) st$w[rows] else rep(NA_real_, B)
-  U_rows <- st$U[rows]
-  A <- as.double(st$a_index[rows] > 0L)
-  w_of <- function(r, ix) if (is.null(ref)) w[ix] else chained_reference_weight(ref, r, rows[ix])
-
-  up <- matrix(0, B, length(uids))
-  for (j in which(uids <= up_map$n_a)) {
-    k <- up_map$cohorts_a[uids[j]]
-    r <- up_map$rates_ref[uids[j]]
-    ix <- which(ci == k & U_rows)
-    if (length(ix)) {
-      a_k <- if (is.null(ref)) st$a[k] else chained_reference_stat(ref, r, k, "a")
-      m_k <- if (is.null(ref)) st$mass_U[k] else chained_reference_stat(ref, r, k, "mass_U")
-      up[ix, j] <- w_of(r, ix) * (A[ix] - a_k) / m_k
-    }
-  }
-
-  active_blocks <- if (details) {
-    seq_along(sel_fit$blocks)
-  } else {
-    which(vapply(up_map$theta_coords, function(tc) any(tc %in% uids), logical(1)))
-  }
-
-  d_s <- sel_fit$design_spec$d_s
-  # Selection covariates are defined only on the declared fitting universe.
-  # Outside U the nuisance IF is structurally zero; do not read an NA covariate
-  # there and then multiply it by a zero score.
-  Z_slope <- if (is.null(ref) && d_s > 0L) st$Z[rows[U_rows], sel_fit$design_spec$slope_cols, drop = FALSE] else
-    matrix(0, sum(U_rows), d_s)
-  block_ifs <- vector("list", length(sel_fit$blocks))
-  active_cells <- integer(0)
-  u_pos <- cumsum(U_rows)
-
-  for (m in active_blocks) {
-    bl <- sel_fit$blocks[[m]]
-    cids <- bl$cell_ids
-    B_m <- bl$B_m
-    active_cells <- c(active_cells, cids)
-    cell_scores <- matrix(0, B, B_m)
-    # A D60 block lives inside one recipe: its slope rows are that recipe's
-    # selection design on the block cohorts' U rows (zero scores elsewhere).
-    Zb <- Z_slope
-    if (!is.null(ref) && d_s > 0L) {
-      rb <- sel_fit$block_specs[[m]]$reference
-      on <- which(U_rows & ci %in% vapply(sel_fit$cells[cids], `[[`, integer(1), "cohort"))
-      if (length(on)) Zb[u_pos[on], ] <- chained_reference_s(ref, rb, rows[on])[, sel_fit$design_spec$slope_cols, drop = FALSE]
-    }
-    for (b in seq_len(B_m)) {
-      cid <- cids[b]
-      cell <- sel_fit$cells[[cid]]
-      rr <- which(ci == cell$cohort & U_rows)
-      if (!length(rr)) next
-      pr <- predict_selection_cell(sel_fit, rows[rr], cid)
-      Y <- if (identical(sel_fit$selection_model, "independent_period_logit")) {
-        cp04_date_rows(reader, rows[rr], cell$date_spec)$R
-      } else {
-        cp04_pair_rows(reader, rows[rr], cell$pair)$S
-      }
-      cell_scores[rr, b] <- w_of(cell$reference, rr) * (Y - pr)
-    }
-    bif <- list(
-      xi_alpha = matrix(0, B, if (bl$has_intercept) B_m else 0L),
-      xi_beta = matrix(0, B, bl$d_s),
-      xi_theta = matrix(0, B, length(up_map$theta_coords[[m]]))
-    )
-    if (any(U_rows)) {
-      on_U <- evaluate_selection_block_if(bl, Zb, cell_scores[U_rows, , drop = FALSE], st$N)
-      for (name in names(bif)) bif[[name]][U_rows, ] <- on_U[[name]]
-    }
-    block_ifs[[m]] <- bif
-    tc <- up_map$theta_coords[[m]]
-    keep_tc <- which(tc %in% uids)
-    if (length(keep_tc)) {
-      up[, match(tc[keep_tc], uids)] <- bif$xi_theta[, keep_tc, drop = FALSE]
-    }
-  }
-
-  list(
-    up = up,
-    block_ifs = block_ifs,
-    active_blocks = active_blocks,
-    active_cells = unique(active_cells)
-  )
+  op <- selection_prediction_operation(sel_fit)
+  on.exit(op$abort(), add = TRUE)
+  out <- op$upstream(up_map, rows, uids, details)
+  op$finish()
+  out
 }
-
 selection_blocks_diagnostic_list <- function(sel_fit) {
   lapply(seq_along(sel_fit$blocks), function(m) {
     bl <- sel_fit$blocks[[m]]
@@ -443,6 +358,10 @@ cp04_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, glm_cont
   y <- w <- pp <- dy <- numeric(n)
   kk <- obs_rows <- integer(n)
   pos <- 0L
+  dated_prediction <- identical(sel_fit$selection_model, "independent_period_logit")
+  prob_s <- prob_t <- if (dated_prediction) numeric(n) else NULL
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = reference)
+  on.exit(if (!is.null(op)) op$abort(), add = TRUE)
 
   for (start in seq.int(1L, st$N, by = ctrl$max_chunk_rows)) {
     rows <- seq.int(start, min(st$N, start + ctrl$max_chunk_rows - 1L))
@@ -466,13 +385,19 @@ cp04_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, glm_cont
     for (k in unique(ci)) {
       jj <- which(ci == k)
       q <- spec$selection_ids[k]
-      pred_k <- predict_pair_selection(sel_fit, rows[jj], q)
+      pred_k <- op$pair(rows[jj], q)
       pp[ii[jj]] <- pred_k$prob
       w[ii[jj]] <- pred_k$weight
+      if (dated_prediction) {
+        prob_s[ii[jj]] <- pred_k$prob_s
+        prob_t[ii[jj]] <- pred_k$prob_t
+      }
     }
   }
   if (pos != n) cp04_abort("Observed risk support changed from its owner view.", "identity")
 
+  sources <- op$sources
+  op$finish(); op <- NULL
   fit <- cp04_logit(X, y, w, glm_control, st$N, spec)
   lv <- ipw_logit_values(X, fit$coefficients)
   wp <- w * y
@@ -491,6 +416,9 @@ cp04_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, glm_cont
   score <- w * (y - lv$prob) * X
   residual <- cbind(wp * (dy - T_val) / dp, wm * (dy - M_val) / dm, wp, wm)
 
+  op <- selection_prediction_operation(sel_fit, expected_sources = sources,
+    source_reader = reader, source_reference = reference)
+  sources <- NULL
   for (k in seq_len(m)) {
     rr <- which(kk == k)
     if (!length(rr)) next
@@ -502,13 +430,18 @@ cp04_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, glm_cont
     for (cs in seq.int(1L, length(rr), by = ctrl$max_chunk_rows)) {
       ce <- min(length(rr), cs + ctrl$max_chunk_rows - 1L)
       sub <- cs:ce
-      ld_mat[sub, ] <- selection_pair_cohort_log_deriv(sel_fit, up_map, q, obs_rows[rr[sub]])$log_deriv
+      ix <- rr[sub]
+      pred <- list(prob = pp[ix], weight = w[ix])
+      if (dated_prediction) { pred$prob_s <- prob_s[ix]; pred$prob_t <- prob_t[ix] }
+      ld_mat[sub, ] <- op$deriv(up_map, q, obs_rows[ix], pred = pred)$log_deriv
     }
     C[, pos_k] <- C[, pos_k] + crossprod(score[rr, , drop = FALSE], ld_mat) / st$N
     U[, pos_k] <- U[, pos_k] + crossprod(residual[rr, , drop = FALSE], ld_mat) / st$N
   }
 
   V <- matrix(0, 4L, p, dimnames = list(c("T", "M", "dp", "dm"), NULL))
+  op$finish(); op <- NULL
+
   wm_act <- wm * lv$active
   V[2L, ] <- colSums(wm_act * (dy - M_val) * X) / (st$N * dm)
   V[4L, ] <- colSums(wm_act * X) / st$N
@@ -788,7 +721,9 @@ evaluate_cp04_selection_if_chunk <- function(backend, rows, links, scale = "fram
   A <- as.double(st$a_index[rows] > 0L)
   U_rows <- st$U[rows]
 
-  up_res <- evaluate_selection_upstream_chunk(sel_fit, up_map, rows, uids, details = details)
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = ref)
+  on.exit(op$abort(), add = TRUE)
+  up_res <- op$upstream(up_map, rows, uids, details = details)
   up <- up_res$up
 
   models <- vector("list", length(backend$treatments))
@@ -818,7 +753,7 @@ evaluate_cp04_selection_if_chunk <- function(backend, rows, links, scale = "fram
       for (k in seq_along(spec$cohorts)) {
         sub_k <- which(ci[rr] == spec$cohorts[k])
         if (length(sub_k)) {
-          fw[sub_k] <- predict_pair_selection(sel_fit, rows[rr[sub_k]], spec$selection_ids[k])$weight
+          fw[sub_k] <- op$pair(rows[rr[sub_k]], spec$selection_ids[k])$weight
         }
       }
       wp <- fw * D_ind
@@ -901,6 +836,7 @@ evaluate_cp04_selection_if_chunk <- function(backend, rows, links, scale = "fram
   }
   actual_output <- unname(cp04_payload(out)["entries"])
   if (actual_output > pre$output) cp04_abort("IF output bound underestimated.", "bound")
+  op$finish()
   out
 }
 
@@ -926,19 +862,30 @@ or_selection_support <- function(reader, spec, sel_fit, up_map, q_id, recipe, ct
   moments <- array(0, c(m, m, dq))
   clip <- ipw_clip_summary(q = numeric(0), weights = numeric(0))
 
-  or_baseline_visit(reader, spec, ctrl, function(rows, S, obs, dy, Z) {
-    if (!length(obs)) return(invisible(NULL))
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = reference)
+  on.exit(op$abort(), add = TRUE)
+  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+  first <- st$cohort_start[spec$cohort]; last <- st$cohort_end[spec$cohort]
+  for (start in seq.int(first, last, by = ctrl$max_chunk_rows)) {
+    rows <- st$cohort_order[seq.int(start, min(last, start + ctrl$max_chunk_rows - 1))]
+    hit <- cp04_pair_rows(reader, rows, spec$pair, TRUE)
+    obs <- which(hit$S == 1)
+    if (!length(obs)) next
+    dy <- hit$dy[obs]
+    Z <- if (is.null(reference)) frame$Z_a[st$a_index[rows[obs]], , drop = FALSE] else
+      chained_reference_design(reference, spec$reference, rows[obs])
     rr <- rows[obs]
-    ld <- selection_pair_cohort_log_deriv(sel_fit, up_map, q_id, rr)
+    ld <- op$deriv(up_map, q_id, rr)
     q <- ld$pred$weight
     cp04_finite(q, "Corollary 1 fitted pair weights", TRUE)
-    clip <<- ipw_clip_summary_merge(clip, ipw_clip_summary(q = ld$pred$prob, weights = q))
-    acc <<- or_pooled_support_add(acc, recipe, Z, dy, q, "corollary1")
-    moments <<- or_selection_moments_add(moments, Z[, recipe$slope_index, drop = FALSE], dy, q, ld$T_logit)
-  }, reference)
+    clip <- ipw_clip_summary_merge(clip, ipw_clip_summary(q = ld$pred$prob, weights = q))
+    acc <- or_pooled_support_add(acc, recipe, Z, dy, q, "corollary1")
+    moments <- or_selection_moments_add(moments, Z[, recipe$slope_index, drop = FALSE], dy, q, ld$T_logit)
+  }
   if (!is.finite(acc$weight_mass) || acc$weight_mass <= 0 || acc$weight_mass / st$N <= 0)
     or_corollary1_abort("Positive actual-pair cohort support required.", "support")
   cp04_finite(c(acc$sumZ, acc$sumY, moments), "Corollary 1 compact support moments")
+  op$finish()
   list(design = acc, moments = moments, a = a, pair_mass = acc$weight_mass, n_pair = acc$n,
     clipping = clip)
 }
@@ -1368,7 +1315,9 @@ evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame"
 
   sel_fit <- backend$selection_backend
   up_map <- backend$up_map
-  up_res <- evaluate_selection_upstream_chunk(sel_fit, up_map, rows, pre$uids, details = details)
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = ref)
+  on.exit(op$abort(), add = TRUE)
+  up_res <- op$upstream(up_map, rows, pre$uids, details = details)
   up <- up_res$up
 
   hits <- vector("list", length(pre$sids))
@@ -1380,7 +1329,7 @@ evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame"
     hit <- cp04_pair_rows(reader, rows[ix], sp$pair, TRUE)
     obs <- which(hit$S == 1)
     rr <- rows[ix[obs]]
-    pr_obs <- if (length(rr)) predict_pair_selection(sel_fit, rr, q)$prob else numeric(0)
+    pr_obs <- if (length(rr)) op$pair(rr, q)$prob else numeric(0)
     hits[[j]] <- if (is.null(ref)) list(
       obs = ix[obs],
       dy = hit$dy[obs],
@@ -1459,6 +1408,7 @@ evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame"
   }
   if (unname(cp04_payload(out)["entries"]) > pre$output)
     or_corollary1_abort("IF output bound underestimated.", "bound")
+  op$finish()
   out
 }
 

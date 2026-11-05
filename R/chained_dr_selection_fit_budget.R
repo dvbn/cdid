@@ -4,6 +4,8 @@ dr_selection_treatment_model_scratch <- function(n, p, q, d, B, u, h, ld,
                                                  ref_x = 0, ref_s = 0, name_bytes = 0) {
   prod <- ipw_owner_safe_product
   add <- ipw_owner_safe_sum
+  # Six existing observer vectors y/w/pp/dy/kk/obs_rows plus the two raw date
+  # endpoint vectors prob_s/prob_t occupy these same eight scalar slots.
   input <- prod(n, add(c(p, q, 8)))
   # The last gather/predict/reference chunk remains bound in the R frame while
   # fitting/derivatives run. Date products retain both endpoint predictions.

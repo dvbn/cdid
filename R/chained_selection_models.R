@@ -1117,88 +1117,26 @@ resolve_pair_cohort_id <- function(backend, pair_cohort_id) {
 }
 
 predict_selection_cell <- function(backend, rows, cell_id) {
-  validate_selection_models(backend)
-  reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
-  st <- reader$state
-  if (!is.numeric(rows) || is.object(rows) || !is.null(dim(rows)) || !length(rows) ||
-      anyNA(rows) || any(rows != floor(rows)) || any(rows < 1L | rows > length(st$a_index)))
-    cp04_abort("Invalid row indices for predict_selection_cell.", "input")
-  if (!is.numeric(cell_id) || length(cell_id) != 1L || is.na(cell_id) ||
-      cell_id < 1L || cell_id > length(backend$cells))
-    cp04_abort("Invalid `cell_id`.", "input")
-
-  cell <- backend$cells[[as.integer(cell_id)]]
-  block <- backend$blocks[[cell$block_id]]
-  b <- cell$local_b
-  ref <- chained_backend_reference(backend)
-
-  if (identical(block$branch, "zero_col")) {
-    return(rep.int(0.5, length(rows)))
-  }
-  if (identical(block$branch, "cp04_separate_pair")) {
-    sp <- list(pair = cell$pair, cohort = cell$cohort)
-    if (!is.null(cell$reference)) sp$reference <- cell$reference
-    return(cp04_predict_selection(reader, rows, sp, block, ref))
-  }
-  d_s <- block$d_s
-  Z_slope <- if (d_s > 0L) {
-    if (is.null(ref)) st$Z[rows, backend$design_spec$slope_cols, drop = FALSE] else
-      chained_reference_s(ref, cell$reference, rows)[, backend$design_spec$slope_cols, drop = FALSE]
-  } else matrix(0, length(rows), 0L)
-  eta <- (if (block$has_intercept) block$alpha[b] else 0) +
-    (if (d_s > 0L) drop(Z_slope %*% block$beta) else rep.int(0, length(rows)))
-  p <- ipw_clip_logit(eta)$prob
-  cp04_finite(p, "replayed selection probabilities", TRUE)
-  if (any(p >= 1)) cp04_abort("Replayed selection probability at boundary.", "boundary", cell)
-  p
+  op <- selection_prediction_operation(backend)
+  on.exit(op$abort(), add = TRUE)
+  out <- op$cell(rows, cell_id)
+  op$finish()
+  out
 }
-
 predict_period_pair_selection <- function(backend, rows, pair_cohort_id) {
-  validate_selection_models(backend)
-  if (!identical(backend$selection_model, "independent_period_logit"))
-    cp04_abort("`predict_period_pair_selection` requires selection_model == \"independent_period_logit\".", "unsupported")
-  q <- resolve_pair_cohort_id(backend, pair_cohort_id)
-  pc <- backend$pair_cohorts[[q]]
-  reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
-  st <- reader$state
-
-  ps <- predict_selection_cell(backend, rows, pc$s_cell_id)
-  pt <- predict_selection_cell(backend, rows, pc$t_cell_id)
-  p_pair <- ps * pt
-  cp04_finite(p_pair, "replayed product pair selection probabilities", TRUE)
-  if (any(p_pair >= 1)) cp04_abort("Replayed product pair selection probability at boundary.", "boundary", pc)
-  ref <- chained_backend_reference(backend)
-  a_pc <- if (is.null(ref)) st$a[pc$cohort] else chained_reference_stat(ref, pc$reference, pc$cohort, "a")
-  w_rows <- if (is.null(ref)) st$w[rows] else chained_reference_weight(ref, pc$reference, rows)
-  # The final raw product is floored once; raw endpoints stay for scores.
-  p_weight <- ipw_clip_floor(p_pair)
-  w_sel <- w_rows * a_pc / (st$rho[rows] * p_weight)
-  cp04_finite(w_sel, "replayed selection weights", TRUE)
-  list(prob = p_pair, prob_s = ps, prob_t = pt, prob_weight = p_weight,
-       active = ipw_clip_floor_active(p_pair), weight = w_sel, a = a_pc, pair_cohort_id = q)
+  op <- selection_prediction_operation(backend)
+  on.exit(op$abort(), add = TRUE)
+  out <- op$period(rows, pair_cohort_id)
+  op$finish()
+  out
 }
-
 predict_pair_selection <- function(backend, rows, pair_cohort_id) {
-  validate_selection_models(backend)
-  if (identical(backend$selection_model, "independent_period_logit")) {
-    return(predict_period_pair_selection(backend, rows, pair_cohort_id))
-  }
-  q <- resolve_pair_cohort_id(backend, pair_cohort_id)
-  pc <- backend$pair_cohorts[[q]]
-  reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
-  st <- reader$state
-
-  p_pair <- predict_selection_cell(backend, rows, pc$pair_cell_id)
-  ref <- chained_backend_reference(backend)
-  a_pc <- if (is.null(ref)) st$a[pc$cohort] else chained_reference_stat(ref, pc$reference, pc$cohort, "a")
-  w_rows <- if (is.null(ref)) st$w[rows] else chained_reference_weight(ref, pc$reference, rows)
-  p_weight <- ipw_clip_floor(p_pair)
-  w_sel <- w_rows * a_pc / (st$rho[rows] * p_weight)
-  cp04_finite(w_sel, "replayed selection weights", TRUE)
-  list(prob = p_pair, prob_weight = p_weight, active = ipw_clip_floor_active(p_pair),
-       weight = w_sel, a = a_pc, pair_cohort_id = q)
+  op <- selection_prediction_operation(backend)
+  on.exit(op$abort(), add = TRUE)
+  out <- op$pair(rows, pair_cohort_id)
+  op$finish()
+  out
 }
-
 # Diagnostic/test entry points below read the static roster design and rates;
 # a recipe-indexed (D60) backend is consumed only through the recipe-keyed
 # predictions, log-weight derivatives and upstream rows of the consumers.

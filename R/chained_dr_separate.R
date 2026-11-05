@@ -91,8 +91,10 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   w <- if (is.null(ref)) st$w[rows] else rep(NA_real_, B)
   A <- as.double(st$a_index[rows] > 0L)
   all_or_cols <- backend$or_frame_index[backend$outcome_recipe$slope_index]
-  up_res <- if (conditional) evaluate_selection_upstream_chunk(backend$selection_backend,
-    backend$up_map, rows, pre$uids, details) else NULL
+  op <- if (conditional) selection_prediction_operation(backend$selection_backend,
+    source_reader = reader, source_reference = ref) else NULL
+  on.exit(if (!is.null(op)) op$abort(), add = TRUE)
+  up_res <- if (conditional) op$upstream(backend$up_map, rows, pre$uids, details) else NULL
   up <- if (conditional) up_res$up else matrix(0, B, length(pre$sids))
   hits <- vector("list", length(pre$sids))
   for (j in seq_along(pre$sids)) {
@@ -104,7 +106,7 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
       chained_reference_x(ref, sp$reference, rr)[, all_or_cols, drop = FALSE]
     hits[[j]] <- list(obs = obs, dy = hit$dy[hit$S == 1], z = Z)
     if (conditional) {
-      pr <- if (length(rr)) predict_pair_selection(backend$selection_backend, rr, backend$q_of_s[sid])$prob else numeric(0)
+      pr <- if (length(rr)) op$pair(rr, backend$q_of_s[sid])$prob else numeric(0)
       a <- if (is.null(ref)) st$a[sp$cohort] else chained_reference_stat(ref, sp$reference, sp$cohort, "a")
       hits[[j]]$v <- or_corollary1_factor(a, st$rho[rr], pr)
     } else if (is.null(ref)) {
@@ -243,5 +245,6 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   }
   if (unname(cp04_payload(out)["entries"]) > pre$output)
     dr_route_abort(route, "IF output bound underestimated.", "bound")
+  if (!is.null(op)) op$finish()
   out
 }

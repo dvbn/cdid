@@ -150,18 +150,29 @@ dr_selection_support <- function(reader, spec, sel_fit, up_map, q_id, recipe, or
   acc <- or_pooled_support_start(recipe, spec$transitions)
   moments <- array(0, c(m, m, dq))
 
-  dr_support_visit(reader, spec, ctrl, or_frame_index, function(rows, S, obs, dy, Z) {
-    if (!length(obs)) return(invisible(NULL))
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = reference)
+  on.exit(op$abort(), add = TRUE)
+  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+  first <- st$cohort_start[spec$cohort]; last <- st$cohort_end[spec$cohort]
+  for (start in seq.int(first, last, by = ctrl$max_chunk_rows)) {
+    rows <- st$cohort_order[seq.int(start, min(last, start + ctrl$max_chunk_rows - 1L))]
+    hit <- cp04_pair_rows(reader, rows, spec$pair, TRUE)
+    obs <- which(hit$S == 1)
+    Z <- if (is.null(reference)) frame$Z_a[st$a_index[rows[obs]], or_frame_index, drop = FALSE] else
+      chained_reference_x(reference, spec$reference, rows[obs])[, or_frame_index, drop = FALSE]
+    dy <- hit$dy[obs]
+    if (!length(obs)) next
     rr <- rows[obs]
-    ld <- selection_pair_cohort_log_deriv(sel_fit, up_map, q_id, rr)
+    ld <- op$deriv(up_map, q_id, rr)
     q <- ld$pred$weight
     cp04_finite(q, "Corollary 1 fitted pair weights", TRUE)
-    acc <<- or_pooled_support_add(acc, recipe, Z, dy, q, "corollary1")
-    moments <<- or_selection_moments_add(moments, Z[, recipe$slope_index, drop = FALSE], dy, q, ld$T_logit)
-  }, reference)
+    acc <- or_pooled_support_add(acc, recipe, Z, dy, q, "corollary1")
+    moments <- or_selection_moments_add(moments, Z[, recipe$slope_index, drop = FALSE], dy, q, ld$T_logit)
+  }
   if (!is.finite(acc$weight_mass) || acc$weight_mass <= 0 || acc$weight_mass / st$N <= 0)
     dr_corollary1_abort("Positive actual-pair cohort support required.", "support")
   cp04_finite(c(acc$sumZ, acc$sumY, moments), "Corollary 1 compact support moments")
+  op$finish()
   list(design = acc, moments = moments, a = a, pair_mass = acc$weight_mass, n_pair = acc$n)
 }
 
@@ -728,6 +739,10 @@ dr_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, reg, share
   y <- w <- pp <- dy <- numeric(n)
   kk <- obs_rows <- integer(n)
   pos <- 0L
+  dated_prediction <- identical(sel_fit$selection_model, "independent_period_logit")
+  prob_s <- prob_t <- if (dated_prediction) numeric(n) else NULL
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = reference)
+  on.exit(if (!is.null(op)) op$abort(), add = TRUE)
 
   for (start in seq.int(1L, st$N, by = ctrl$max_chunk_rows)) {
     rows <- seq.int(start, min(st$N, start + ctrl$max_chunk_rows - 1L))
@@ -758,13 +773,19 @@ dr_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, reg, share
     for (k in unique(ci)) {
       jj <- which(ci == k)
       q <- spec$selection_ids[k]
-      pred_k <- predict_pair_selection(sel_fit, rows[jj], q)
+      pred_k <- op$pair(rows[jj], q)
       pp[ii[jj]] <- pred_k$prob
       w[ii[jj]] <- pred_k$weight
+      if (dated_prediction) {
+        prob_s[ii[jj]] <- pred_k$prob_s
+        prob_t[ii[jj]] <- pred_k$prob_t
+      }
     }
   }
   if (pos != n) dr_corollary1_abort("Observed risk support changed from its owner view.", "identity")
 
+  sources <- op$sources
+  op$finish(); op <- NULL
   fit <- cp04_logit(X_trt, y, w, glm_control, st$N, spec)
   names(fit$coefficients) <- trt_recipe$columns
   lv <- ipw_logit_values(X_trt, fit$coefficients)
@@ -806,6 +827,9 @@ dr_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, reg, share
   residual_dr <- cbind(wp * (r_obs - T_dr) / dp, wm * (r_obs - M_dr) / dm, wp, wm)
   residual_ipw <- cbind(wp * (dy - T_ipw) / dp, wm * (dy - M_ipw) / dm, wp, wm)
 
+  op <- selection_prediction_operation(sel_fit, expected_sources = sources,
+    source_reader = reader, source_reference = reference)
+  sources <- NULL
   for (k in seq_len(m)) {
     rr <- which(kk == k)
     if (!length(rr)) next
@@ -816,12 +840,17 @@ dr_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, reg, share
     for (cs in seq.int(1L, length(rr), by = ctrl$max_chunk_rows)) {
       ce <- min(length(rr), cs + ctrl$max_chunk_rows - 1L)
       sub <- cs:ce
-      ld_mat[sub, ] <- selection_pair_cohort_log_deriv(sel_fit, up_map, q, obs_rows[rr[sub]])$log_deriv
+      ix <- rr[sub]
+      pred <- list(prob = pp[ix], weight = w[ix])
+      if (dated_prediction) { pred$prob_s <- prob_s[ix]; pred$prob_t <- prob_t[ix] }
+      ld_mat[sub, ] <- op$deriv(up_map, q, obs_rows[ix], pred = pred)$log_deriv
     }
     C[, pos_k] <- C[, pos_k] + crossprod(score[rr, , drop = FALSE], ld_mat) / st$N
     U_dr[, pos_k] <- U_dr[, pos_k] + crossprod(residual_dr[rr, , drop = FALSE], ld_mat) / st$N
     U_ipw[, pos_k] <- U_ipw[, pos_k] + crossprod(residual_ipw[rr, , drop = FALSE], ld_mat) / st$N
   }
+
+  op$finish(); op <- NULL
 
   wm_act <- wm * lv$active
   V_dr <- matrix(0, 4L, p_trt, dimnames = list(c("T", "M", "dp", "dm"), trt_recipe$columns))
@@ -2685,7 +2714,9 @@ evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
   sel_fit <- backend$selection_backend
   up_map <- backend$up_map
   # 1. Evaluate upstream selection & rate IFs ONCE for the chunk
-  up_res <- evaluate_selection_upstream_chunk(sel_fit, up_map, rows, pre$uids, details = details)
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = ref)
+  on.exit(op$abort(), add = TRUE)
+  up_res <- op$upstream(up_map, rows, pre$uids, details = details)
   up <- up_res$up
 
   # D92: the non-detailed Corollary 1 DR IF reads only core$beta (psi_or, the
@@ -2706,7 +2737,7 @@ evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
       hit <- cp04_pair_rows(reader, rows[ix], sp$pair, TRUE)
       obs <- which(hit$S == 1)
       rr <- rows[ix[obs]]
-      pr_obs <- if (length(rr)) predict_pair_selection(sel_fit, rr, q)$prob else numeric(0)
+      pr_obs <- if (length(rr)) op$pair(rr, q)$prob else numeric(0)
       hits[[j]] <- if (is.null(ref)) list(
         obs = ix[obs],
         dy = hit$dy[obs],
@@ -2774,7 +2805,7 @@ evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
       for (k in seq_along(spec$cohorts)) {
         sub_k <- which(ci[rr] == spec$cohorts[k])
         if (length(sub_k)) {
-          fw[sub_k] <- predict_pair_selection(sel_fit, rows[rr[sub_k]], spec$selection_ids[k])$weight
+          fw[sub_k] <- op$pair(rows[rr[sub_k]], spec$selection_ids[k])$weight
         }
       }
       wp <- fw * D_ind
@@ -2923,6 +2954,7 @@ evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
   }
   if (unname(cp04_payload(out)["entries"]) > pre$output)
     dr_corollary1_abort("IF output bound underestimated.", "bound")
+  op$finish()
   out
 }
 
