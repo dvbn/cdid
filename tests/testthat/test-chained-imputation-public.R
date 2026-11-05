@@ -7,6 +7,15 @@
 # test-only dense diagnostics. Acceptance of point/IF/covariance values against
 # the independent company public reference is supplied separately by root.
 
+# Import only the diagnostic witness definition, without sibling fixtures/tests.
+impp_diagnostic_copy_witness <- local({
+  defs <- parse(testthat::test_path("test-chained-or-public.R"), keep.source = FALSE)
+  hit <- which(vapply(defs, function(x) is.call(x) && identical(x[[1L]], as.name("<-")) &&
+    identical(x[[2L]], as.name("orp_diagnostic_copy_witness")), logical(1L)))
+  stopifnot(length(hit) == 1L)
+  eval(defs[[hit]])
+})
+
 impp_has_installed_cdid <- function() {
   isNamespaceLoaded("cdid") || requireNamespace("cdid", quietly = TRUE)
 }
@@ -217,6 +226,7 @@ impp_state <- new.env(parent = emptyenv())
 
 testthat::test_that("pure imputation runs for every treatment method and pooling with accurate metadata", {
   testthat::skip_if_not(impp_has_installed_cdid(), "Installed cdid namespace required.")
+  witness <- impp_diagnostic_copy_witness()
   fx <- impp_fixture()
   N <- nrow(fx$frame)
   label <- impp_val("chained_result_estimator")
@@ -306,7 +316,8 @@ testthat::test_that("pure imputation runs for every treatment method and pooling
     testthat::expect_equal(fit$se[av], unname(sqrt(diag(fit$V_analytical)[av] / fit$n)), tolerance = 1e-12)
     # Existing resource reservation for the final diagnostic copy.
     ra <- fit$chained$resource_accounting
-    testthat::expect_equal(ra$final_diagnostic_copy_entries, 5 * (4 * nd$accounting$owned_entries + 4096), tolerance = 0)
+    testthat::expect_equal(ra$final_diagnostic_copy_entries, 5 * witness$output, tolerance = 0)
+    testthat::expect_lte(witness$payload(nd), witness$output)
     testthat::expect_lte(max(ra$simultaneous_entries, ra$initial_envelope_entries) + ra$final_diagnostic_copy_entries,
       fit$chained$public$numeric_workspace_entries)
     # Reporting adapters.

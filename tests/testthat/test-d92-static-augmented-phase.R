@@ -131,16 +131,27 @@ testthat::test_that("static augmented phase stores preserve all F rows and exact
   }
 })
 
-aps_pipeline_ns <- function(gmm = TRUE, stream = FALSE, fail_at = NULL) {
+aps_pipeline_ns <- function(gmm = TRUE, stream = FALSE, fail_at = NULL, allow_transfer = TRUE) {
   api <- asNamespace("cdid")
   e <- aps_phase$d92_distinct_partition_ns(B_cov = 7L, B_gmm = 5L)
   trace <- new.env(parent = emptyenv()); trace$stores <- list(); trace$inventory <- list(); trace$rows <- list()
+  trace$transition_attempted <- FALSE; trace$transferred <- FALSE
+  trace$max_live_stores <- 0L; trace$streamed_passes <- 0L; trace$partitions <- integer()
   pipeline <- e$run_chained_ipw_pipeline
   e$run_chained_ipw_pipeline <- function(...) {
     out <- pipeline(...); trace$result <- out; out
   }
   replay <- aps("cp04_retained_if_replay"); environment(replay) <- e
-  e$cp04_retained_if_replay <- replay
+  e$cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, pre) {
+    trace$partitions <- c(trace$partitions, B)
+    replay(store, backend, links, callback, scale, B, pre)
+  }
+  replay_links <- aps("cp04_replay_links"); environment(replay_links) <- e
+  e$cp04_replay_links <- function(backend, links, callback, scale = "core", chunk_rows = NULL) {
+    if (!inherits(backend, "cdid_cp04_retained_if_bound"))
+      trace$streamed_passes <- trace$streamed_passes + 1L
+    replay_links(backend, links, callback, scale, chunk_rows)
+  }
   # Force only the whole-lifetime decline. Every phase's original charged
   # inventory, planner probe and one-store-at-a-time guard remain live.
   e$cp04_retained_if_reserve <- function(...) NULL
@@ -158,8 +169,18 @@ aps_pipeline_ns <- function(gmm = TRUE, stream = FALSE, fail_at = NULL) {
       testthat::expect_identical(retained_with_diagnostics, original)
       testthat::expect_identical(cp04_planner_retained, get("cp04_planner_retained", f))
       testthat::expect_gte(get("final_diagnostic_copy_entries", f), 5 * actual)
-      testthat::expect_identical(trace$stores$covariance$state, "released")
-      testthat::expect_false(exists("phi", trace$stores$covariance, inherits = FALSE))
+      if (!trace$transition_attempted) {
+        # The transition inventories the filled covariance buffer, before
+        # deciding whether the same buffer can serve the GMM partition.
+        testthat::expect_identical(trace$stores$covariance$state, "filled")
+        testthat::expect_true(exists("phi", trace$stores$covariance, inherits = FALSE))
+        testthat::expect_identical(trace$stores$covariance$producer_passes, 1L)
+        testthat::expect_identical(trace$stores$covariance$slice_passes, 1L)
+      } else {
+        testthat::expect_false(trace$transferred)
+        testthat::expect_identical(trace$stores$covariance$state, "released")
+        testthat::expect_false(exists("phi", trace$stores$covariance, inherits = FALSE))
+      }
     }
     out <- inventory(phase, backend, cov_plan, point_preflight, retained_with_diagnostics,
       cp04_planner_retained, d5_arrays, L_used, M_all)
@@ -174,9 +195,37 @@ aps_pipeline_ns <- function(gmm = TRUE, stream = FALSE, fail_at = NULL) {
   reserve <- e$cp04_retained_if_phase_reserve
   e$cp04_retained_if_phase_reserve <- function(backend, links, phase, ...) {
     if (stream || (phase == "gmm" && !gmm)) return(NULL)
+    if (phase == "gmm") {
+      testthat::expect_identical(trace$stores$covariance$state, "released")
+      testthat::expect_false(exists("phi", trace$stores$covariance, inherits = FALSE))
+    }
     out <- reserve(backend, links, phase = phase, ...)
     testthat::expect_true(is.environment(out))
     trace$stores[[phase]] <- out
+    live <- sum(vapply(trace$stores, function(s) !identical(s$state, "released"), logical(1L)))
+    trace$max_live_stores <- max(trace$max_live_stores, live)
+    testthat::expect_identical(live, 1L)
+    out
+  }
+  transfer <- aps("cp04_retained_if_covariance_to_gmm")
+  e$cp04_retained_if_covariance_to_gmm <- function(store, backend, links, chunk_rows, retained, work, control) {
+    trace$transition_attempted <- TRUE
+    testthat::expect_identical(store, trace$stores$covariance)
+    testthat::expect_identical(store$state, "filled")
+    testthat::expect_identical(store$producer_passes, 1L)
+    testthat::expect_identical(store$slice_passes, 1L)
+    if (!gmm || !allow_transfer) return(NULL)
+    original <- store$phi; raw_ref <- store$raw_ref
+    out <- transfer(store, backend, links, chunk_rows, retained, work, control)
+    testthat::expect_identical(out, store)
+    testthat::expect_true(api$gmm_sexp_aliases(out$phi, original))
+    testthat::expect_identical(out$raw_ref, raw_ref)
+    testthat::expect_true(api$gmm_sexp_aliases(out$phi, out$raw_ref$phi))
+    testthat::expect_identical(out$producer_passes, 1L)
+    testthat::expect_identical(out$slice_passes, 1L)
+    testthat::expect_lte(out$gmm_transfer$admission_total,
+      min(control$max_retained_entries, control$max_matrix_entries))
+    trace$transferred <- TRUE
     out
   }
   e$chained_full_if_chunk <- function(backend, rows, links, scale, plan = NULL) {
@@ -184,13 +233,22 @@ aps_pipeline_ns <- function(gmm = TRUE, stream = FALSE, fail_at = NULL) {
     api$chained_full_if_chunk(backend, rows, links, scale, plan)
   }
   e$gmm_covariance_provenance <- function(...) {
-    if (!stream) testthat::expect_identical(trace$stores$covariance$state, "released")
+    if (!stream) {
+      store <- trace$stores$covariance
+      if (trace$transferred) {
+        testthat::expect_true(trace$transferred)
+        testthat::expect_identical(store$state, "filled")
+        testthat::expect_true(api$gmm_sexp_aliases(store$phi, store$raw_ref$phi))
+        testthat::expect_identical(store$producer_passes, 1L)
+      } else testthat::expect_identical(store$state, "released")
+    }
     api$gmm_covariance_provenance(...)
   }
   e$build_ipw_auxiliary_reporting <- function(...) {
     for (store in trace$stores) {
       testthat::expect_identical(store$state, "released")
-      testthat::expect_false(exists("phi", store, inherits = FALSE))
+      for (nm in c("phi", "raw_ref", "backend_snapshot", "reader_snapshot", "gmm_transfer"))
+        testthat::expect_false(exists(nm, store, inherits = FALSE))
     }
     api$build_ipw_auxiliary_reporting(...)
   }
@@ -218,23 +276,55 @@ testthat::test_that("static augmented pipeline funds its actual diagnostic and r
   testthat::expect_identical(a$support, b$support)
   testthat::expect_identical(a$reporting$target_meta, b$reporting$target_meta)
   record <- a$resource_accounting$point_producer$retained_moment_if
-  testthat::expect_identical(record$mode, "phase_local")
-  testthat::expect_equal(record$chunk_rows, c(covariance = 7, gmm = 5))
-  testthat::expect_identical(record$producer_passes, 2L)
-  testthat::expect_identical(record$slice_passes, 2L)
-  testthat::expect_identical(record$streamed_passes, 0L)
-  testthat::expect_identical(record$simultaneous_stores, 1L)
+  testthat::expect_identical(record$mode, "covariance_to_gmm")
+  testthat::expect_equal(c(covariance = record$covariance_chunk_rows, gmm = record$gmm_chunk_rows), c(covariance = 7, gmm = 5))
+  testthat::expect_identical(record$producer_passes, 1L)
+  testthat::expect_identical(record$slice_passes, 3L)
+  testthat::expect_identical(retained$trace$streamed_passes, 0L)
+  testthat::expect_identical(retained$trace$max_live_stores, 1L)
+  testthat::expect_identical(names(retained$trace$stores), "covariance")
+  testthat::expect_equal(retained$trace$partitions, c(7, 7, 5, 5))
   testthat::expect_equal(record$n_links, length(a$point_links_used))
   testthat::expect_identical(a$reduction_summary, b$reduction_summary)
   N <- a$nuisance_registry$cp04_reader$state$N
-  testthat::expect_length(retained$trace$rows, ceiling(N / 7) + ceiling(N / 5))
+  testthat::expect_length(retained$trace$rows, ceiling(N / 7))
+  testthat::expect_identical(unlist(retained$trace$rows, use.names = FALSE), seq_len(N))
   for (store in retained$trace$stores) {
     testthat::expect_identical(store$state, "released")
-    for (nm in c("phi", "raw_ref", "backend_snapshot", "reader_snapshot"))
+    for (nm in c("phi", "raw_ref", "backend_snapshot", "reader_snapshot", "gmm_transfer"))
       testthat::expect_false(exists(nm, store, inherits = FALSE))
   }
   testthat::expect_false(aps_public$d92_find_store(a))
   testthat::expect_false(aps_public$d92_find_store(out))
+  # Declining only transfer retains the original two independent stores.
+  # The covariance allocation is released before the GMM store is admitted.
+  separate <- aps_pipeline_ns(allow_transfer = FALSE)
+  separate_out <- run(separate)
+  separate_result <- separate$trace$result
+  aps_public$d92_expect_parity(separate_result, b)
+  testthat::expect_equal(separate_out$att, ref$att, tolerance = 1e-12)
+  testthat::expect_equal(separate_out$inffunc, ref$inffunc, tolerance = 1e-12)
+  separate_record <- separate_result$resource_accounting$point_producer$retained_moment_if
+  testthat::expect_identical(separate_record$mode, "phase_local")
+  testthat::expect_equal(separate_record$chunk_rows, c(covariance = 7, gmm = 5))
+  testthat::expect_identical(separate_record$producer_passes, 2L)
+  testthat::expect_identical(separate_record$slice_passes, 2L)
+  testthat::expect_identical(separate_record$streamed_passes, 0L)
+  testthat::expect_identical(separate_record$simultaneous_stores, 1L)
+  testthat::expect_identical(separate$trace$max_live_stores, 1L)
+  testthat::expect_false(separate$trace$transferred)
+  testthat::expect_identical(names(separate$trace$stores), c("covariance", "gmm"))
+  testthat::expect_false(identical(separate$trace$stores$covariance, separate$trace$stores$gmm))
+  testthat::expect_equal(separate$trace$partitions, c(7, 7, 5, 5))
+  testthat::expect_length(separate$trace$rows, ceiling(N / 7) + ceiling(N / 5))
+  testthat::expect_identical(unlist(separate$trace$rows, use.names = FALSE), c(seq_len(N), seq_len(N)))
+  for (store in separate$trace$stores) {
+    testthat::expect_identical(store$state, "released")
+    for (nm in c("phi", "raw_ref", "backend_snapshot", "reader_snapshot", "gmm_transfer"))
+      testthat::expect_false(exists(nm, store, inherits = FALSE))
+  }
+  testthat::expect_false(aps_public$d92_find_store(separate_result))
+  testthat::expect_false(aps_public$d92_find_store(separate_out))
   # A legitimate GMM decline keeps the covariance-only gain and streams the
   # two original GMM passes at their original partition.
   cov_only <- aps_pipeline_ns(gmm = FALSE)

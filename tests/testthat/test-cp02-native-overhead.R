@@ -115,18 +115,30 @@ noh_make_exec_dir <- function(prefix = "noh_build_") {
   stop("Unable to create an executable temporary directory for R CMD SHLIB.", call. = FALSE)
 }
 
-noh_compile_dll <- function(c_lines, dll_name, parent_dir) {
+noh_compile_dll <- function(c_lines, dll_name, parent_dir, source_dir = NULL) {
   sub_dir <- tempfile(pattern = paste0("dll_", dll_name, "_"), tmpdir = parent_dir)
   dir.create(sub_dir, recursive = TRUE, showWarnings = FALSE)
   src <- file.path(sub_dir, paste0(dll_name, ".c"))
   writeLines(c_lines, src)
+  companions <- character(0L)
+  # Current cdid mutants retain the actual registered implementation bundle.
+  # Standalone probes and the immutable original use only their supplied C.
+  if (!is.null(source_dir)) {
+    companions <- c("chained_zero_template.c", "chained_legacy_ipw_chunk.c",
+      "chained_score_pullback.c", "chained_coarse_pullback.c", "chained_pair_operation.c")
+    bundle <- file.path(source_dir, c("cdid_r_api.h", companions))
+    if (!all(file.exists(bundle)) || !all(file.copy(bundle, sub_dir)))
+      stop("Incomplete current native source bundle for CP02 test build.", call. = FALSE)
+  }
   old <- setwd(sub_dir)
   on.exit(setwd(old), add = TRUE)
-  out <- system2(
+  # Preserve compiler/linker diagnostics even when the test runner uses warn=2.
+  out <- suppressWarnings(system2(
     file.path(R.home("bin"), "R"),
-    c("CMD", "SHLIB", shQuote(basename(src))),
+    c("CMD", "SHLIB", "-o", shQuote(paste0(dll_name, .Platform$dynlib.ext)),
+      shQuote(c(basename(src), companions))),
     stdout = TRUE, stderr = TRUE
-  )
+  ))
   so <- file.path(sub_dir, paste0(dll_name, .Platform$dynlib.ext))
   if (!is.null(attr(out, "status")) || !file.exists(so)) {
     stop("R CMD SHLIB failed for ", dll_name, ":\n", paste(out, collapse = "\n"), call. = FALSE)
@@ -136,6 +148,9 @@ noh_compile_dll <- function(c_lines, dll_name, parent_dir) {
 
 noh_populate_env_from_pkg <- function(env, pkg_root = NULL, keep.source = FALSE) {
   if (!is.null(pkg_root)) {
+    # Match the real namespace's importFrom(stats, setNames) before factories
+    # are evaluated in this otherwise base-parented synthetic owner.
+    env$setNames <- stats::setNames
     r_files <- sort(list.files(file.path(pkg_root, "R"), pattern = "\\.[rR]$", full.names = TRUE))
     for (p in r_files) {
       sys.source(p, envir = env, keep.source = keep.source)
@@ -224,8 +239,8 @@ test_that("1. Native symbol table cache follows current owner across same-basena
   noh_unload_all_cdid_dlls()
 
   c_lines <- readLines(c_src)
-  so_a <- noh_compile_dll(c_lines, "cdid", work_dir)
-  so_b <- noh_compile_dll(c_lines, "cdid", work_dir)
+  so_a <- noh_compile_dll(c_lines, "cdid", work_dir, source_dir = dirname(c_src))
+  so_b <- noh_compile_dll(c_lines, "cdid", work_dir, source_dir = dirname(c_src))
   expect_false(identical(so_a, so_b))
 
   dll_a <- dyn.load(so_a)
@@ -348,8 +363,8 @@ test_that("2. Unload/reload, missing-DLL, deparsed standalone probe, and invalid
 
   # 2c. Load two valid DLLs, warm namespace ns_a on dll_a, then unload dll_a while dll_b stays loaded
   c_lines <- readLines(c_src)
-  so_a <- noh_compile_dll(c_lines, "cdid", work_dir)
-  so_b <- noh_compile_dll(c_lines, "cdid", work_dir)
+  so_a <- noh_compile_dll(c_lines, "cdid", work_dir, source_dir = dirname(c_src))
+  so_b <- noh_compile_dll(c_lines, "cdid", work_dir, source_dir = dirname(c_src))
   dll_a <- dyn.load(so_a)
   dll_b <- dyn.load(so_b)
 
@@ -382,7 +397,7 @@ test_that("2. Unload/reload, missing-DLL, deparsed standalone probe, and invalid
 
   # 2d. Mutant A: missing `C_gmm_iv_mat_product` registration
   mut_missing <- c_lines[!grepl("\\{\"C_gmm_iv_mat_product\"", c_lines)]
-  so_missing <- noh_compile_dll(mut_missing, "cdid", work_dir)
+  so_missing <- noh_compile_dll(mut_missing, "cdid", work_dir, source_dir = dirname(c_src))
   dll_missing <- dyn.load(so_missing)
   err_m1 <- expect_error(src_env$gmm_require_native_dll(), class = "cdid_gmm_native_error")
   expect_match(conditionMessage(err_m1), "missing required registered `.Call` routines")
@@ -394,7 +409,7 @@ test_that("2. Unload/reload, missing-DLL, deparsed standalone probe, and invalid
     "{\"C_gmm_iv_dot\", (DL_FUNC) &C_gmm_iv_dot, 2},",
     c_lines, fixed = TRUE
   )
-  so_arity <- noh_compile_dll(mut_arity, "cdid", work_dir)
+  so_arity <- noh_compile_dll(mut_arity, "cdid", work_dir, source_dir = dirname(c_src))
   dll_arity <- dyn.load(so_arity)
   err_m2 <- expect_error(src_env$gmm_require_native_dll(), class = "cdid_gmm_native_error")
   expect_match(conditionMessage(err_m2), "Native symbol registration/forcing verification failed for `C_gmm_iv_dot`")
@@ -406,7 +421,7 @@ test_that("2. Unload/reload, missing-DLL, deparsed standalone probe, and invalid
     "SET_STRING_ELT(names, 2, Rf_mkChar(\"force_symbols\"));\n  SET_VECTOR_ELT(out, 2, Rf_ScalarLogical(0));",
     paste(c_lines, collapse = "\n"), fixed = TRUE
   )
-  so_status <- noh_compile_dll(strsplit(mut_status, "\n", fixed = TRUE)[[1L]], "cdid", work_dir)
+  so_status <- noh_compile_dll(strsplit(mut_status, "\n", fixed = TRUE)[[1L]], "cdid", work_dir, source_dir = dirname(c_src))
   dll_status <- dyn.load(so_status)
   err_m3 <- expect_error(src_env$gmm_require_native_dll(), class = "cdid_gmm_native_error")
   expect_match(conditionMessage(err_m3), "Native C backend arithmetic/registration status check failed")
@@ -431,7 +446,7 @@ test_that("3. Live hardware FP rounding and subnormal-flush changes are caught o
   }, add = TRUE)
 
   noh_unload_all_cdid_dlls()
-  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir)
+  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir, source_dir = dirname(c_src))
   dll_prod <- dyn.load(so_prod)
   src_env <- noh_load_source_owner_env(pkg_root)
 
@@ -569,7 +584,7 @@ test_that("4. Owner seal identity, mutated/mismatched owner refusals, ALTREP com
   }, add = TRUE)
 
   noh_unload_all_cdid_dlls()
-  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir)
+  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir, source_dir = dirname(c_src))
   dll_prod <- dyn.load(so_prod)
   ns <- noh_make_mock_namespace("cdid", dll_info = dll_prod, pkg_root = pkg_root)
   lockEnvironment(ns, bindings = TRUE)
@@ -674,7 +689,7 @@ test_that("5. Actual OS SIGINT in throwaway child processes is caught by C-backe
     unlink(work_dir, recursive = TRUE, force = TRUE)
   }, add = TRUE)
 
-  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir)
+  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir, source_dir = dirname(c_src))
   rscript_bin <- file.path(R.home("bin"), "Rscript")
 
   run_child_sigint_probe <- function(mode_label, loop_lines) {
@@ -1054,7 +1069,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
   # 6b. Bit-for-bit numerical equivalence between original and candidate C + R implementations
   noh_unload_all_cdid_dlls()
   so_orig <- noh_compile_dll(readLines(file.path(ref_root, "src", "cdid.c")), "cdid", work_dir)
-  so_cand <- noh_compile_dll(readLines(c_src), "cdid", work_dir)
+  so_cand <- noh_compile_dll(readLines(c_src), "cdid", work_dir, source_dir = dirname(c_src))
   dll_orig <- dyn.load(so_orig)
   dll_cand <- dyn.load(so_cand)
 

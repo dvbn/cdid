@@ -45,18 +45,27 @@ d92_core <- function(kind, old = FALSE, reads = NULL) {
     ab[[k]] <- quote(obs_rec <- read_cell_score(cid))
     a[[3L]] <- as.call(ab)
     b[[at("alpha_if")]][[3L]] <- a
-    db <- b[[length(b) - 1L]][[3L]]
-    stopifnot(identical(db[[4L]][[4L]], utils::removeSource(quote({
+    # Locate the actual details branch and its score loop by AST meaning;
+    # phase cleanup may legitimately follow that branch in the function body.
+    details_at <- which(vapply(b, function(x) is.call(x) &&
+      identical(x[[1L]], as.name("if")) && identical(x[[2L]], as.name("details")), logical(1L)))
+    stopifnot(length(details_at) == 1L)
+    db <- as.list(b[[details_at]][[3L]])
+    score_body <- utils::removeSource(quote({
       obs_rec <- read_cell_score(cid)
       xi_alpha_imp[, cid] <- alpha_if(cid, obs_rec)
       if (!is.null(obs_rec)) cell_scores[obs_rec$rr, cid] <- obs_rec$s_rr
-    }))))
-    db[[4L]][[4L]] <- quote({
+    }))
+    loop_at <- which(vapply(db, function(x) is.call(x) &&
+      identical(x[[1L]], as.name("for")) && identical(x[[2L]], as.name("cid")) &&
+      identical(x[[4L]], score_body), logical(1L)))
+    stopifnot(length(loop_at) == 1L)
+    db[[loop_at]][[4L]] <- quote({
       xi_alpha_imp[, cid] <- alpha_if(cid)
       obs_rec <- read_cell_score(cid)
       if (!is.null(obs_rec)) cell_scores[obs_rec$rr, cid] <- obs_rec$s_rr
     })
-    b[[length(b) - 1L]][[3L]] <- db
+    b[[details_at]][[3L]] <- as.call(db)
   }
   if (!is.null(reads)) {
     r <- b[[reader_at]][[3L]]
