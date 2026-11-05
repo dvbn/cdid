@@ -6124,18 +6124,27 @@ run_chained_ipw_pipeline <- function(
     if (!is.null(cp04_retained)) combined_work <- ipw_owner_safe_sum(c(combined_work, cp04_retained$work),
       active_backend$control$max_work_ops, "CP04 retained moment IF fill and slice work")
     # D92 covariance-only store: only when the whole-lifetime store declined
-    # for a one-block, non-transfer, dated augmented, compact raw-IPW or static
+    # for a one-block, non-transfer, static/dated augmented, compact raw-IPW or static
     # incomplete separate baseline OR/DR backend,
     # independently consider a covariance-only store at `cp04_work$chunk_rows`.
     cp04_phase_eligible <- is.null(cp04_retained) && !transfer_requested &&
       ((inherits(active_backend, "cdid_augmented_backend") &&
         !is.null(active_backend$reference_ref) && !is.null(active_backend$layout)) ||
        inherits(active_backend, "cdid_ipw_raw_backend") ||
-       cp04_retained_if_phase_baseline(active_backend)) &&
+       cp04_retained_if_phase_baseline(active_backend) ||
+       cp04_retained_if_phase_static_augmented(active_backend)) &&
       length(cp04_work$blocks) == 1L
     if (cp04_phase_eligible) {
+      # Static augmentation has already built this selection diagnostic,
+      # including its active-cell table. The covariance phase's persistent
+      # prefix does not fund it. Charge its actual payload here; GMM's existing
+      # final_diagnostic_copy_entries already includes E(selection_route).
+      cov_phase_retained <- if (cp04_retained_if_phase_static_augmented(active_backend))
+        ipw_owner_safe_sum(c(cp04_retained_with_diagnostics,
+          unname(cp04_payload(cp04_diagnostic_selection)["entries"]))) else cp04_retained_with_diagnostics
       cov_phase_inv <- cp04_retained_if_phase_inventory("covariance", active_backend, cp04_work, point_preflight,
-        cp04_retained_with_diagnostics, cp04_planner_retained, d5_arrays, L_used, M_all)
+        cov_phase_retained, cp04_planner_retained, d5_arrays, L_used, M_all)
+      cov_phase_retained <- NULL
       cp04_cov_retained <- cp04_retained_if_phase_reserve(active_backend, cp04_used, "covariance",
         cp04_work$chunk_rows, cp04_work, retained = cov_phase_inv$retained, live = cov_phase_inv$live,
         work = combined_work, control = active_backend$control, numerical_transfer = transfer_requested)

@@ -1041,9 +1041,16 @@ cp04_retained_if_phase_baseline <- function(backend) {
     is.null(backend$reference_ref) && is.null(backend$separate_complete)
 }
 
+# Ordinary static augmentation has the same single-phase store lifetime;
+# reference/layout and private retained-pair routes keep their existing gates.
+cp04_retained_if_phase_static_augmented <- function(backend) {
+  is.list(backend) && inherits(backend, "cdid_augmented_backend") &&
+    is.null(backend$reference_ref) && is.null(backend$layout) && is.null(backend$pair_outcomes)
+}
+
 # D92 phase-local retained moment IF (invocation-local, single-phase lifetime).
 # Considered only when the accepted whole-lifetime store declines for a
-# one-block, non-transfer eligible backend (dated augmented, raw IPW or
+# one-block, non-transfer eligible backend (static or dated augmented, raw IPW or
 # ordinary static incomplete separate baseline OR/DR):
 #   - phase = "covariance": covariance-only store at `cov_plan$chunk_rows`,
 #     filled during the covariance mean pass, sliced during the covariance Gram
@@ -1074,7 +1081,8 @@ cp04_retained_if_phase_reserve <- function(backend, links, phase = c("covariance
     cp04_abort("Invalid covariance plan for retained moment IF storage.", "integrity")
   if (length(cov_plan$blocks) != 1L) return(NULL)
   cp04_retained_if_validate_backend(backend)
-  if (inherits(backend, "cdid_augmented_backend") && (is.null(backend$reference_ref) || is.null(backend$layout))) return(NULL)
+  if (inherits(backend, "cdid_augmented_backend") && (is.null(backend$reference_ref) || is.null(backend$layout)) &&
+      !cp04_retained_if_phase_static_augmented(backend)) return(NULL)
   dom <- cp04_backend_domain(backend)
   reader <- dom$reader; st <- dom$state; frame <- dom$frame
   N <- dom$N; L <- length(links)
