@@ -496,3 +496,182 @@ testthat::test_that("conditional DR local scratch dominates actual pooled and se
     }
   }
 })
+
+# V33 keeps the old envelope as a test-local reference; both evaluators are
+# the identical installed function, with only ordinary budgeting dispatched.
+drp33_old <- local({
+  e <- new.env(parent = asNamespace("cdid"))
+  for (name in c("dr_corollary1_if_envelope", "dr_corollary1_if_budget", "evaluate_dr_corollary1_if_chunk")) {
+    f <- drp_ns(name); environment(f) <- e; assign(name, f, e)
+  }
+  e$dr_corollary1_ordinary_if_envelope <- function(backend, B, links, pre, selection_pre, metadata) pre
+  e
+})
+drp33_inventory <- function(fit, B, links) {
+  old <- drp33_old$dr_corollary1_if_envelope(fit, B, links, FALSE)
+  reader <- get("cp04_reader", fit$reader_ref, inherits = FALSE); st <- reader$state
+  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+  metadata <- 16384 + 1024 * (length(old$sids) + length(old$uids) + length(fit$regression_specs) +
+    length(old$tids) + length(links) + length(st$cohorts) + length(fit$selection_backend$blocks)) +
+    B * frame$id_byte_metadata$max + 8 * sum(nchar(vapply(fit$links[links], `[[`, character(1), "link_id"), type = "bytes"))
+  selection <- drp_ns("selection_if_budget")(fit$selection_backend, B, unique(fit$q_of_s[old$sids]), details = FALSE)
+  drp_ns("dr_corollary1_ordinary_inventory")(fit, B, links, old, selection, metadata)
+}
+
+# Source-owned checkpoints: all named current arrays, actual arithmetic
+# arguments/results, global pooled residual cache, returned upstream records.
+# Sealed borrowed fits/readers are excluded; only numeric maxima are retained.
+drp33_payload <- function(fit, rows, links) {
+  e <- new.env(parent = asNamespace("cdid")); peak <- 0; solves <- 0L; labels <- character()
+  outer <- NULL
+  own <- function(env, exclude) {
+    x <- as.list(env, all.names = TRUE); x[intersect(names(x), exclude)] <- NULL; x
+  }
+  borrowed <- c("backend", "reader", "st", "frame", "sel_fit", "up_map", "ref", "spec", "f", "reg")
+  remember <- function(extra = list()) {
+    if (!is.null(outer)) peak <<- max(peak, unname(drp_ns("cp04_payload")(c(own(outer, borrowed), extra))["entries"]))
+  }
+  evaluate <- drp_ns("evaluate_dr_corollary1_if_chunk"); environment(evaluate) <- e
+  e$matrix <- function(...) {
+    if (is.null(outer)) outer <<- parent.frame()
+    value <- base::matrix(...); remember(list(new_matrix = value)); value
+  }
+  e$cp04_solve <- function(R, b) {
+    value <- drp_ns("cp04_solve")(R, b); solves <<- solves + 1L
+    remember(list(solve_rhs = b, solve_result = value)); value
+  }
+  e$cp04_finite <- function(x, label, positive = FALSE) {
+    if (is.null(outer)) outer <<- parent.frame()
+    labels <<- c(labels, label); remember(list(finite_input = x))
+    drp_ns("cp04_finite")(x, label, positive)
+  }
+  core <- drp_ns("or_pooled_if_core"); ce <- new.env(parent = environment(core)); environment(core) <- ce
+  core_own <- function(env) own(env, c("model", "N", "w", "hits", "up", "pre", "links", "details", "beta_only", "h", "blk"))
+  ce[["%*%"]] <- function(x, y) {
+    value <- base::`%*%`(x, y)
+    remember(list(core_live = core_own(parent.frame()), product_x = x, product_y = y, product_result = value)); value
+  }
+  for (name in c("or_pooled_wls_gram_solve", "or_wls_gram_solve")) local({
+    original <- drp_ns(name)
+    assign(name, function(...) {
+      value <- original(...); args <- list(...)
+      remember(list(core_live = core_own(parent.frame()), gram_rhs = args[[2L]], gram_result = value)); value
+    }, ce)
+  })
+  e$or_pooled_if_core <- function(...) {
+    if (is.null(outer)) outer <<- parent.frame()
+    value <- core(...); remember(list(returned_beta_core = value)); value
+  }
+  out <- evaluate(fit, rows, links, "frame", FALSE)
+  pre <- drp_ns("dr_corollary1_if_budget")(fit, length(rows), links, FALSE)
+  testthat::expect_lte(peak, pre$scratch)
+  testthat::expect_lte(unname(drp_ns("cp04_payload")(out)["entries"]), pre$output)
+  testthat::expect_gt(solves, 0L)
+  testthat::expect_true("complete Corollary 1 DR frame IF" %in% labels)
+  list(out = out, peak = peak, pre = pre)
+}
+
+testthat::test_that("ordinary pooled conditional DR charges true outputs and global/common/local live arrays", {
+  cases <- list(list(u = "F", model = "pair_logit", pooling = "separate", dated = FALSE, p0 = FALSE),
+    list(u = "B", model = "pair_logit", pooling = "within_cohort", dated = FALSE, p0 = FALSE),
+    list(u = "A", model = "pair_logit", pooling = "across_cohorts", dated = FALSE, p0 = FALSE),
+    list(u = "F", model = "independent_period_logit", pooling = "across_cohorts", dated = TRUE, p0 = FALSE),
+    list(u = "F", model = "pair_logit", pooling = "separate", dated = FALSE, p0 = TRUE))
+  for (spec in cases) {
+    a <- drp_case(spec$u, slopes = !spec$p0, dated = spec$dated, extra_reference = spec$dated)
+    if (spec$u == "F" && !spec$dated && !spec$p0) {
+      frame <- get("frame_owner", a$reader$frame_ref, inherits = FALSE)
+      a$views <- lapply(seq_along(a$views), function(j) {
+        v <- a$views[[j]]; id <- paste0("unicode-", j, strrep("\u03bb\u6f22", 240L))
+        drp_ns("construct_ipw_link_view")(frame, v$pair$s, v$pair$t, v$cohorts$g, v$cohorts$K,
+          control = a$control, link_id = id, functional_key = paste0("cmpcat:", id))
+      })
+    }
+    fit <- drp_fit(a, "conditional_mtar", spec$model, spec$pooling, "pooled")
+    links <- rev(seq_along(fit$links)); N <- nrow(a$Y)
+    pre <- drp_ns("dr_corollary1_if_envelope")(fit, 11L, links, FALSE)
+    old <- drp33_old$dr_corollary1_if_envelope(fit, 11L, links, FALSE)
+    testthat::expect_lt(pre$output, old$output); testthat::expect_lte(pre$scratch, old$scratch)
+    testthat::expect_identical(pre$work, old$work)
+    testthat::expect_identical(drp_ns("dr_corollary1_if_envelope")(fit, 11L, links, TRUE),
+      drp33_old$dr_corollary1_if_envelope(fit, 11L, links, TRUE))
+    inv <- drp33_inventory(fit, 11L, links)
+    W <- sum(vapply(pre$active_blocks, function(m) {
+      b <- fit$selection_backend$blocks[[m]]
+      (if (b$has_intercept) b$B_m else 0) + b$d_s + length(fit$up_map$theta_coords[[m]])
+    }, numeric(1)))
+    testthat::expect_equal(inv$selection_columns, W)
+    testthat::expect_equal(inv$upstream, 11 * (length(pre$uids) + W))
+    testthat::expect_equal(inv$max_model_channels,
+      max(vapply(fit$treatments[pre$tids], function(f) length(f$upstream_ids), integer(1))))
+    testthat::expect_equal(inv$scratch, pre$scratch); testthat::expect_equal(inv$output, pre$output)
+    if (!spec$p0) {
+      subset <- drp_ns("dr_corollary1_if_envelope")(fit, 11L, links[1L], FALSE)
+      subset_inv <- drp33_inventory(fit, 11L, links[1L])
+      # This fixture has control incidences2+1+1; the requested local block
+      # cannot replace the global pooled coefficient's full source set.
+      testthat::expect_identical(subset$beta_gids, seq_along(fit$regression_specs))
+      testthat::expect_equal(subset_inv$beta_support_incidence, 4)
+      testthat::expect_gt(subset_inv$beta_support_incidence,
+        sum(vapply(fit$regression_specs[subset$gids], function(b) length(b$support_ids), integer(1))))
+    } else testthat::expect_equal(inv$core_peak, 0)
+    if (spec$dated) testthat::expect_equal(inv$reference_x_columns, length(a$reference$x_columns))
+    testthat::expect_equal(drp_point(fit), drp_reference(a, fit), tolerance = 2e-8)
+    actual <- reference <- detailed <- matrix(0, N, length(links))
+    for (first in seq.int(1L, N, by = 11L)) {
+      rows <- rev(seq.int(first, min(N, first + 10L)))
+      observed <- drp33_payload(fit, rows, links)$out
+      frozen <- drp33_old$evaluate_dr_corollary1_if_chunk(fit, rows, links, "frame", FALSE)
+      rich <- drp_ns("evaluate_dr_corollary1_if_chunk")(fit, rows, links, "frame", TRUE)
+      actual[rows, ] <- observed$phi; reference[rows, ] <- frozen$phi; detailed[rows, ] <- rich$phi
+    }
+    testthat::expect_equal(actual, reference, tolerance = 1e-10)
+    testthat::expect_equal(actual, detailed, tolerance = 1e-10)
+    testthat::expect_equal(crossprod(actual), crossprod(detailed), tolerance = 1e-10)
+    point_offset <- length(drp_point(fit)) - 2 * length(links) - 4 * length(fit$treatments)
+    for (i in c(1L, 10L, N - 1L, N)) {
+      delta <- rep(-1, N); delta[i] <- N - 1
+      derivative <- (drp_reference(a, fit, 1 + 1e-6 * delta) - drp_reference(a, fit, 1 - 1e-6 * delta)) / 2e-6
+      testthat::expect_equal(actual[i, ], derivative[point_offset + links], tolerance = 1e-5)
+    }
+    # The actual output slope depends on requested phi/row/id width, not
+    # on global nuisance dimensions or the number of treatment models.
+    small <- drp_ns("dr_corollary1_if_envelope")(fit, 1L, links, FALSE)
+    frame <- get("frame_owner", a$reader$frame_ref, inherits = FALSE)
+    testthat::expect_equal(pre$output - small$output,
+      10 * (length(links) + 4 + frame$id_byte_metadata$max))
+  }
+})
+
+testthat::test_that("ordinary pooled conditional DR keeps adjacent caps and all four-coordinate numeric guards", {
+  a <- drp_case(); fit <- drp_fit(a, "conditional_mtar", mode = "pooled"); links <- 1:3
+  pre <- drp_ns("dr_corollary1_if_budget")(fit, 11L, links, FALSE)
+  owned <- fit$accounting$owned_entries + fit$accounting$borrowed_entries
+  reseal <- function(ctrl = fit$control, treatments = fit$treatments) {
+    b <- fit; b$ref <- NULL; b$control <- ctrl; b$treatments <- treatments
+    drp_ns("ipw_owner_seal")(b, "dr_corollary1_backend")
+  }
+  ctrl <- fit$control; ctrl$max_matrix_entries <- owned + pre$scratch
+  at <- reseal(ctrl)
+  testthat::expect_equal(drp_ns("evaluate_dr_corollary1_if_chunk")(at, 1:11, links)$phi,
+    drp33_old$evaluate_dr_corollary1_if_chunk(fit, 1:11, links)$phi, tolerance = 1e-12)
+  ctrl$max_matrix_entries <- ctrl$max_matrix_entries - 1
+  testthat::expect_error(drp_ns("evaluate_dr_corollary1_if_chunk")(reseal(ctrl), 1:11, links),
+    class = "cdid_ipw_owner_bound_error")
+  ctrl <- fit$control; ctrl$max_output_entries <- pre$output
+  testthat::expect_silent(drp_ns("evaluate_dr_corollary1_if_chunk")(reseal(ctrl), 1:11, links))
+  ctrl$max_output_entries <- pre$output - 1
+  testthat::expect_error(drp_ns("evaluate_dr_corollary1_if_chunk")(reseal(ctrl), 1:11, links),
+    class = "cdid_ipw_owner_bound_error")
+  for (kind in c("logit", "dp", "dm")) {
+    tr <- fit$treatments
+    if (kind == "logit") tr[[1L]]$coefficients[] <- Inf else
+      tr[[1L]]$partials$upstream[if (kind == "dp") 3L else 4L, 1L] <- Inf
+    b <- reseal(treatments = tr)
+    actual <- tryCatch(drp_ns("evaluate_dr_corollary1_if_chunk")(b, 1:11, links), error = identity)
+    reference <- tryCatch(drp33_old$evaluate_dr_corollary1_if_chunk(b, 1:11, links), error = identity)
+    testthat::expect_s3_class(actual, "cdid_cp04_numeric_error")
+    testthat::expect_identical(class(actual), class(reference))
+    testthat::expect_identical(conditionMessage(actual), conditionMessage(reference))
+  }
+})

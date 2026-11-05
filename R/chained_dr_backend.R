@@ -2630,6 +2630,10 @@ dr_corollary1_if_envelope <- function(backend, B, links, details = FALSE) {
   scratch <- scratch + selection_pre$output + selection_pre$scratch
   work <- work + selection_pre$work
 
+  if (!details) return(dr_corollary1_ordinary_if_envelope(backend, B, links,
+    list(gids = gids, beta_gids = beta_gids, sids = sids, tids = tids,
+      uids = uids, active_blocks = active_blocks, active_cells = active_cells,
+      output = output, scratch = scratch, work = work), selection_pre, metadata))
   list(
     gids = gids, beta_gids = beta_gids, sids = sids, tids = tids,
     uids = uids, active_blocks = active_blocks, active_cells = active_cells,
