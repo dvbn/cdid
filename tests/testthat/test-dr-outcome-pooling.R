@@ -361,3 +361,138 @@ testthat::test_that("repeated long-ID DR links reuse fits and admit requested su
   testthat::expect_gt(wb$scratch, nb$scratch)
   testthat::expect_gt(wb$work, nb$work)
 })
+
+# V32 changes the treatment fitting reservation, not its fitted equations.
+testthat::test_that("conditional DR fitting counts local channel and cohort-row products rather than global D squared", {
+  st <- list(cohort_start = c(1, 101, 221), cohort_end = c(100, 220, 370))
+  specs <- list(list(n_observers = 50L, cohorts = c(1L, 2L), selection_ids = c(1L, 2L)),
+    list(n_observers = 200L, cohorts = c(2L, 3L), selection_ids = c(2L, 3L)))
+  map <- list(D = 7L, pair_channels = list(1:3, c(1L, 4L, 5L, 6L), c(2L, 7L)))
+  charge <- drp_ns("dr_selection_treatment_fit_scratch")(st, specs, map, 2, 1, 2, 11, name_bytes = 17)
+  # Second actual model: n=200,u=4+2=6,h=4,ell=max(120*4,150*2)=480.
+  # Hand-counted buffers: input2200,chunk14432,GLM16064,derivative18272,names1088.
+  testthat::expect_equal(charge[c("n", "channels", "pair_channels", "cohort_derivative_entries")],
+    list(n = 200, channels = 6, pair_channels = 4, cohort_derivative_entries = 480))
+  testthat::expect_equal(charge[c("input", "chunk", "solver", "derivative", "names", "scratch")],
+    list(input = 2200, chunk = 14432, solver = 16064, derivative = 18272, names = 1088, scratch = 44184))
+  many <- map; many$D <- 1000000L
+  testthat::expect_identical(drp_ns("dr_selection_treatment_fit_scratch")(st, specs, many, 2, 1, 2, 11,
+    name_bytes = 17), charge)
+  wide <- map; wide$pair_channels[[2L]] <- seq_len(200L)
+  wide_charge <- drp_ns("dr_selection_treatment_fit_scratch")(st, specs, wide, 2, 1, 2, 11, name_bytes = 17)
+  testthat::expect_gt(wide_charge$scratch, charge$scratch)
+  testthat::expect_equal(wide_charge$cohort_derivative_entries, 120 * 200)
+  ref <- list(x_columns = paste0("x", 1:9), role_slot = c(s = 1L), designs = list(list(columns = paste0("s", 1:7))))
+  dated <- drp_ns("dr_selection_treatment_fit_scratch")(st, specs, map, 2, 1, 2, 11, ref, 17)
+  testthat::expect_equal(dated$reference_x_columns, 9)
+  testthat::expect_equal(dated$reference_s_columns, 7)
+  testthat::expect_equal(dated$scratch - charge$scratch, 32 * 11 * (9 + 7))
+  # Exact finite capacity is retained: local width cannot escape the budget.
+  own <- 123; cap <- own + wide_charge$scratch
+  ctrl <- drp_ns("ipw_owner_control")(11L, cap, cap, 1e13, cap)
+  testthat::expect_silent(drp_ns("cp04_budget")(ctrl, own, wide_charge$scratch, 0, 0, "V32 local-wide witness"))
+  below <- ctrl; below$max_matrix_entries <- cap - 1
+  testthat::expect_error(drp_ns("cp04_budget")(below, own, wide_charge$scratch, 0, 0, "V32 local-wide witness"),
+    class = "cdid_ipw_owner_bound_error")
+})
+
+# Observe named live fit buffers and actual matrix/slice/result arguments.
+# Borrowed sealed inputs/owners are already in the caller's retained prefix;
+# only scalar maxima survive these test-local checkpoints.
+drp32_fit_payload <- function(a, model, pooling, mode) {
+  original <- drp_ns("dr_selection_treatment_fit"); records <- list()
+  wrapped <- function(...) {
+    args <- list(...); names(args) <- names(formals(original))[seq_along(args)]
+    st <- args$reader$state
+    d <- if (is.null(args$reference)) ncol(st$Z) else
+      length(args$reference$designs[[args$reference$role_slot["s"]]]$columns)
+    name_bytes <- sum(nchar(c(args$recipe$columns, args$trt_recipe$columns,
+      if (is.null(args$reference)) colnames(st$Z) else
+        args$reference$designs[[args$reference$role_slot["s"]]]$columns,
+      if (!is.null(args$reference)) args$reference$x_columns), type = "bytes"))
+    inv <- drp_ns("dr_selection_treatment_fit_scratch")(st, list(args$spec), args$up_map,
+      args$trt_recipe$p, args$recipe$p, d, min(st$N, args$ctrl$max_chunk_rows), args$reference, name_bytes)
+    peak <- 0; matrices <- crosses <- derivatives <- 0L
+    remember <- function(env, extra) {
+      owned <- as.list(env, all.names = TRUE)
+      owned[intersect(names(owned), c(names(formals(original)), "st", "frame"))] <- NULL
+      peak <<- max(peak, unname(drp_ns("cp04_payload")(c(owned, extra))["entries"]))
+    }
+    e <- new.env(parent = environment(original)); run <- original; environment(run) <- e
+    e$matrix <- function(...) {
+      value <- base::matrix(...); matrices <<- matrices + 1L
+      remember(parent.frame(), list(new_matrix = value)); value
+    }
+    e$crossprod <- function(x, y = NULL) {
+      value <- base::crossprod(x, y); crosses <<- crosses + 1L
+      remember(parent.frame(), list(slice_x = x, slice_y = y, result = value)); value
+    }
+    e$selection_pair_cohort_log_deriv <- function(...) {
+      value <- drp_ns("selection_pair_cohort_log_deriv")(...); derivatives <<- derivatives + 1L
+      remember(parent.frame(), list(returned_derivative = value)); value
+    }
+    value <- do.call(run, args)
+    testthat::expect_lte(peak, inv$scratch)
+    testthat::expect_gt(matrices, 0L); testthat::expect_gt(crosses, 0L); testthat::expect_gt(derivatives, 0L)
+    records[[length(records) + 1L]] <<- list(peak = peak, inventory = inv)
+    value
+  }
+  testthat::local_mocked_bindings(dr_selection_treatment_fit = wrapped, .package = "cdid")
+  fit <- drp_fit(a, "conditional_mtar", model, pooling, mode)
+  list(fit = fit, records = records)
+}
+
+testthat::test_that("conditional DR local scratch dominates actual pooled and separate pair/date fit buffers", {
+  cases <- list(list(model = "pair_logit", pooling = "separate", mode = "separate", dated = FALSE),
+    list(model = "pair_logit", pooling = "within_cohort", mode = "pooled", dated = FALSE),
+    list(model = "independent_period_logit", pooling = "across_cohorts", mode = "separate", dated = FALSE),
+    list(model = "independent_period_logit", pooling = "within_cohort", mode = "pooled", dated = TRUE))
+  for (spec in cases) {
+    a <- drp_case(dated = spec$dated, extra_reference = spec$dated)
+    observed <- drp32_fit_payload(a, spec$model, spec$pooling, spec$mode); fit <- observed$fit
+    inventory <- fit$accounting$treatment_fit_inventory
+    testthat::expect_length(observed$records, length(fit$treatment_specs))
+    testthat::expect_equal(inventory$scratch,
+      max(vapply(observed$records, function(r) r$inventory$scratch, numeric(1))))
+    for (r in observed$records) testthat::expect_lte(r$peak, inventory$scratch)
+    testthat::expect_lte(inventory$scratch, fit$accounting$fit_scratch_bound)
+    testthat::expect_lte(fit$accounting$owned_entries, fit$accounting$retained_bound)
+    if (spec$dated) {
+      testthat::expect_equal(inventory$reference_x_columns, length(a$reference$x_columns))
+      testthat::expect_gt(inventory$reference_x_columns, length(a$recipe$columns))
+    }
+    # Same independent raw-row WLS/selection/treatment refits as the accepted
+    # scientific tests; every original F row remains in ordinary/detailed IF.
+    testthat::expect_equal(drp_point(fit), drp_reference(a, fit), tolerance = 2e-8)
+    N <- nrow(a$Y); ordinary <- detailed <- matrix(0, N, length(fit$links))
+    for (first in seq.int(1L, N, by = 11L)) {
+      rows <- seq.int(first, min(N, first + 10L))
+      ordinary[rows, ] <- drp_ns("evaluate_dr_if_chunk")(fit, rows, seq_along(fit$links))$phi
+      detailed[rows, ] <- drp_ns("evaluate_dr_if_chunk")(fit, rows, seq_along(fit$links), details = TRUE)$phi
+    }
+    testthat::expect_equal(ordinary, detailed, tolerance = 1e-10)
+    testthat::expect_equal(crossprod(ordinary), crossprod(detailed), tolerance = 1e-10)
+    # Exact actual fitting-stage boundary, reusing the same already fitted
+    # selection nuisance so a refusal is measured before any treatment fit.
+    if (spec$model == "pair_logit" && spec$pooling == "separate") {
+      cap <- fit$accounting$retained_bound + fit$accounting$fit_scratch_bound
+      refit <- function(limit) {
+        ctrl <- a$control; ctrl$max_matrix_entries <- limit
+        drp_ns("fit_dr_corollary1")(a$reader, a$views, ctrl, drp_gc, 1e-10, a$recipe,
+          treatment_columns = c("(Intercept)", "treatment_v"), sel_fit = fit$selection_backend,
+          outcome_pooling = spec$mode)
+      }
+      at <- refit(cap)
+      testthat::expect_equal(drp_point(at), drp_point(fit), tolerance = 1e-12)
+      refuse_before_fit <- function() {
+        called <- 0L
+        testthat::local_mocked_bindings(dr_selection_treatment_fit = function(...) {
+          called <<- called + 1L; stop("Treatment fit ran before the required refusal.")
+        }, .package = "cdid")
+        testthat::expect_error(refit(cap - 1), class = "cdid_ipw_owner_bound_error")
+        testthat::expect_identical(called, 0L)
+      }
+      refuse_before_fit()
+    }
+  }
+})

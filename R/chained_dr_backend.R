@@ -2429,18 +2429,21 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
   cohort_n <- vapply(specs, function(s) st$cohort_end[s$cohort] - st$cohort_start[s$cohort] + 1, numeric(1))
   or_charge <- if (separate) function(...) or_selection_separate_fit_charges(...,
     pools = pools, links = links, channels = channels, support_rows = cohort_n) else or_corollary1_fit_charges
+  fit_name_bytes <- sum(nchar(c(recipe$columns, trt_recipe$columns, if (is.null(reference)) colnames(st$Z) else
+    reference$designs[[reference$role_slot["s"]]]$columns), type = "bytes"))
   or_charges <- or_charge(
     S, G, L, p_or, max(1L, up_map$d), D, st$n_A, min(st$N, ctrl$max_chunk_rows),
-    max(cohort_n), sum(cohort_n), gc$maxit, metadata, header,
-    sum(nchar(c(recipe$columns, trt_recipe$columns, if (is.null(reference)) colnames(st$Z) else
-      reference$designs[[reference$role_slot["s"]]]$columns), type = "bytes"))
+    max(cohort_n), sum(cohort_n), gc$maxit, metadata, header, fit_name_bytes
   )
   max_m <- max(vapply(ts, function(x) length(x$cohorts), integer(1)))
   max_trt_n <- max(vapply(ts, `[[`, integer(1), "n_observers"))
   trt_scan_n <- sum(vapply(ts, `[[`, integer(1), "n_observers"))
   trt_models_bound <- T_count * (p_trt * p_trt + 12 * (p_trt + p_or) + 8 * D + p_trt * D + 4096) +
     L * (8 * p_or + 8 * p_trt + 1024) + 8192
-  trt_scratch <- max_trt_n * (p_trt + p_or + d + 16) + 32 * (p_trt + D + 4)^2 + 8192
+  trt_fit_inventory <- dr_selection_treatment_fit_scratch(st, ts, up_map, p_trt, p_or, d,
+    min(st$N, ctrl$max_chunk_rows), reference,
+    fit_name_bytes + if (is.null(reference)) 0 else sum(nchar(reference$x_columns, type = "bytes")))
+  trt_scratch <- trt_fit_inventory$scratch
   trt_work <- 128 * (gc$maxit + 2) * trt_scan_n * (p_trt + 2)^2 +
     128 * T_count * st$N * max_m + 128 * trt_models_bound
 
@@ -2516,6 +2519,7 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
         external_work_ops = external_work_ops,
         retained_bound = base + bound,
         fit_scratch_bound = scratch,
+        treatment_fit_inventory = trt_fit_inventory,
         work_ops_bound = work,
         support_cohort_row_visits = sum(cohort_n),
         automatic_chunk_rows = automatic_chunk_rows,
