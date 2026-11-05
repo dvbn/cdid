@@ -84,3 +84,38 @@ reconstruction_zero_template <- function(templates, gid, active, group, cells, N
       !identical(cells[group$cell_ids], x$cells) || !identical(N, x$N)) return(NULL)
   x
 }
+
+reconstruction_zero_run_native_cache <- new.env(parent = emptyenv())
+reconstruction_zero_run_native_kernel <- function() {
+  syms <- gmm_require_native_dll()
+  owner <- environment(sys.function())
+  cache <- get0("reconstruction_zero_run_native_cache", envir = owner, mode = "environment", inherits = FALSE)
+  hit <- if (is.environment(cache)) get0("kernel", envir = cache, inherits = FALSE) else NULL
+  if (is.list(hit) && identical(hit$owner, owner) &&
+      isTRUE(.Call(syms$C_gmm_sexp_aliases, hit$syms, syms))) return(hit$address)
+  dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
+  si <- tryCatch(base::getNativeSymbolInfo("C_gmm_reconstruction_zero_run", PACKAGE = dlls[["cdid"]]),
+    error = function(e) NULL)
+  if (is.null(si) || !inherits(si, "NativeSymbolInfo") || is.null(si$address) ||
+      !identical(as.integer(si$numParameters), 6L))
+    cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_reconstruction_zero_run`.",
+      c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
+  if (is.environment(cache)) assign("kernel", list(owner = owner, syms = syms, address = si$address), envir = cache)
+  si$address
+}
+
+# Called only after the first inactive cache hit has passed the original R
+# helper and been copied. Resolve the live DLL once for its contiguous suffix,
+# never for an active scalar group or at the end of the catalog.
+reconstruction_zero_template_run <- local({
+  scalar <- reconstruction_zero_template
+  function(templates, groups, cells, active, N, cursor, scalar_helper) {
+    if (!identical(scalar_helper, scalar) || !is.list(templates) || is.object(templates) ||
+        !is.list(groups) || is.object(groups) || !is.integer(cursor) || is.object(cursor) ||
+        !is.integer(active) || is.object(active) || !is.null(attributes(active)) ||
+        length(cursor) != 1L || is.na(cursor) || cursor < 1L || cursor >= length(groups) ||
+        cursor > length(templates) || cursor %in% active) return(NULL)
+    .Call(reconstruction_zero_run_native_kernel(), templates, groups, cells, active, N, cursor)
+  }
+})
+lockBinding("scalar", environment(reconstruction_zero_template_run))

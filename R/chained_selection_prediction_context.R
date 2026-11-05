@@ -9,9 +9,9 @@
 # the existing fit 8192-slot and replay dependency 4096-slot metadata reserves.
 # Prediction/derivative row buffers keep their existing admitted envelopes.
 selection_prediction_operation <- function(backend, expected_sources = NULL,
-                                           source_reader = NULL, source_reference = NULL) {
+                                           source_reader = NULL, source_reference = NULL, pair_response_reader = NULL) {
   # Resolve caller promises before granting any operation-local permission.
-  force(backend); force(expected_sources); force(source_reader); force(source_reference)
+  force(backend); force(expected_sources); force(source_reader); force(source_reference); force(pair_response_reader)
   validate_selection_models(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
@@ -281,7 +281,8 @@ selection_prediction_operation <- function(backend, expected_sources = NULL,
         Y <- if (identical(sel_fit$selection_model, "independent_period_logit")) {
           cp04_date_rows(reader, rows[rr], cell$date_spec)$R
         } else {
-          cp04_pair_rows(reader, rows[rr], cell$pair)$S
+          if (is.null(pair_response_reader)) cp04_pair_rows(reader, rows[rr], cell$pair)$S else
+            pair_response_reader(rows[rr], cell$pair, FALSE)$S
         }
         cell_scores[rr, b] <- w_of(cell$reference, rr) * (Y - pr)
       }

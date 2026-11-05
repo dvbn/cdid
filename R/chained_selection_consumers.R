@@ -313,8 +313,8 @@ selection_pair_cohort_log_deriv <- function(sel_fit, up_map, q, rows, pred = NUL
 # Evaluates upstream IF columns `uids` on original-unit row chunk `rows`.
 # Reused date/pair cell scores are summed by original unit i within each block
 # inside evaluate_selection_block_if before Fisher-information inversion.
-evaluate_selection_upstream_chunk <- function(sel_fit, up_map, rows, uids, details = FALSE) {
-  op <- selection_prediction_operation(sel_fit)
+evaluate_selection_upstream_chunk <- function(sel_fit, up_map, rows, uids, details = FALSE, pair_response_reader = NULL) {
+  op <- selection_prediction_operation(sel_fit, pair_response_reader = pair_response_reader)
   on.exit(op$abort(), add = TRUE)
   out <- op$upstream(up_map, rows, uids, details)
   op$finish()
@@ -721,7 +721,10 @@ evaluate_cp04_selection_if_chunk <- function(backend, rows, links, scale = "fram
   A <- as.double(st$a_index[rows] > 0L)
   U_rows <- st$U[rows]
 
-  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = ref)
+  pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "ipw", details)
+  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = ref,
+    pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair)
   on.exit(op$abort(), add = TRUE)
   up_res <- op$upstream(up_map, rows, uids, details = details)
   up <- up_res$up
@@ -734,7 +737,10 @@ evaluate_cp04_selection_if_chunk <- function(backend, rows, links, scale = "fram
     upstream <- up[, u_pos, drop = FALSE]
 
     ci_in <- which(ci %in% spec$cohorts)
-    hit_all <- if (length(ci_in)) cp04_pair_rows(reader, rows[ci_in], spec$pair, TRUE) else list(S = numeric(0), dy = numeric(0))
+    hit_all <- if (length(ci_in)) {
+      if (is.null(pair_op)) cp04_pair_rows(reader, rows[ci_in], spec$pair, TRUE) else
+        pair_op$pair(rows[ci_in], spec$pair, TRUE)
+    } else list(S = numeric(0), dy = numeric(0))
     obs_local <- which(hit_all$S == 1)
     rr <- ci_in[obs_local]
 
@@ -837,6 +843,7 @@ evaluate_cp04_selection_if_chunk <- function(backend, rows, links, scale = "fram
   actual_output <- unname(cp04_payload(out)["entries"])
   if (actual_output > pre$output) cp04_abort("IF output bound underestimated.", "bound")
   op$finish()
+  if (!is.null(pair_op)) pair_op$finish()
   out
 }
 
@@ -1315,7 +1322,10 @@ evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame"
 
   sel_fit <- backend$selection_backend
   up_map <- backend$up_map
-  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = ref)
+  pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "or", details)
+  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = ref,
+    pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair)
   on.exit(op$abort(), add = TRUE)
   up_res <- op$upstream(up_map, rows, pre$uids, details = details)
   up <- up_res$up
@@ -1326,7 +1336,8 @@ evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame"
     sp <- backend$support_specs[[sid]]
     q <- backend$q_of_s[sid]
     ix <- which(ci == sp$cohort & U)
-    hit <- cp04_pair_rows(reader, rows[ix], sp$pair, TRUE)
+    hit <- if (is.null(pair_op)) cp04_pair_rows(reader, rows[ix], sp$pair, TRUE) else
+      pair_op$pair(rows[ix], sp$pair, TRUE)
     obs <- which(hit$S == 1)
     rr <- rows[ix[obs]]
     pr_obs <- if (length(rr)) op$pair(rr, q)$prob else numeric(0)
@@ -1409,6 +1420,7 @@ evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame"
   if (unname(cp04_payload(out)["entries"]) > pre$output)
     or_corollary1_abort("IF output bound underestimated.", "bound")
   op$finish()
+  if (!is.null(pair_op)) pair_op$finish()
   out
 }
 

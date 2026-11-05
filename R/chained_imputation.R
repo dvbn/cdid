@@ -1654,12 +1654,22 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
     active_groups <- unique(vapply(core_fit$cells[structural_cids], `[[`, integer(1L), "group_id"))
     tilde_lambda <- numeric(n_cells)
     tilde_nu <- vector("list", n_groups)
+    next_gid <- 1L
     for (gid in seq_len(n_groups)) {
+      if (gid < next_gid) next
       gf <- core_fit$groups[[gid]]
       cached <- reconstruction_zero_template(zero_linear, gid, gid %in% active_groups, gf, core_fit$cells, N)
       if (!is.null(cached)) {
         tilde_lambda[gf$cell_ids] <- cached$lambda
         tilde_nu[[gid]] <- cached$nu
+        run <- if (!details && gid < n_groups) reconstruction_zero_template_run(zero_linear, core_fit$groups,
+          core_fit$cells, active_groups, N, gid + 1L, reconstruction_zero_template) else NULL
+        if (!is.null(run)) {
+          tilde_lambda[run$cell_ids] <- run$lambda
+          tilde_nu[run$group_ids] <- run$nu
+          next_gid <- run$next_gid
+        }
+        run <- NULL
         next
       }
       rhs <- numeric(gf$p)
@@ -2840,8 +2850,11 @@ evaluate_imputation_if_chunk <- function(backend, rows, links = seq_along(backen
   if (!is.null(backend$layout)) return(evaluate_imputation_layout_if_chunk(backend, reader, rows, links, scale, details))
   pre <- imputation_if_budget(backend, length(rows), links, details)
   X_F <- imputation_backend_X_F(backend, reader)
+  pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "reconstruction", details)
+  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
   pair_reader <- function(r_sub, pair, read_outcomes = TRUE) {
-    pr <- cp04_pair_rows(reader, r_sub, pair, read_outcomes)
+    pr <- if (is.null(pair_op)) cp04_pair_rows(reader, r_sub, pair, read_outcomes) else
+      pair_op$pair(r_sub, pair, read_outcomes)
     if (read_outcomes && !is.null(backend$pair_outcomes)) {
       pk <- paste0(as.character(pair$s), ":", as.character(pair$t))
       dy <- backend$pair_outcomes[[pk]][r_sub]
@@ -2893,6 +2906,7 @@ evaluate_imputation_if_chunk <- function(backend, rows, links = seq_along(backen
   if (unname(cp04_payload(out)["entries"]) > pre$output) {
     imputation_abort("Pure-imputation IF output bound underestimated.", "bound")
   }
+  if (!is.null(pair_op)) pair_op$finish()
   out
 }
 

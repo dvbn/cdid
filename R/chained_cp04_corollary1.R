@@ -37,7 +37,8 @@ cp04_payload_native_kernel <- function() {
   owner <- environment(sys.function())
   cache <- get0("cp04_payload_native_cache", envir = owner, mode = "environment", inherits = FALSE)
   hit <- if (is.environment(cache)) get0("C_gmm_cp08_payload", envir = cache, inherits = FALSE) else NULL
-  if (is.list(hit) && identical(hit$owner, owner) && gmm_sexp_aliases(hit$syms, syms)) return(hit$address)
+  if (is.list(hit) && identical(hit$owner, owner) &&
+      isTRUE(.Call(syms$C_gmm_sexp_aliases, hit$syms, syms))) return(hit$address)
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- tryCatch(base::getNativeSymbolInfo("C_gmm_cp08_payload", PACKAGE = dlls[["cdid"]]), error = function(e) NULL)
   if (is.null(si) || !inherits(si, "NativeSymbolInfo") || is.null(si$address) ||
@@ -684,6 +685,17 @@ evaluate_cp04_if_chunk <- function(backend, rows, links, scale = "frame", detail
   pre <- cp04_if_budget(backend, length(rows), links)
   tids <- pre$tids; sids <- pre$sids
   B <- length(rows); d <- ncol(st$Z)
+  # The original32-fold row scratch leaves24-fold for all existing
+  # rows/solves/results; only the other8-fold can fund shared position reads.
+  pair_op <- NULL
+  if (!details && is.null(backend$reference_ref) && is.null(backend$layout) && is.null(backend$pair_outcomes)) {
+    frame_p <- get("frame_owner", reader$frame_ref, inherits = FALSE)$n_covariates
+    widths <- length(sids) * (d + 2) + sum(vapply(backend$treatment_specs[tids],
+      function(s) 2 * frame_p + 10 + length(s$cohorts) * (d + 1), numeric(1))) +
+      3 * length(st$cohorts) + length(links) + 16
+    pair_op <- cp04_pair_read_operation(reader, rows, 8 * B * (widths + frame_p + d + 4))
+  }
+  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE); p <- frame$n_covariates
   # Scores evaluated once for each actual model needed by this requested batch.
   ci <- st$cohort_index[rows]; w <- st$w[rows]; A <- as.double(st$a_index[rows] > 0L)
@@ -699,7 +711,8 @@ evaluate_cp04_if_chunk <- function(backend, rows, links, scale = "frame", detail
     xi <- matrix(0, B, d); pr <- S <- numeric(B)
     if (length(rr)) {
       pr[rr] <- cp04_predict_selection(reader, rows[rr], s, f)
-      S[rr] <- cp04_pair_rows(reader, rows[rr], s$pair)$S
+      S[rr] <- (if (is.null(pair_op)) cp04_pair_rows(reader, rows[rr], s$pair) else
+        pair_op$pair(rows[rr], s$pair))$S
       score <- w[rr] * (S[rr] - pr[rr]) * st$Z[rows[rr], , drop = FALSE]
       xi[rr, ] <- t(cp04_solve(f$H_chol, t(score)))
     }
@@ -722,7 +735,8 @@ evaluate_cp04_if_chunk <- function(backend, rows, links, scale = "frame", detail
     direct[, 3L] <- -f$means["dp"]; direct[, 4L] <- -f$means["dm"]
     if (length(rr)) {
       X <- frame$Z_a[st$a_index[rows[rr]], , drop = FALSE]
-      hit <- cp04_pair_rows(reader, rows[rr], spec$pair, TRUE)
+      hit <- if (is.null(pair_op)) cp04_pair_rows(reader, rows[rr], spec$pair, TRUE) else
+        pair_op$pair(rows[rr], spec$pair, TRUE)
       lv <- ipw_logit_values(X, f$coefficients)
       cp04_finite(c(lv$prob, lv$eta, lv$odds), "treatment replay")
       D <- as.double(ci[rr] == spec$cohorts[1L])
@@ -768,6 +782,7 @@ evaluate_cp04_if_chunk <- function(backend, rows, links, scale = "frame", detail
   }
   actual_output <- unname(cp04_payload(out)["entries"])
   if (actual_output > pre$output) cp04_abort("IF output bound underestimated.", "bound")
+  if (!is.null(pair_op)) pair_op$finish()
   out
 }
 

@@ -1322,7 +1322,7 @@ augmented_if_budget <- function(backend, B, links = seq_along(backend$links), de
 # blocks), PS (unchanged roster treatment rows) and rate (single count).
 augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows, links,
                                              scale = "frame", details = FALSE, sets,
-                                             cell_worker = augmented_cell_rows) {
+                                             cell_worker = augmented_cell_rows, pair_response_reader = NULL) {
   B <- length(rows)
   N <- st$N
   G <- length(st$cohorts)
@@ -1359,7 +1359,8 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
   # 2. Accepted original-unit selection rows on the needed theta coordinates.
   uids <- sets$uids
   up <- if (length(uids)) {
-    evaluate_selection_upstream_chunk(sel_fit, up_map, rows, uids)$up
+    evaluate_selection_upstream_chunk(sel_fit, up_map, rows, uids,
+      pair_response_reader = pair_response_reader)$up
   } else {
     matrix(0.0, B, 0L)
   }
@@ -1502,12 +1503,22 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
     active_groups <- unique(vapply(cells[structural_cids], `[[`, integer(1L), "group_id"))
     tilde_lambda <- numeric(n_cells)
     tilde_nu <- vector("list", n_groups)
+    next_gid <- 1L
     for (gid in seq_len(n_groups)) {
+      if (gid < next_gid) next
       gf <- groups[[gid]]
       cached <- reconstruction_zero_template(zero_linear, gid, gid %in% active_groups, gf, cells, N)
       if (!is.null(cached)) {
         tilde_lambda[gf$cell_ids] <- cached$lambda
         tilde_nu[[gid]] <- cached$nu
+        run <- if (!details && gid < n_groups) reconstruction_zero_template_run(zero_linear, groups, cells,
+          active_groups, N, gid + 1L, reconstruction_zero_template) else NULL
+        if (!is.null(run)) {
+          tilde_lambda[run$cell_ids] <- run$lambda
+          tilde_nu[run$group_ids] <- run$nu
+          next_gid <- run$next_gid
+        }
+        run <- NULL
         next
       }
       rhs <- numeric(gf$p)
@@ -1936,8 +1947,11 @@ evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend
   if (!is.null(backend$layout)) return(evaluate_augmented_layout_if_chunk(backend, reader, rows, links, scale, details))
   pre <- augmented_if_budget(backend, length(rows), links, details)
   X_F <- augmented_backend_X_F(backend)
+  pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "reconstruction", details)
+  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
   pair_reader <- function(r_sub, pair, read_outcomes = TRUE) {
-    pr <- cp04_pair_rows(reader, r_sub, pair, read_outcomes)
+    pr <- if (is.null(pair_op)) cp04_pair_rows(reader, r_sub, pair, read_outcomes) else
+      pair_op$pair(r_sub, pair, read_outcomes)
     if (read_outcomes && !is.null(backend$pair_outcomes)) {
       pk <- paste0(as.character(pair$s), ":", as.character(pair$t))
       dy <- backend$pair_outcomes[[pk]][r_sub]
@@ -1957,7 +1971,8 @@ evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend
   on.exit(if (!is.null(op)) op$abort(), add = TRUE)
   cell_worker <- augmented_cell_rows
   if (!details && is.null(backend$reference_ref) && is.null(backend$pair_outcomes)) {
-    op <- selection_prediction_operation(backend$selection_backend, source_reader = reader)
+    op <- selection_prediction_operation(backend$selection_backend, source_reader = reader,
+      pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair)
     pair_predictor <- function(sel_fit, rows, pair_cohort_id) op$pair(rows, pair_cohort_id)
     cell_worker <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv = FALSE)
       augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv,
@@ -1973,7 +1988,8 @@ evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend
     scale = scale,
     details = details,
     sets = pre,
-    cell_worker = cell_worker
+    cell_worker = cell_worker,
+    pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair
   )
 
   out <- list(
@@ -2001,6 +2017,7 @@ evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend
     augmented_abort("Augmented IF output bound underestimated.", "bound")
   }
   if (!is.null(op)) op$finish()
+  if (!is.null(pair_op)) pair_op$finish()
   out
 }
 

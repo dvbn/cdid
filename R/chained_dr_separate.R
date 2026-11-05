@@ -96,8 +96,12 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   w <- if (is.null(ref)) st$w[rows] else rep(NA_real_, B)
   A <- as.double(st$a_index[rows] > 0L)
   all_or_cols <- backend$or_frame_index[backend$outcome_recipe$slope_index]
+  pair_op <- if (conditional) cp04_pair_consumer_operation(backend, reader, rows, links, pre,
+    "dr_separate", details) else NULL
+  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
   op <- if (conditional) selection_prediction_operation(backend$selection_backend,
-    source_reader = reader, source_reference = ref) else NULL
+    source_reader = reader, source_reference = ref,
+    pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair) else NULL
   on.exit(if (!is.null(op)) op$abort(), add = TRUE)
   up_res <- if (conditional) op$upstream(backend$up_map, rows, pre$uids, details, preparation = preparation) else NULL
   up <- if (conditional) up_res$up else matrix(0, B, length(pre$sids))
@@ -105,7 +109,8 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   for (j in seq_along(pre$sids)) {
     sid <- pre$sids[j]; sp <- backend$support_specs[[sid]]; u <- backend$supports[[sid]]
     ix <- which(ci == sp$cohort)
-    hit <- cp04_pair_rows(reader, rows[ix], sp$pair, TRUE)
+    hit <- if (is.null(pair_op)) cp04_pair_rows(reader, rows[ix], sp$pair, TRUE) else
+      pair_op$pair(rows[ix], sp$pair, TRUE)
     obs <- ix[hit$S == 1]; rr <- rows[obs]
     Z <- if (is.null(ref)) frame$Z_a[st$a_index[rr], all_or_cols, drop = FALSE] else
       chained_reference_x(ref, sp$reference, rr)[, all_or_cols, drop = FALSE]
@@ -258,5 +263,6 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   if (unname(cp04_payload(out)["entries"]) > pre$output)
     dr_route_abort(route, "IF output bound underestimated.", "bound")
   if (!is.null(op)) op$finish()
+  if (!is.null(pair_op)) pair_op$finish()
   out
 }

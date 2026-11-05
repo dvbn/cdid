@@ -393,6 +393,8 @@ evaluate_or_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
       !is.character(scale) || length(scale) != 1L || is.na(scale) || !scale %in% c("frame", "core"))
     or_corollary1_abort("Invalid explicit IF row/link batch, scale or details flag.")
   pre <- or_corollary1_if_budget(backend, length(rows), links, details)
+  pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "or", details)
+  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
   B <- length(rows); frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   separate <- or_selection_separate(backend)
   kept <- if (separate) backend$outcome_recipe$slope_index else
@@ -411,7 +413,8 @@ evaluate_or_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
   for (j in seq_along(pre$sids)) {
     sid <- pre$sids[j]; sp <- backend$support_specs[[sid]]; f <- backend$selections[[sid]]
     ix <- which(ci == sp$cohort & U)
-    hit <- cp04_pair_rows(reader, rows[ix], sp$pair, TRUE)
+    hit <- if (is.null(pair_op)) cp04_pair_rows(reader, rows[ix], sp$pair, TRUE) else
+      pair_op$pair(rows[ix], sp$pair, TRUE)
     pr <- cp04_predict_selection(reader, rows[ix], backend$selection_specs[[sid]], f)
     if (length(ix)) up[ix, match(backend$supports[[sid]]$channels[-1L], pre$uids)] <-
       t(cp04_solve(f$H_chol, t(w[ix] * (hit$S - pr) * st$Z[rows[ix], , drop = FALSE])))
@@ -459,6 +462,7 @@ evaluate_or_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
   }
   if (unname(cp04_payload(out)["entries"]) > pre$output)
     or_corollary1_abort("IF output bound underestimated.", "bound")
+  if (!is.null(pair_op)) pair_op$finish()
   out
 }
 

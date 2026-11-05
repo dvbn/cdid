@@ -566,6 +566,8 @@ SEXP C_gmm_cp08_support_chunk(
 SEXP C_gmm_cp08_pair_rows(
     SEXP y_sexp, SEXP date_start_sexp, SEXP post_a_sexp, SEXP post_obs_sexp,
     SEXP rows_sexp, SEXP a_sexp, SEXP dates_sexp, SEXP chunk_sexp, SEXP max_entries_sexp);
+SEXP C_gmm_pair_operation_create(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+SEXP C_gmm_pair_operation_query(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 SEXP C_gmm_cp08_sparse_pair_rows(
     SEXP a_sexp, SEXP post_a_sexp, SEXP post_obs_sexp, SEXP bounds_sexp,
     SEXP read_sexp, SEXP max_entries_sexp);
@@ -2010,6 +2012,14 @@ static int cp08_sparse_search(int nprotect, const char *fn, SEXP pa, int64_t lo,
     if (value < target) lo = mid + 1; else hi = mid - 1;
   }
   return 0;
+}
+
+/* Shared position-operation TU reuses these exact existing rules. */
+void cdid_pair_operation_arithmetic(void) { gmm_require_valid_arithmetic(0); }
+double cdid_pair_operation_cap(SEXP x) { return gmm_parse_max_entries(0, x); }
+void cdid_pair_operation_error(const char *message, const char *cls) { gmm_c_abort(0, message, cls); }
+int cdid_pair_operation_search(SEXP pa, int lo, int hi, int target) {
+  return cp08_sparse_search(0, "C_gmm_cp08_sparse_pair_rows", pa, lo, hi, target);
 }
 
 /* General-route pair-row join of cp04_pair_rows on the owner's sparse calendar
@@ -5698,7 +5708,12 @@ SEXP C_gmm_dr_separate_sparse_if(SEXP y_s, SEXP pa_s, SEXP po_s, SEXP rows_s,
   UNPROTECT(nprot); return out_s;
 }
 
+extern SEXP C_gmm_reconstruction_zero_run(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+
 static const R_CallMethodDef CallEntries[] = {
+  {"C_gmm_reconstruction_zero_run", (DL_FUNC) &C_gmm_reconstruction_zero_run, 6},
+  {"C_gmm_pair_operation_create", (DL_FUNC) &C_gmm_pair_operation_create, 9},
+  {"C_gmm_pair_operation_query", (DL_FUNC) &C_gmm_pair_operation_query, 6},
   {"C_gmm_dr_separate_sparse_if", (DL_FUNC) &C_gmm_dr_separate_sparse_if, 12},
   {"C_gmm_dr_sparse_prepare", (DL_FUNC) &C_gmm_dr_sparse_prepare, 11},
   {"C_gmm_dr_sparse_assemble", (DL_FUNC) &C_gmm_dr_sparse_assemble, 7},
