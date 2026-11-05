@@ -1,19 +1,20 @@
 #include <R.h>
 #include <Rinternals.h>
+#include "cdid_r_api.h"
 #include <limits.h>
 #include <string.h>
 
 /* Metadata only. Numeric bits are copied; no score, RHS or solve is evaluated. */
 static int zr_plain(SEXP x, SEXPTYPE type) {
-  return TYPEOF(x) == type && !OBJECT(x) && !ALTREP(x) && ATTRIB(x) == R_NilValue;
+  return TYPEOF(x) == type && !Rf_isObject(x) && !ALTREP(x) && !cdid_has_attrib(x);
 }
 
 static int zr_named_list(SEXP x) {
-  if (TYPEOF(x) != VECSXP || OBJECT(x) || ALTREP(x)) return 0;
-  SEXP a = ATTRIB(x), names = Rf_getAttrib(x, R_NamesSymbol);
-  return a != R_NilValue && TAG(a) == R_NamesSymbol && CDR(a) == R_NilValue &&
-    TYPEOF(names) == STRSXP && !OBJECT(names) && !ALTREP(names) &&
-    ATTRIB(names) == R_NilValue && XLENGTH(names) == XLENGTH(x);
+  if (TYPEOF(x) != VECSXP || Rf_isObject(x) || ALTREP(x)) return 0;
+  SEXP names = Rf_getAttrib(x, R_NamesSymbol);
+  return cdid_single_attrib(x, R_NamesSymbol) &&
+    TYPEOF(names) == STRSXP && !Rf_isObject(names) && !ALTREP(names) &&
+    !cdid_has_attrib(names) && XLENGTH(names) == XLENGTH(x);
 }
 
 static SEXP zr_field(SEXP x, const char *name) {
@@ -35,6 +36,21 @@ static int zr_active(SEXP active, int gid) {
    operands before a suffix can run callbacks between checks and copies.
    Source aliases need no traversal: R_compute_identical returns immediately
    for them. This is admission only; it never replaces an equality check. */
+static int zr_materialized(SEXP x, int depth, int *left);
+typedef struct { int depth, *left, ok; } zr_attr_walk;
+static SEXP zr_materialized_attr(SEXP tag, SEXP value, void *data) {
+  zr_attr_walk *walk = (zr_attr_walk *) data;
+  (void) tag;
+  /* Preserve the old attribute pairlist's node/depth charges: one cons
+     node followed by its value, then the next cons at depth + 1. */
+  if (walk->depth > 32 || --*walk->left < 0 ||
+      !zr_materialized(value, walk->depth + 1, walk->left)) {
+    walk->ok = 0;
+    return R_NilValue;
+  }
+  ++walk->depth;
+  return NULL;
+}
 static int zr_materialized(SEXP x, int depth, int *left) {
   if (x == R_NilValue) return 1;
   if (depth > 32 || --*left < 0 || ALTREP(x)) return 0;
@@ -42,7 +58,11 @@ static int zr_materialized(SEXP x, int depth, int *left) {
   case PROMSXP: case DOTSXP: case BCODESXP: return 0;
   default: break;
   }
-  if (!zr_materialized(ATTRIB(x), depth + 1, left)) return 0;
+  if (cdid_has_attrib(x)) {
+    zr_attr_walk attrs = {depth + 1, left, 1};
+    cdid_each_attrib(x, zr_materialized_attr, &attrs);
+    if (!attrs.ok) return 0;
+  }
   switch (TYPEOF(x)) {
   case VECSXP: case EXPRSXP:
     for (R_xlen_t i = 0; i < XLENGTH(x); ++i)
@@ -53,8 +73,8 @@ static int zr_materialized(SEXP x, int depth, int *left) {
         !zr_materialized(CDR(x), depth + 1, left)) return 0;
     break;
   case CLOSXP:
-    if (!zr_materialized(FORMALS(x), depth + 1, left) ||
-        !zr_materialized(BODY(x), depth + 1, left)) return 0;
+    if (!zr_materialized(cdid_closure_formals(x), depth + 1, left) ||
+        !zr_materialized(cdid_closure_body(x), depth + 1, left)) return 0;
     break;
   default: break; /* Environments are compared by identity, never inspected. */
   }

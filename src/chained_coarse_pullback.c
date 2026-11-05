@@ -2,6 +2,7 @@
    Original Gram helpers and V50 first-hit/suffix decisions remain authoritative. */
 #include <R.h>
 #include <Rinternals.h>
+#include "cdid_r_api.h"
 #include <Rversion.h>
 #include <R_ext/Utils.h>
 #include <limits.h>
@@ -19,11 +20,11 @@ extern int cdid_reconstruction_zero_hit(SEXP, SEXP, SEXP, SEXP, SEXP, int, SEXP 
 extern SEXP C_gmm_reconstruction_score_pullback(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 
 typedef struct { int B, nc, ng, peak, intercept, Ncount; double total_p, cap; } coarse53;
-static int cr_plain(SEXP x, int type) { return TYPEOF(x)==type && !OBJECT(x) && !ALTREP(x) && ATTRIB(x)==R_NilValue; }
+static int cr_plain(SEXP x, int type) { return TYPEOF(x)==type && !Rf_isObject(x) && !ALTREP(x) && !cdid_has_attrib(x); }
 static int cr_list(SEXP x) {
-  if(TYPEOF(x)!=VECSXP || OBJECT(x) || ALTREP(x)) return 0;
-  SEXP a=ATTRIB(x), n=Rf_getAttrib(x,R_NamesSymbol);
-  return a!=R_NilValue && TAG(a)==R_NamesSymbol && CDR(a)==R_NilValue && cr_plain(n,STRSXP) && XLENGTH(n)==XLENGTH(x);
+  if(TYPEOF(x)!=VECSXP || Rf_isObject(x) || ALTREP(x)) return 0;
+  SEXP n=Rf_getAttrib(x,R_NamesSymbol);
+  return cdid_single_attrib(x,R_NamesSymbol) && cr_plain(n,STRSXP) && XLENGTH(n)==XLENGTH(x);
 }
 static SEXP cr_field(SEXP x,const char *key) {
   SEXP n=Rf_getAttrib(x,R_NamesSymbol);
@@ -40,15 +41,16 @@ static int cr_ids(SEXP x,int upper,int ordered) {
   for(R_xlen_t i=0;i<XLENGTH(x);++i) {int n=INTEGER(x)[i];if(n<1||n>upper||(ordered&&n<=old))return 0;old=n;} return 1;
 }
 static int cr_num(SEXP x,int n,SEXP columns) {
-  if(TYPEOF(x)!=REALSXP||OBJECT(x)||ALTREP(x)||XLENGTH(x)!=n)return 0;
-  if(ATTRIB(x)==R_NilValue)return 1;
-  SEXP a=ATTRIB(x), nm=Rf_getAttrib(x,R_NamesSymbol);
-  return TAG(a)==R_NamesSymbol&&CDR(a)==R_NilValue&&cr_plain(nm,STRSXP)&&cr_plain(columns,STRSXP)&&
+  if(TYPEOF(x)!=REALSXP||Rf_isObject(x)||ALTREP(x)||XLENGTH(x)!=n)return 0;
+  if(!cdid_has_attrib(x))return 1;
+  SEXP nm=Rf_getAttrib(x,R_NamesSymbol);
+  return cdid_single_attrib(x,R_NamesSymbol)&&cr_plain(nm,STRSXP)&&cr_plain(columns,STRSXP)&&
     XLENGTH(nm)==n&&XLENGTH(columns)==n&&R_compute_identical(nm,columns,IDENT_USE_CLOENV);
 }
 static int cr_matrix(SEXP x,int n,int p) {
-  if(TYPEOF(x)!=REALSXP||OBJECT(x)||ALTREP(x))return 0;
-  for(SEXP a=ATTRIB(x);a!=R_NilValue;a=CDR(a))if(TAG(a)!=R_DimSymbol&&TAG(a)!=R_DimNamesSymbol)return 0;
+  if(TYPEOF(x)!=REALSXP||Rf_isObject(x)||ALTREP(x))return 0;
+  const SEXP allowed[]={R_DimSymbol,R_DimNamesSymbol};
+  if(!cdid_attrib_only(x,allowed,2))return 0;
   SEXP d=Rf_getAttrib(x,R_DimSymbol);
   return cr_plain(d,INTSXP)&&XLENGTH(d)==2&&INTEGER(d)[0]==n&&INTEGER(d)[1]==p&&XLENGTH(x)==(R_xlen_t)n*p;
 }
@@ -57,10 +59,9 @@ static int cr_functions(SEXP f) {
   if(TYPEOF(owner)!=ENVSXP)return 0;
   for(R_xlen_t i=0;i<XLENGTH(f);++i) {
     const char *name=CHAR(STRING_ELT(names,i));if(!strcmp(name,".owner")||!strcmp(name,".live"))continue;
-    SEXP sym=Rf_install(name),actual=Rf_findVarInFrame(owner,sym);
-    if(actual!=R_UnboundValue&&R_BindingIsActive(sym,owner))return 0;
-    if(actual==R_UnboundValue)actual=Rf_findVarInFrame(R_BaseEnv,sym);
-    if(TYPEOF(actual)==PROMSXP)actual=PRVALUE(actual);
+    SEXP sym=Rf_install(name);int bound=0;
+    SEXP actual=cdid_frame_value(owner,sym,&bound);
+    if(!bound)actual=cdid_frame_value(R_BaseEnv,sym,&bound);
     if(actual!=VECTOR_ELT(f,i))return 0;
   }
   return 1;
@@ -78,11 +79,10 @@ static int cr_bound(SEXP env,SEXP key) {
 #endif
 }
 static SEXP cr_value(SEXP env,const char *name) {
-  if(TYPEOF(env)!=ENVSXP||OBJECT(env))return R_UnboundValue;
+  if(TYPEOF(env)!=ENVSXP||Rf_isObject(env))return R_UnboundValue;
   SEXP key=Rf_install(name);
   if(!cr_bound(env,key)||R_BindingIsActive(key,env))return R_UnboundValue;
-  SEXP x=Rf_findVarInFrame(env,key);
-  if(TYPEOF(x)==PROMSXP)x=PRVALUE(x);
+  int bound=0;SEXP x=cdid_frame_value(env,key,&bound);
   return TYPEOF(x)==PROMSXP?R_UnboundValue:x;
 }
 static const char *cr_factory_names[]={"read","plan","n_cells","position","cache","seen","reader","view"};
@@ -95,7 +95,7 @@ static SEXP cr_inherited_value(SEXP owner,const char *name) {
   return cr_bound(owner,Rf_install(name))?cr_value(owner,name):cr_value(R_BaseEnv,name);
 }
 static int cr_factory_names_ok(SEXP env) {
-  if(TYPEOF(env)!=ENVSXP||OBJECT(env))return 0;
+  if(TYPEOF(env)!=ENVSXP||Rf_isObject(env))return 0;
   SEXP n=PROTECT(R_lsInternal3(env,TRUE,FALSE));
   int ok=TYPEOF(n)==STRSXP&&XLENGTH(n)==8;
   if(ok)for(int j=0;j<8;++j){int found=0;for(int k=0;k<8;++k)
@@ -105,12 +105,68 @@ static int cr_factory_names_ok(SEXP env) {
 }
 static int cr_same(SEXP a,SEXP b){return R_compute_identical(a,b,IDENT_USE_CLOENV);}
 static int cr_source_tag(SEXP tag){return tag==Rf_install("srcref")||tag==Rf_install("srcfile")||tag==Rf_install("wholeSrcref");}
+/* Public attribute visits expose one object at a time. Matching the next raw
+   tag/value in y keeps order exact without allocating attributes on a live
+   check. Executable code normally has no attributes (or just source tags). */
+typedef struct { R_xlen_t skip; int strip, found; SEXP tag, value; } cr_attr_at;
+static SEXP cr_attr_at_visit(SEXP tag,SEXP value,void *data) {
+  cr_attr_at *at=(cr_attr_at*)data;
+  if(at->strip&&cr_source_tag(tag))return NULL;
+  if(at->skip){--at->skip;return NULL;}
+  at->found=1;at->tag=tag;at->value=value;return R_NilValue;
+}
+typedef struct { SEXP y; R_xlen_t position; int strip, ok; } cr_attr_compare;
+static SEXP cr_attr_compare_visit(SEXP tag,SEXP value,void *data) {
+  cr_attr_compare *cmp=(cr_attr_compare*)data;
+  if(cmp->strip&&cr_source_tag(tag))return NULL;
+  cr_attr_at at={cmp->position,cmp->strip,0,R_NilValue,R_NilValue};
+  cdid_each_attrib(cmp->y,cr_attr_at_visit,&at);
+  if(!at.found||tag!=at.tag||!cr_same(value,at.value)){cmp->ok=0;return R_NilValue;}
+  ++cmp->position;return NULL;
+}
 static int cr_code_attrs(SEXP x,SEXP y,int strip) {
-  SEXP a=ATTRIB(x),b=ATTRIB(y);
-  for(;;){while(strip&&a!=R_NilValue&&cr_source_tag(TAG(a)))a=CDR(a);
-    while(strip&&b!=R_NilValue&&cr_source_tag(TAG(b)))b=CDR(b);
-    if(a==R_NilValue||b==R_NilValue)return a==b;
-    if(TAG(a)!=TAG(b)||!cr_same(CAR(a),CAR(b)))return 0;a=CDR(a);b=CDR(b);}
+  if(!cdid_has_attrib(x)&&!cdid_has_attrib(y))return 1;
+  PROTECT(y);
+  cr_attr_compare cmp={y,0,strip,1};
+  cdid_each_attrib(x,cr_attr_compare_visit,&cmp);
+  cr_attr_at at={cmp.position,strip,0,R_NilValue,R_NilValue};
+  if(cmp.ok)cdid_each_attrib(y,cr_attr_at_visit,&at);
+  UNPROTECT(1);return cmp.ok&&!at.found;
+}
+
+/* These three small raw snapshots are taken only when a live descriptor is
+   issued. Values stay borrowed; the tag/value slots are charged against its
+   existing 1024-entry live allowance within the 2048-entry descriptor
+   reservation, before allocating any snapshot. */
+static SEXP cr_attr_count_visit(SEXP tag,SEXP value,void *data) {
+  (void)tag;(void)value;++*(R_xlen_t*)data;return NULL;
+}
+static R_xlen_t cr_attr_count(SEXP x) {
+  R_xlen_t n=0;cdid_each_attrib(x,cr_attr_count_visit,&n);return n;
+}
+typedef struct { SEXP snapshot; R_xlen_t position; int ok; } cr_attr_snapshot;
+static SEXP cr_attr_save_visit(SEXP tag,SEXP value,void *data) {
+  cr_attr_snapshot *save=(cr_attr_snapshot*)data;
+  SET_VECTOR_ELT(save->snapshot,save->position++,tag);
+  SET_VECTOR_ELT(save->snapshot,save->position++,value);return NULL;
+}
+static SEXP cr_save_attrs(SEXP x,R_xlen_t n) {
+  if(!n)return R_NilValue;
+  SEXP out=PROTECT(Rf_allocVector(VECSXP,2*n));
+  cr_attr_snapshot save={out,0,1};cdid_each_attrib(x,cr_attr_save_visit,&save);
+  UNPROTECT(1);return out;
+}
+static SEXP cr_attr_saved_visit(SEXP tag,SEXP value,void *data) {
+  cr_attr_snapshot *save=(cr_attr_snapshot*)data;
+  if(save->position>=XLENGTH(save->snapshot)||
+    tag!=VECTOR_ELT(save->snapshot,save->position)||
+    !cr_same(value,VECTOR_ELT(save->snapshot,save->position+1))){save->ok=0;return R_NilValue;}
+  save->position+=2;return NULL;
+}
+static int cr_saved_attrs(SEXP x,SEXP snapshot) {
+  if(snapshot==R_NilValue)return !cdid_has_attrib(x);
+  cr_attr_snapshot save={snapshot,0,1};cdid_each_attrib(x,cr_attr_saved_visit,&save);
+  return save.ok&&save.position==XLENGTH(snapshot);
 }
 /* Exactly the two annotation locations of the existing R normalizer. Other
    executable nodes, pair tags and all other attributes remain exact. */
@@ -137,7 +193,7 @@ static int cr_reader_code(SEXP x,SEXP y,int outer) {
 static int cr_code_cost(SEXP x,int depth,double *cost) {
   if(depth>64||*cost>640)return 0;
   if(x==R_NilValue||TYPEOF(x)==SYMSXP)return 1;
-  if(ATTRIB(x)!=R_NilValue)return 0;
+  if(cdid_has_attrib(x))return 0;
   if(TYPEOF(x)==LANGSXP||TYPEOF(x)==LISTSXP){*cost+=8;
     return cr_code_cost(CAR(x),depth+1,cost)&&cr_code_cost(CDR(x),depth+1,cost);}
   if((TYPEOF(x)==INTSXP||TYPEOF(x)==REALSXP||TYPEOF(x)==LGLSXP)&&!ALTREP(x)){
@@ -147,8 +203,8 @@ static int cr_code_cost(SEXP x,int depth,double *cost) {
 static SEXP cr_live_create(SEXP view,SEXP state,SEXP functions) {
   SEXP meta=cr_field(functions,".live"),reader=cr_field(view,"reader"),read=cr_field(view,"read");
   if(!cr_list(meta)||TYPEOF(reader)!=CLOSXP||TYPEOF(read)!=CLOSXP)return R_NilValue;
-  SEXP env=CLOENV(reader),core=CLOENV(read),owner=cr_field(functions,".owner");
-  if(TYPEOF(env)!=ENVSXP||OBJECT(env)||TYPEOF(core)!=ENVSXP||OBJECT(core)||ENCLOS(env)!=owner||ENCLOS(core)!=owner||!cr_factory_names_ok(env))return R_NilValue;
+  SEXP env=cdid_closure_env(reader),core=cdid_closure_env(read),owner=cr_field(functions,".owner");
+  if(TYPEOF(env)!=ENVSXP||Rf_isObject(env)||TYPEOF(core)!=ENVSXP||Rf_isObject(core)||cdid_parent_env(env)!=owner||cdid_parent_env(core)!=owner||!cr_factory_names_ok(env))return R_NilValue;
   SEXP vf=cr_value(env,"view"),witness=cr_value(core,"complete_cache"),rb=cr_field(meta,"reader_body"),vb=cr_field(meta,"view_body"),helpers=cr_field(meta,"functions");
   double cost=0;
   if(TYPEOF(vf)!=CLOSXP||!cr_list(witness)||!cr_list(helpers)||XLENGTH(helpers)!=3||
@@ -156,6 +212,9 @@ static SEXP cr_live_create(SEXP view,SEXP state,SEXP functions) {
     !cr_code_cost(rb,0,&cost)||!cr_code_cost(vb,0,&cost)||cost>640||
     !cr_same(cr_field(witness,"view"),view)||!cr_same(cr_field(witness,"state"),state))return R_NilValue;
   for(int j=0;j<3;++j)if(cr_value(owner,cr_live_helpers[j])!=cr_field(helpers,cr_live_helpers[j]))return R_NilValue;
+  R_xlen_t nr=cr_attr_count(reader),nv=cr_attr_count(vf),nc=cr_attr_count(read);
+  double snapshots=(nr?8.0+2.0*nr:0)+(nv?8.0+2.0*nv:0)+(nc?8.0+2.0*nc:0);
+  if(cost+12+8+CR_LIVE_PRIMITIVES+3*8+snapshots>1024)return R_NilValue;
   SEXP out=PROTECT(Rf_allocVector(VECSXP,12)),values=PROTECT(Rf_allocVector(VECSXP,8)),prims=PROTECT(Rf_allocVector(VECSXP,CR_LIVE_PRIMITIVES));
   SET_VECTOR_ELT(out,0,env);SET_VECTOR_ELT(out,1,core);SET_VECTOR_ELT(out,2,values);
   for(int j=0;j<8;++j){SEXP x=cr_value(env,cr_factory_names[j]);if(x==R_UnboundValue){UNPROTECT(3);return R_NilValue;}SET_VECTOR_ELT(values,j,x);}
@@ -163,20 +222,20 @@ static SEXP cr_live_create(SEXP view,SEXP state,SEXP functions) {
     if(x==R_UnboundValue){UNPROTECT(3);return R_NilValue;}SET_VECTOR_ELT(prims,j,x);}
   SET_VECTOR_ELT(out,3,Rf_duplicate(rb));SET_VECTOR_ELT(out,4,Rf_duplicate(vb));SET_VECTOR_ELT(out,5,helpers);
   SET_VECTOR_ELT(out,6,prims);SET_VECTOR_ELT(out,7,witness);SET_VECTOR_ELT(out,8,BODY_EXPR(read));
-  SET_VECTOR_ELT(out,9,ATTRIB(reader));SET_VECTOR_ELT(out,10,ATTRIB(vf));SET_VECTOR_ELT(out,11,ATTRIB(read));
+  SET_VECTOR_ELT(out,9,cr_save_attrs(reader,nr));SET_VECTOR_ELT(out,10,cr_save_attrs(vf,nv));SET_VECTOR_ELT(out,11,cr_save_attrs(read,nc));
   UNPROTECT(3);return out;
 }
 static int cr_live_ok(SEXP live,SEXP reader,SEXP view,SEXP state,SEXP functions) {
-  if(TYPEOF(live)!=VECSXP||XLENGTH(live)!=12||(TYPEOF(reader)!=CLOSXP||OBJECT(reader)))return 0;
+  if(TYPEOF(live)!=VECSXP||XLENGTH(live)!=12||(TYPEOF(reader)!=CLOSXP||Rf_isObject(reader)))return 0;
   SEXP env=VECTOR_ELT(live,0),core=VECTOR_ELT(live,1),values=VECTOR_ELT(live,2),owner=cr_field(functions,".owner");
-  if(OBJECT(env)||OBJECT(core)||ENCLOS(env)!=owner||ENCLOS(core)!=owner||!cr_factory_names_ok(env)||
-    reader!=VECTOR_ELT(values,6)||CLOENV(reader)!=env)return 0;
+  if(Rf_isObject(env)||Rf_isObject(core)||cdid_parent_env(env)!=owner||cdid_parent_env(core)!=owner||!cr_factory_names_ok(env)||
+    reader!=VECTOR_ELT(values,6)||cdid_closure_env(reader)!=env)return 0;
   for(int j=0;j<8;++j)if(cr_value(env,cr_factory_names[j])!=VECTOR_ELT(values,j))return 0;
   SEXP read=VECTOR_ELT(values,0),vf=VECTOR_ELT(values,7),helpers=VECTOR_ELT(live,5);
-  if(TYPEOF(read)!=CLOSXP||OBJECT(read)||TYPEOF(vf)!=CLOSXP||OBJECT(vf)||CLOENV(read)!=core||CLOENV(vf)!=env||
+  if(TYPEOF(read)!=CLOSXP||Rf_isObject(read)||TYPEOF(vf)!=CLOSXP||Rf_isObject(vf)||cdid_closure_env(read)!=core||cdid_closure_env(vf)!=env||
     !cr_reader_code(BODY_EXPR(reader),VECTOR_ELT(live,3),1)||!cr_same(BODY_EXPR(vf),VECTOR_ELT(live,4))||
-    BODY_EXPR(read)!=VECTOR_ELT(live,8)||!cr_same(ATTRIB(reader),VECTOR_ELT(live,9))||
-    !cr_same(ATTRIB(vf),VECTOR_ELT(live,10))||!cr_same(ATTRIB(read),VECTOR_ELT(live,11)))return 0;
+    BODY_EXPR(read)!=VECTOR_ELT(live,8)||!cr_saved_attrs(reader,VECTOR_ELT(live,9))||
+    !cr_saved_attrs(vf,VECTOR_ELT(live,10))||!cr_saved_attrs(read,VECTOR_ELT(live,11)))return 0;
   if(cr_value(core,"read_cell_score")!=reader||cr_value(core,"complete_cache")!=VECTOR_ELT(live,7)||
     !cr_same(cr_field(VECTOR_ELT(live,7),"view"),view)||!cr_same(cr_field(VECTOR_ELT(live,7),"state"),state))return 0;
   const char *fields[]={"backend","cells","groups","N","B"};const char *statekeys[]={"core","cells","groups","N","B"};

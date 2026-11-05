@@ -7,6 +7,7 @@
 
 #include <R.h>
 #include <Rinternals.h>
+#include "cdid_r_api.h"
 #include <Rversion.h>
 #include <R_ext/Rdynload.h>
 #include <R_ext/Utils.h>
@@ -4402,33 +4403,12 @@ static int cp08_payload_any_tag(SEXP x) {
   return 0;
 }
 
-typedef SEXP (*cp08_attrib_visitor_fn)(SEXP tag, SEXP value, void *data);
-
 static int cp08_payload_has_raw_attrib(SEXP x) {
-#if R_VERSION >= R_Version(4, 5, 0)
-  return ANY_ATTRIB(x) != 0;
-#else
-  return ATTRIB(x) != R_NilValue;
-#endif
+  return cdid_has_attrib(x);
 }
 
-static SEXP cp08_payload_each_attrib(SEXP x, cp08_attrib_visitor_fn cb, void *data) {
-  PROTECT(x);
-#if R_VERSION >= R_Version(4, 6, 0)
-  SEXP out = R_mapAttrib(x, cb, data);
-#else
-  SEXP out = NULL;
-  for (SEXP a = ATTRIB(x); a != R_NilValue; a = CDR(a)) {
-    PROTECT(a);
-    SEXP tag = PROTECT(TAG(a));
-    SEXP value = PROTECT(CAR(a));
-    out = cb(tag, value, data);
-    UNPROTECT(3);
-    if (out != NULL) break;
-  }
-#endif
-  UNPROTECT(1);
-  return out;
+static SEXP cp08_payload_each_attrib(SEXP x, cdid_attrib_visitor cb, void *data) {
+  return cdid_each_attrib(x, cb, data);
 }
 
 static SEXP cp08_payload_find_attrib_cb(SEXP tag, SEXP value, void *data) {
@@ -4629,7 +4609,7 @@ static SEXP cp04_diag_metadata_attr(SEXP tag, SEXP value, void *data) {
 
 static int cp04_diag_metadata(SEXP x, cp04_diag_metadata_t *state) {
   if (x == R_NilValue || TYPEOF(x) == ENVSXP) return 1;
-  if (OBJECT(x) || IS_S4_OBJECT(x) || ALTREP(x) || state->depth >= 32U ||
+  if (Rf_isObject(x) || Rf_isS4(x) || ALTREP(x) || state->depth >= 32U ||
       state->nodes >= 65536U) return 0;
   state->nodes += 1U;
   int type = TYPEOF(x);
@@ -4662,7 +4642,7 @@ static int cp04_diag_metadata(SEXP x, cp04_diag_metadata_t *state) {
 }
 
 static int cp04_diag_ascii_names(SEXP names, R_xlen_t limit, int nonempty) {
-  if (TYPEOF(names) != STRSXP || OBJECT(names) || IS_S4_OBJECT(names) ||
+  if (TYPEOF(names) != STRSXP || Rf_isObject(names) || Rf_isS4(names) ||
       ALTREP(names) || cp08_payload_has_raw_attrib(names) || (limit >= 0 && XLENGTH(names) > limit)) return 0;
   for (R_xlen_t i = 0; i < XLENGTH(names); ++i) {
     SEXP s = STRING_ELT(names, i);
@@ -4676,7 +4656,7 @@ static int cp04_diag_ascii_names(SEXP names, R_xlen_t limit, int nonempty) {
 SEXP C_gmm_cp04_diagnostic_fields(SEXP x_sexp, SEXP names_sexp, SEXP call_env_sexp) {
   /* Fixed borrowed field slots fit the existing diagnostic header reservation.
      First exact match, including duplicate names, is base [[ character lookup. */
-  if (TYPEOF(x_sexp) != VECSXP || OBJECT(x_sexp) || IS_S4_OBJECT(x_sexp) || ALTREP(x_sexp) ||
+  if (TYPEOF(x_sexp) != VECSXP || Rf_isObject(x_sexp) || Rf_isS4(x_sexp) || ALTREP(x_sexp) ||
       TYPEOF(call_env_sexp) != ENVSXP || !cp04_diag_ascii_names(names_sexp, 128, 1) ||
       XLENGTH(names_sexp) == 0) return R_NilValue;
   SEXP record_names = cp08_payload_attrib_node(x_sexp, R_NamesSymbol);

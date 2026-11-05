@@ -2,6 +2,7 @@
    endpoint validation and right-minus-left remain in the original R helper. */
 #include <R.h>
 #include <Rinternals.h>
+#include "cdid_r_api.h"
 #include <R_ext/Utils.h>
 #include <stdint.h>
 #include <limits.h>
@@ -30,7 +31,7 @@ typedef struct {
 } pair49_state;
 
 static int pair49_plain(SEXP x, int type) {
-  return TYPEOF(x) == type && !OBJECT(x) && !ALTREP(x) && ATTRIB(x) == R_NilValue;
+  return TYPEOF(x) == type && !Rf_isObject(x) && !ALTREP(x) && !cdid_has_attrib(x);
 }
 static int pair49_row_compare(const void *x, const void *y) {
   int a = ((const pair49_row *)x)->key, b = ((const pair49_row *)y)->key;

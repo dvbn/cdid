@@ -2,6 +2,7 @@
    outcomes, fit/solve factors, assemble RHS/loadings or change finite guards. */
 #include <R.h>
 #include <Rinternals.h>
+#include "cdid_r_api.h"
 #include <R_ext/Utils.h>
 #include <limits.h>
 #include <math.h>
@@ -16,12 +17,12 @@
 extern void cdid_pair_operation_arithmetic(void);
 
 static int sp_plain(SEXP x, int type) {
-  return TYPEOF(x) == type && !OBJECT(x) && !ALTREP(x) && ATTRIB(x) == R_NilValue;
+  return TYPEOF(x) == type && !Rf_isObject(x) && !ALTREP(x) && !cdid_has_attrib(x);
 }
 static int sp_list(SEXP x) {
-  if (TYPEOF(x) != VECSXP || OBJECT(x) || ALTREP(x)) return 0;
-  SEXP a = ATTRIB(x), n = Rf_getAttrib(x, R_NamesSymbol);
-  return a != R_NilValue && TAG(a) == R_NamesSymbol && CDR(a) == R_NilValue &&
+  if (TYPEOF(x) != VECSXP || Rf_isObject(x) || ALTREP(x)) return 0;
+  SEXP n = Rf_getAttrib(x, R_NamesSymbol);
+  return cdid_single_attrib(x, R_NamesSymbol) &&
     sp_plain(n, STRSXP) && XLENGTH(n) == XLENGTH(x);
 }
 static SEXP sp_field(SEXP x, const char *name) {
@@ -37,9 +38,9 @@ static int sp_scalar(SEXP x, int minimum, int *out) {
   *out = (int) d; return 1;
 }
 static int sp_matrix(SEXP x, int n, int p) {
-  if (TYPEOF(x) != REALSXP || OBJECT(x) || ALTREP(x)) return 0;
-  for (SEXP a = ATTRIB(x); a != R_NilValue; a = CDR(a))
-    if (TAG(a) != R_DimSymbol && TAG(a) != R_DimNamesSymbol) return 0;
+  if (TYPEOF(x) != REALSXP || Rf_isObject(x) || ALTREP(x)) return 0;
+  const SEXP allowed[] = {R_DimSymbol, R_DimNamesSymbol};
+  if (!cdid_attrib_only(x, allowed, 2)) return 0;
   SEXP d = Rf_getAttrib(x, R_DimSymbol);
   return sp_plain(d, INTSXP) && XLENGTH(d) == 2 && INTEGER(d)[0] == n && INTEGER(d)[1] == p &&
     XLENGTH(x) == (R_xlen_t) n * p;
@@ -47,10 +48,10 @@ static int sp_matrix(SEXP x, int n, int p) {
 /* Constructors explicitly name mean_d with the fitted kept-column names.
    These labels do not change sweep values; other decorations stay scalar. */
 static int sp_mean(SEXP x, int p, SEXP columns) {
-  if (TYPEOF(x) != REALSXP || OBJECT(x) || ALTREP(x) || XLENGTH(x) != p) return 0;
-  if (ATTRIB(x) == R_NilValue) return 1;
-  SEXP a = ATTRIB(x), names = Rf_getAttrib(x, R_NamesSymbol);
-  return TAG(a) == R_NamesSymbol && CDR(a) == R_NilValue &&
+  if (TYPEOF(x) != REALSXP || Rf_isObject(x) || ALTREP(x) || XLENGTH(x) != p) return 0;
+  if (!cdid_has_attrib(x)) return 1;
+  SEXP names = Rf_getAttrib(x, R_NamesSymbol);
+  return cdid_single_attrib(x, R_NamesSymbol) &&
     sp_plain(names, STRSXP) && sp_plain(columns, STRSXP) && XLENGTH(names) == p && XLENGTH(columns) == p &&
     R_compute_identical(names, columns, IDENT_USE_CLOENV);
 }

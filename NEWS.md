@@ -8,6 +8,7 @@
 * Reuse already computed original-unit influence-function rows between covariance and GMM calculations when workspace permits, and store observed-change and cohort inputs in bounded blocks for augmented estimation. Estimates, covariance and inference are unchanged by this reuse.
 * Account for workspace by fitting, covariance and reporting phase, retaining configured limits and releasing temporary inference buffers before later phases. Correct the final diagnostic memory check so released buffers contribute to the historical peak rather than current memory use.
 * Reduce repeated diagnostic counting for modeled missingness while retaining the same reported records and resource bounds.
+* Update native object, attribute and binding access for newer R releases while retaining version-specific code for older R versions.
 * Update help and the practical guide to explain the two outcome specifications. Historical article outputs retain their recorded versions and explicitly request the pooled specification where used.
 
 # cdid 1.1.0.1

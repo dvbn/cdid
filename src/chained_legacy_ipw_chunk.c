@@ -2,6 +2,7 @@
    matrix products and two-triangular-solve primitives. No eager pair reads. */
 #include <R.h>
 #include <Rinternals.h>
+#include "cdid_r_api.h"
 #include <R_ext/Utils.h>
 #include <string.h>
 #include <limits.h>
@@ -24,47 +25,49 @@ static SEXP item(SEXP x, const char *name) {
   return R_NilValue;
 }
 static int plain(SEXP x, int type) {
-  return TYPEOF(x) == type && !OBJECT(x) && !ALTREP(x) && ATTRIB(x) == R_NilValue;
+  return TYPEOF(x) == type && !Rf_isObject(x) && !ALTREP(x) && !cdid_has_attrib(x);
 }
 static int list_ok(SEXP x) {
-  if (TYPEOF(x) != VECSXP || OBJECT(x) || ALTREP(x)) return 0;
-  return ATTRIB(x) == R_NilValue || (TAG(ATTRIB(x)) == R_NamesSymbol && CDR(ATTRIB(x)) == R_NilValue);
+  if (TYPEOF(x) != VECSXP || Rf_isObject(x) || ALTREP(x)) return 0;
+  return !cdid_has_attrib(x) || cdid_single_attrib(x, R_NamesSymbol);
 }
 static int matrix_ok(SEXP x, int nr, int nc) {
-  if (TYPEOF(x) != REALSXP || OBJECT(x) || ALTREP(x)) return 0;
+  if (TYPEOF(x) != REALSXP || Rf_isObject(x) || ALTREP(x)) return 0;
   SEXP dim = Rf_getAttrib(x, R_DimSymbol);
   if (TYPEOF(dim) != INTSXP || XLENGTH(dim) != 2 || INTEGER(dim)[0] != nr || INTEGER(dim)[1] != nc) return 0;
-  for (SEXP a = ATTRIB(x); a != R_NilValue; a = CDR(a))
-    if (TAG(a) != R_DimSymbol && TAG(a) != R_DimNamesSymbol) return 0;
+  const SEXP allowed[] = {R_DimSymbol, R_DimNamesSymbol};
+  if (!cdid_attrib_only(x, allowed, 2)) return 0;
   return XLENGTH(x) == (R_xlen_t)nr * nc;
 }
 /* Ordinary full-F selection designs retain model.matrix metadata in the
    immutable public/standalone readers. These attributes do not participate
    in the numeric subsetting/product; no metadata value is read or copied.
    Fitted H/cross/partial matrices keep the stricter matrix_ok above. */
+static SEXP selection_design_tag_ok(SEXP tag, SEXP value, void *data) {
+  (void)value; (void)data;
+  if (tag != R_DimSymbol && tag != R_DimNamesSymbol &&
+      tag != Rf_install("intercept") && tag != Rf_install("has_intercept") &&
+      tag != Rf_install("assign") && tag != Rf_install("contrasts")) return R_NilValue;
+  return NULL;
+}
 static int selection_design_header_ok(SEXP x, int nr, int nc) {
-  if (TYPEOF(x) != REALSXP || OBJECT(x) || ALTREP(x)) return 0;
+  if (TYPEOF(x) != REALSXP || Rf_isObject(x) || ALTREP(x)) return 0;
   SEXP dim = Rf_getAttrib(x, R_DimSymbol);
   if (TYPEOF(dim) != INTSXP || XLENGTH(dim) != 2 ||
       INTEGER(dim)[0] != nr || INTEGER(dim)[1] != nc) return 0;
-  for (SEXP a = ATTRIB(x); a != R_NilValue; a = CDR(a)) {
-    SEXP tag = TAG(a);
-    if (tag != R_DimSymbol && tag != R_DimNamesSymbol &&
-        tag != Rf_install("intercept") && tag != Rf_install("has_intercept") &&
-        tag != Rf_install("assign") && tag != Rf_install("contrasts")) return 0;
-  }
+  if (cdid_each_attrib(x, selection_design_tag_ok, NULL) != NULL) return 0;
   return XLENGTH(x) == (R_xlen_t)nr * nc;
 }
 /* The canonical frame design may be a base REAL ALTREP wrapper. Inspect
    only its ordinary matrix header here: never Length/REAL on that borrowed
    wrapper. The original R row-subset primitive reads it at its old position. */
 static int frame_matrix_header_ok(SEXP x, int nr, int nc) {
-  if (TYPEOF(x) != REALSXP || OBJECT(x) || nr < 1 || nc < 1) return 0;
+  if (TYPEOF(x) != REALSXP || Rf_isObject(x) || nr < 1 || nc < 1) return 0;
   SEXP dim = Rf_getAttrib(x, R_DimSymbol);
-  if (TYPEOF(dim) != INTSXP || OBJECT(dim) || ALTREP(dim) || XLENGTH(dim) != 2 ||
+  if (TYPEOF(dim) != INTSXP || Rf_isObject(dim) || ALTREP(dim) || XLENGTH(dim) != 2 ||
       INTEGER(dim)[0] != nr || INTEGER(dim)[1] != nc) return 0;
-  for (SEXP a = ATTRIB(x); a != R_NilValue; a = CDR(a))
-    if (TAG(a) != R_DimSymbol && TAG(a) != R_DimNamesSymbol) return 0;
+  const SEXP allowed[] = {R_DimSymbol, R_DimNamesSymbol};
+  if (!cdid_attrib_only(x, allowed, 2)) return 0;
   return 1;
 }
 static int nrow(SEXP x) {
@@ -142,7 +145,7 @@ SEXP C_gmm_legacy_ipw_chunk(SEXP reader, SEXP frame, SEXP backend, SEXP rows,
       !plain(mass, REALSXP) || XLENGTH(mass) != K || !plain(tids, INTSXP) || !plain(sids, INTSXP) ||
       !list_ok(st) || !list_ok(ss) || !list_ok(sf) || !list_ok(ts) || !list_ok(tf) ||
       !Rf_isFunction(pair)) return R_NilValue;
-  if ((TYPEOF(rows) != INTSXP && TYPEOF(rows) != REALSXP) || OBJECT(rows) || ATTRIB(rows) != R_NilValue) return R_NilValue;
+  if ((TYPEOF(rows) != INTSXP && TYPEOF(rows) != REALSXP) || Rf_isObject(rows) || cdid_has_attrib(rows)) return R_NilValue;
   for (int i = 0; i < B; ++i) {
     double value = TYPEOF(rows) == INTSXP ? INTEGER(rows)[i] : REAL(rows)[i];
     if (!R_FINITE(value) || value != floor(value) || value < 1 || value > N) return R_NilValue;
@@ -175,8 +178,8 @@ SEXP C_gmm_legacy_ipw_chunk(SEXP reader, SEXP frame, SEXP backend, SEXP rows,
         !plain(item(fit, "coefficients"), REALSXP) || XLENGTH(item(fit, "coefficients")) != p ||
         !matrix_ok(item(fit, "H_chol"), p, p) || !matrix_ok(item(fit, "cross"), p, u) ||
         !matrix_ok(item(part, "upstream"), 4, u) || !matrix_ok(item(part, "beta"), 4, p) ||
-        TYPEOF(means) != REALSXP || OBJECT(means) || ALTREP(means) || XLENGTH(means) != 4 ||
-        ATTRIB(means) == R_NilValue || TAG(ATTRIB(means)) != R_NamesSymbol || CDR(ATTRIB(means)) != R_NilValue ||
+        TYPEOF(means) != REALSXP || Rf_isObject(means) || ALTREP(means) || XLENGTH(means) != 4 ||
+        !cdid_single_attrib(means, R_NamesSymbol) ||
         (TYPEOF(Rf_getAttrib(means, R_NamesSymbol)) != STRSXP ||
           XLENGTH(Rf_getAttrib(means, R_NamesSymbol)) != 4)) return R_NilValue;
     SEXP names = Rf_getAttrib(means, R_NamesSymbol);
