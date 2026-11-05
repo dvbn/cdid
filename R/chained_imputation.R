@@ -1598,6 +1598,7 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
       identical(arm_state, complete_cache$state)
     visit_cids <- if (use_complete) reconstruction_sparse_adjoint_ids(complete_cache, structural_cids) else NULL
     if (is.null(visit_cids)) { use_complete <- FALSE; visit_cids <- sets$cids }
+    centered_cache <- if (use_complete) reconstruction_complete_cache_centered(complete_cache) else NULL
     out_vec <- numeric(B)
     for (cid in visit_cids) {
       obs_rec <- if (use_complete) reconstruction_complete_cache_get(arm_view, cid) else read_cell_score(cid)
@@ -1615,7 +1616,8 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
       val <- rep(t_lam, length(obs_rec$rr))
       if (gf$p > 0L && length(t_nu) > 0L) {
         d_tilde <- if (recipe$intercept) {
-          sweep(obs_rec$d_rr, 2L, cf$mean_d, FUN = "-")
+          if (!is.null(centered_cache)) centered_cache[[arm_view$position[cid]]] else
+            sweep(obs_rec$d_rr, 2L, cf$mean_d, FUN = "-")
         } else {
           obs_rec$d_rr
         }

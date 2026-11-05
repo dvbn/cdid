@@ -70,6 +70,18 @@ reconstruction_complete_cache_witness <- function(view, state) {
       anyNA(view$seen[slots]) || !all(view$seen[slots])) return(NULL)
   plain <- function(x) is.numeric(x) && !is.object(x)
   checked <- logical(length(state$groups)); membership <- integer(length(state$cells))
+  # Pure ordinary callers keep all existing per-arm source/state checks. The
+  # exact centered value is optional, never a new validity permission. Its
+  # list/seal headers fit the existing 1024-slot cache header allowance; each
+  # record must also fund source + derived + both construction/replacement
+  # overlaps in its unchanged 4*B*(p+2)+256+8*column_bytes reservation.
+  core_obj <- if (is.list(state) && !is.object(state)) .subset2(state, "core") else NULL
+  retain_centered <- is.list(view) && !is.object(view) && is.list(core_obj) && inherits(core_obj, "cdid_imputation_backend") &&
+    is.null(.subset2(core_obj, "reference_ref")) && is.null(.subset2(core_obj, "layout")) &&
+    is.null(.subset2(core_obj, "pair_outcomes")) && state$intercept && length(ids) == length(view$cache) &&
+    reconstruction_centered_cache_source(view)
+  centered_values <- if (retain_centered) vector("list", length(view$cache)) else NULL
+  any_centered <- FALSE
   for (j in seq_along(ids)) {
     cf <- state$cells[[ids[j]]]
     if (!is.list(cf) || is.object(cf) || length(cf$group_id) != 1L ||
@@ -102,10 +114,92 @@ reconstruction_complete_cache_witness <- function(view, state) {
       if (!plain(cf$mean_d) || length(cf$mean_d) != gf$p || !is.null(dim(cf$mean_d))) return(NULL)
       centered <- if (state$intercept) sweep(rec$d_rr, 2L, cf$mean_d, FUN = "-") else rec$d_rr
       if (!all(is.finite(centered))) return(NULL)
+      if (retain_centered) {
+        columns <- gf$kept_columns
+        peak <- reconstruction_centered_record_peak(rec, centered, columns)
+        if (is.finite(peak)) {
+          slab <- 4 * state$B * (gf$p + 2) + 256 + 8 * sum(nchar(columns, type = "bytes"))
+          # Count the original record and centered matrix twice: retained
+          # values plus the current raw/centered replacement construction.
+          # One additional list slot per record is explicit, not free aliasing.
+          if (peak > slab) {
+            retain_centered <- FALSE; centered_values <- NULL
+          } else {
+            centered_values[slots[j]] <- list(centered)
+            any_centered <- TRUE
+          }
+        } else {
+          retain_centered <- FALSE; centered_values <- NULL
+        }
+      }
     }
   }
   position <- integer(length(state$cells)); position[ids] <- seq_along(ids)
-  list(view = view, state = state, needed_position = position)
+  out <- list(view = view, state = state, needed_position = position)
+  if (retain_centered && any_centered) {
+    derived <- list(values = centered_values, ref = NULL)
+    # The empty-list skeleton excludes the separately funded per-record list
+    # slots and matrices. Failed optional funding retains the old score cache.
+    # The named two-field empty-list skeleton is 42 entries; another 64
+    # covers output/list/seal replacement headers. Per-record slots are in
+    # peak above. All 106 entries fit the unchanged 1024-slot header reserve.
+    out$centered <- ipw_owner_seal(derived, "reconstruction_centered_cache")
+  }
+  out
+}
+
+# The caller has just passed the existing complete view/state equality. A
+# changed derived component declines reuse; the old sweep remains available.
+reconstruction_complete_cache_centered <- function(snapshot) {
+  x <- snapshot$centered
+  ref <- if (is.list(x)) x$ref else NULL
+  if (!is.environment(ref) || !identical(parent.env(ref), emptyenv()) || !environmentIsLocked(ref) ||
+      !exists("reconstruction_centered_cache", ref, inherits = FALSE) ||
+      !bindingIsLocked("reconstruction_centered_cache", ref) || bindingIsActive("reconstruction_centered_cache", ref) ||
+      !identical(x, get("reconstruction_centered_cache", ref, inherits = FALSE)) ||
+      !is.list(x$values) || length(x$values) != length(snapshot$view$cache)) return(NULL)
+  x$values
+}
+
+# A bounded existing-frame guard for this numerical-value reuse only. It
+# grants no validation permission: every factory recognizer/state check stays.
+# Cloned private cores and arbitrary readers retain their original sweep.
+reconstruction_centered_cache_source <- function(view) {
+  if (!is.list(view) || is.object(view)) return(FALSE)
+  read <- .subset2(view, "read")
+  if (typeof(read) != "closure" || is.object(read)) return(FALSE)
+  core <- environment(read)
+  if (!is.environment(core) || identical(core, emptyenv())) return(FALSE)
+  owner <- parent.env(core)
+  if (!isNamespace(owner) || !identical(owner, environment(reconstruction_complete_cache_witness)) ||
+      exists("sweep", core, inherits = FALSE) ||
+      (exists("sweep", owner, inherits = FALSE) && bindingIsActive("sweep", owner)) ||
+      !identical(get("sweep", owner, inherits = TRUE), base::sweep)) return(FALSE)
+  # Inspect existing call-frame identities, never force a private reader
+  # promise. The bounded pointer/index lists fit the old cache header reserve.
+  if (sys.nframe() > 128L) return(FALSE)
+  frames <- sys.frames(); parents <- sys.parents()
+  for (j in seq_along(frames)) if (identical(frames[[j]], core)) {
+    p <- parents[j]
+    return(p > 0L && identical(sys.function(j), get("imputation_evaluate_if_chunk_core", owner, inherits = FALSE)) &&
+      identical(sys.function(p), get("evaluate_imputation_if_chunk", owner, inherits = FALSE)))
+  }
+  FALSE
+}
+
+# Exact cp04_payload counts for canonical score records and their already
+# computed centered matrix. Unusual private decorations decline retention.
+# Matrix: n*p + p + 46 + sum(ceil(column_bytes/2)); record adds 2*n+52.
+reconstruction_centered_record_peak <- function(record, centered, columns) {
+  if (!is.character(columns) || is.object(columns) || anyNA(columns) || !is.null(attributes(columns)) ||
+      !identical(names(attributes(record)), "names") || !is.null(attributes(record$s_rr)) ||
+      !identical(names(attributes(record$d_rr)), c("dim", "dimnames")) ||
+      !is.null(rownames(record$d_rr)) || !identical(colnames(record$d_rr), columns) ||
+      !identical(attributes(centered), attributes(record$d_rr))) return(Inf)
+  p <- length(columns); n <- length(record$rr)
+  matrix_entries <- n * p + p + 46 + sum(ceiling(nchar(columns, type = "bytes") / 2))
+  record_entries <- matrix_entries + 2 * n + 52
+  2 * record_entries + 2 * matrix_entries + 1
 }
 
 # Structural cells plus EVERY member of their active groups, in the original
@@ -115,6 +209,11 @@ reconstruction_sparse_adjoint_ids <- function(snapshot, structural_cids) {
   if (!is.integer(structural_cids) || !is.null(attributes(structural_cids)) ||
       anyNA(structural_cids) || any(structural_cids < 1L | structural_cids > length(st$cells))) return(NULL)
   if (any(snapshot$needed_position[structural_cids] == 0L)) return(NULL)
+  # The complete witness validates every needed cell's group and membership
+  # before its p>0 branch. With one group, any nonempty valid arm's closure
+  # therefore contains all needed cells, already in their required order.
+  # Empty private arms retain their original empty result below.
+  if (length(structural_cids) && length(st$groups) == 1L) return(st$cids)
   gids <- unique(vapply(st$cells[structural_cids], `[[`, integer(1L), "group_id"))
   closure <- unique(c(structural_cids, unlist(lapply(st$groups[gids], `[[`, "cell_ids"))))
   at <- snapshot$needed_position[closure]
