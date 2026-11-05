@@ -51,7 +51,8 @@ augmented_abort <- function(message, class = "input", extra = list()) {
 # T_logit = -d log max(q, eps) / d theta in the cell's theta coordinates (zero
 # where the floor binds). Missing outcomes are never read; Z = j off pairs.
 augmented_cell_rows <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows,
-                                need_logderiv = FALSE, pair_predictor = predict_pair_selection) {
+                                need_logderiv = FALSE, pair_predictor = predict_pair_selection,
+                                log_derivative = selection_pair_cohort_log_deriv) {
   n <- length(rows)
   jhat <- if (gf$p > 0L) {
     cf$alpha + as.vector((cf$L * X_F[rows, gf$kept_cols_F, drop = FALSE]) %*% gf$beta)
@@ -64,7 +65,7 @@ augmented_cell_rows <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows,
     e = numeric(0L), T_logit = NULL)
   if (length(obs)) {
     if (need_logderiv) {
-      ld <- selection_pair_cohort_log_deriv(sel_fit, up_map, cf$q_id, rows[obs])
+      ld <- log_derivative(sel_fit, up_map, cf$q_id, rows[obs])
       q <- ld$pred$prob
       out$T_logit <- ld$T_logit
     } else {
@@ -602,6 +603,23 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     cohort_colmax_F[[ci]] <- cmax
   }
 
+  # The package-owned static pair reader may share one selection operation
+  # within numerical scans, never across the earlier imputation GLM or the
+  # OR fitter/visitor boundary. Other private/reference routes keep defaults.
+  fit_op <- NULL
+  fit_sources <- NULL
+  fit_cell_worker <- augmented_cell_rows
+  on.exit(if (!is.null(fit_op)) fit_op$abort(), add = TRUE)
+  if (is.null(lay) && is.null(reference) && is.null(pair_outcomes)) {
+    fit_op <- selection_prediction_operation(sel_fit, source_reader = reader)
+    fit_sources <- fit_op$sources
+    fit_pair_predictor <- function(sel_fit, rows, pair_cohort_id) fit_op$pair(rows, pair_cohort_id)
+    fit_log_derivative <- function(sel_fit, up_map, q, rows) fit_op$deriv(up_map, q, rows)
+    fit_cell_worker <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv = FALSE)
+      augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv,
+        pair_predictor = fit_pair_predictor, log_derivative = fit_log_derivative)
+  }
+
   # S4. Augmentation scan per cell (link independent).
   cells <- vector("list", n_cells)
   for (cid in seq_len(n_cells)) {
@@ -620,7 +638,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     clip_c <- ipw_clip_summary(q = numeric(0), weights = numeric(0))
     for (start in chunk_starts(ci)) {
       rows <- chunk_rows(ci, start)
-      ev <- augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, TRUE)
+      ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, TRUE)
       w_syn <- st$w[rows] * a_k
       Y_aug <- Y_aug + sum(w_syn * ev$Z)
       if (p_or_raw > 0L) {
@@ -676,7 +694,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     acc <- or_pooled_support_start(recipe, cf$L)
     for (start in chunk_starts(cf$cohort_index)) {
       rows <- chunk_rows(cf$cohort_index, start)
-      ev <- augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, FALSE)
+      ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, FALSE)
       acc <- or_pooled_support_add(acc, recipe, X_F[rows, or_frame_index, drop = FALSE], ev$Z,
         st$w[rows] * a_k, "augmented_or")
     }
@@ -697,6 +715,11 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     ci_s <- cells[[sid]]$cohort_index
     for (start in chunk_starts(ci_s)) visit(X_F[chunk_rows(ci_s, start), or_frame_index, drop = FALSE])
     invisible(NULL)
+  }
+  if (!is.null(fit_op)) {
+    fit_op$finish()
+    fit_op$abort()
+    fit_op <- NULL
   }
   fit_or_fun <- if (separate_or) function(...) or_outcome_fit_blocks(..., mode = "separate") else or_pooled_fit_blocks
   fit_or <- tryCatch(fit_or_fun(
@@ -728,6 +751,9 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   cp04_finite(c(alpha_or, beta_or), "augmented shared counterfactual OR coefficients")
 
   }
+
+  if (!is.null(fit_sources)) fit_op <- selection_prediction_operation(sel_fit,
+    expected_sources = fit_sources, source_reader = reader)
 
   # Forcing of every block constituent: rate (with r = Z - b), j (M^Delta) and
   # q (-R^q). The global shared-slope q forcing collects all blocks once.
@@ -780,7 +806,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
       for (start in chunk_starts(cf$cohort_index)) {
         rows <- chunk_rows(cf$cohort_index, start)
         n_r <- length(rows)
-        ev <- augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, p_or > 0L)
+        ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, p_or > 0L)
         w_raw <- st$w[rows]
         w_syn <- w_raw * a_k
         d_or <- if (p_or > 0L) L_b * X_F[rows, kept_or_cols_F, drop = FALSE] else matrix(0.0, n_r, 0L)
@@ -988,7 +1014,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
         wm <- w_syn * odds
         # Odds derivative rows: wm on active rows, zero where the cap binds.
         wdot <- wm * lv_t$active
-        ev <- augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf_k, gf_k, rows, TRUE)
+        ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf_k, gf_k, rows, TRUE)
         Z_rows <- ev$Z
         one_minus_pi <- rep(1, n_r)
         if (length(ev$obs)) one_minus_pi[ev$obs] <- 1 - ev$pi
@@ -1128,6 +1154,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   )
   obj$accounting$owned_entries <- actual
   obj$accounting$character_bytes <- unname(payload["char_bytes"])
+  if (!is.null(fit_op)) fit_op$finish()
   ipw_owner_seal(obj, "augmented_backend")
 }
 
