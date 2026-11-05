@@ -147,10 +147,10 @@ v53_native <- function(sample) {
   functions <- c(current, list(.owner = asNamespace("cdid")))
   list(kernels = kernels, functions = functions,
     create = function(cap = 1e8, view = sample$view, state = sample$state)
-      .Call(kernels[[1L]], view, state, sample$centered, functions, cap),
-    call = function(ptr, x = sample) .Call(kernels[[2L]], ptr, x$view, x$state, x$lambda,
+      kernels[[1L]](view, state, sample$centered, functions, cap),
+    call = function(ptr, x = sample) kernels[[2L]](ptr, x$view, x$state, x$lambda,
       x$nu, x$active, x$ids, x$templates),
-    close = function(ptr) .Call(kernels[[2L]], ptr, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
+    close = function(ptr) kernels[[2L]](ptr, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
 }
 
 testthat::test_that("native coarse boundary keeps first-inactive arithmetic, active zeros, caps and refusals", {
@@ -166,7 +166,7 @@ testthat::test_that("native coarse boundary keeps first-inactive arithmetic, act
   testthat::expect_identical(copied, api$functions$or_wls_gram_solve)
   testthat::expect_false(v53_ns("gmm_sexp_aliases")(copied, api$functions$or_wls_gram_solve))
   stale_functions <- api$functions; stale_functions$or_wls_gram_solve <- copied
-  testthat::expect_null(.Call(api$kernels[[1L]], x$view, x$state, x$centered, stale_functions, 1e8))
+  testthat::expect_null(api$kernels[[1L]](x$view, x$state, x$centered, stale_functions, 1e8))
   fresh <- x; fresh$templates <- vector("list", length(x$state$groups))
   got <- api$call(ptr, fresh); ref <- do.call(v53_scalar, fresh)
   testthat::expect_equal(got, ref, tolerance = 1e-12)

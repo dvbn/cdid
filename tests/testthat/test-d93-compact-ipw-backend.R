@@ -1225,7 +1225,8 @@ test_that("coarse raw observers exactly copy the frozen collector and independen
   po <- construct_ipw_panel_owner(sim$data, "id", "time", "y", "g", ctrl$owner_control)
   calls <- 0L; reads <- 0L; captured <- NULL
   spy <- new.env(parent = environment(ipw_raw_collect_observer_buffer))
-  address <- ipw_raw_observer_collector_kernel()
+  address <- cdid_test_native_address(ipw_raw_observer_collector_kernel())
+  spy$ipw_raw_observer_collector_kernel <- cdid_test_native_calls_in(ipw_raw_observer_collector_kernel, spy)
   spy$.Call <- function(.NAME, ...) {
     if (identical(.NAME, address)) calls <<- calls + 1L
     out <- base::.Call(.NAME, ...)
@@ -1316,7 +1317,7 @@ test_that("coarse raw observers decline unsupported indices and preserve count f
   E <- (fo$n_covariates + 5) * n + 512
   invoke <- function(bd = bounds, owner = cohort$owner_cohort_index, view = cohort$view_cohort_index,
                      observations = post$post_obs_index, ctl = as.integer(c(n, 1L, cohort$m_cohorts)), cap = E) {
-    .Call(address, post$post_a_index, observations, bd, fo$a_cohort_index, fo$w_a, fo$Z_a,
+    address(post$post_a_index, observations, bd, fo$a_cohort_index, fo$w_a, fo$Z_a,
       owner, view, ctl, cap)
   }
   expect_identical(invoke()$status, 0L)
@@ -1336,7 +1337,7 @@ test_that("coarse raw observers decline unsupported indices and preserve count f
   dll <- getLoadedDLLs()[["cdid"]]
   reg <- getDLLRegisteredRoutines(dll, addNames = TRUE)[[".Call"]]
   expect_identical(reg[["C_gmm_ipw_raw_observer_collect"]]$numParameters, 10L)
-  expect_identical(address, getNativeSymbolInfo("C_gmm_ipw_raw_observer_collect", PACKAGE = dll)$address)
+  expect_identical(cdid_test_native_address(address), getNativeSymbolInfo("C_gmm_ipw_raw_observer_collect", PACKAGE = dll)$address)
 })
 
 # V29: independent byte/cardinality witnesses for local raw record metadata.

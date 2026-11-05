@@ -312,7 +312,7 @@ v14_call <- function(fit, rows, plan, data = plan$data, cap = NULL, X = NULL) {
   if (is.null(X)) X <- frame$Z_a
   if (is.null(cap)) cap <- fop_ns("separate_complete_native_live")(length(rows), length(plan$links),
     length(plan$dates), length(plan$gids), ncol(data$family))
-  .Call(fop_ns("or_baseline_native_kernel")("C_gmm_separate_complete_if"), panel$observations$y,
+  fop_ns("or_baseline_native_kernel")("C_gmm_separate_complete_if")(panel$observations$y,
     post$date_start, post$post_a_index, post$post_obs_index, as.integer(rows), reader$state$cohort_index,
     reader$state$a_index, reader$state$w, plan$dates, X, data, as.double(cap))
 }

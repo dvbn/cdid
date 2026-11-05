@@ -168,6 +168,8 @@ sb_counted <- function(mode = "batch") {
   n$logit <- n$trt_fit <- n$trt_batch <- n$search <- n$complete <- 0L
   n$batch_slots <- n$batch_reads <- n$batch_models <- 0
   addr <- lapply(sb_kernels, api$or_baseline_native_kernel)
+  addr <- lapply(addr, cdid_test_native_address)
+  e$or_baseline_native_kernel <- cdid_test_native_calls_in(api$or_baseline_native_kernel, e)
   e$.Call <- function(.NAME, ...) {
     k <- which(vapply(addr, identical, logical(1), .NAME))
     res <- base::.Call(.NAME, ...)
@@ -936,7 +938,7 @@ test_that("structural negatives, broken bindings, stale objects, kernel guards a
                         recipe = fit$outcome_recipe, or_idx = fit$or_frame_index,
                         t_rec = trt_recipe, gc = sb_glm, ctrl = fx$ctrl,
                         ref = NULL, complete = fit$complete_support, sh = clone_share(),
-                        scratch = NULL, call_fn = base::.Call) {
+                        scratch = NULL, call_fn = function(kernel, ...) kernel(...)) {
     api$dr_baseline_treatment_batch(
       fx$reader, specs, supports, regressions, shared, recipe, or_idx, t_rec,
       gc, ctrl, ref, complete, sh, scratch = scratch, call_fn = call_fn
@@ -947,7 +949,7 @@ test_that("structural negatives, broken bindings, stale objects, kernel guards a
   sb_expect_match(got_ok, fit$treatments[-1L], tol = 1e-12)
 
   batch_calls <- 0L
-  counting_call <- function(.NAME, ...) { batch_calls <<- batch_calls + 1L; base::.Call(.NAME, ...) }
+  counting_call <- function(kernel, ...) { batch_calls <<- batch_calls + 1L; kernel(...) }
 
   # Stale share counters or mutated prep bindings decline with 0 native calls:
   sh_stale <- clone_share(); sh_stale$reuses <- 1L
@@ -1091,7 +1093,7 @@ test_that("structural negatives, broken bindings, stale objects, kernel guards a
     )
     edits <- list(...)
     for (k in names(edits)) a[[as.integer(k)]] <- edits[[k]]
-    do.call(base::.Call, c(list(k_batch), a))
+    do.call(k_batch, a)
   }
   c_ok <- c_call()
   expect_identical(c_ok$status, c(0L, 0L, 0L, 0L))

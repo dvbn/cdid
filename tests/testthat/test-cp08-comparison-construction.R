@@ -130,7 +130,7 @@ cc_frozen$dr_baseline_treatment_fit <- function(reader, spec, supports, reg, sha
     rows <- sort(unlist(lapply(spec$cohorts, function(k) st$cohort_order[seq_len(st$cohort_end[k] -
       st$cohort_start[k] + 1) + st$cohort_start[k] - 1])), method = "radix")
     post <- panel$postings
-    res <- .Call(or_baseline_native_kernel("C_gmm_cp08_pair_rows"), panel$observations$y, post$date_start,
+    res <- or_baseline_native_kernel("C_gmm_cp08_pair_rows")(panel$observations$y, post$date_start,
       post$post_a_index, post$post_obs_index, rows, st$a_index,
       as.integer(c(spec$pair$s_calendar_index, spec$pair$t_calendar_index)), as.integer(ctrl$max_chunk_rows),
       ctrl$max_matrix_entries)

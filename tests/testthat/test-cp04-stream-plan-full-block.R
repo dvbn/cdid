@@ -279,13 +279,14 @@ rm_expect_mixed_or_native <- function(fit, links, B) {
   plan <- api$or_baseline_native_plan(fit, links, B, pre)
   expect_identical(plan$kind, "or_baseline_native_plan")
   expect_true(is.list(plan$blk))
-  address <- api$or_baseline_native_kernel("C_gmm_cp08_or_if_chunk")
+  address <- cdid_test_native_address(api$or_baseline_native_kernel("C_gmm_cp08_or_if_chunk"))
   calls <- 0L; fn <- api$or_baseline_native_if_chunk
   e <- new.env(parent = environment(fn))
   e$.Call <- function(.NAME, ...) {
     if (identical(.NAME, address)) calls <<- calls + 1L
     base::.Call(.NAME, ...)
   }
+  e$or_baseline_native_kernel <- cdid_test_native_calls_in(api$or_baseline_native_kernel, e)
   environment(fn) <- e
   rows <- seq_len(B)
   actual <- fn(fit, reader, rows, links, "frame", pre, plan)

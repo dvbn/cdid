@@ -1403,7 +1403,7 @@ gmm_require_native_dll <- function() {
     syms <- cache$syms
     # C_gmm_next already checks live arithmetic in older valid backends too;
     # their identity-only C_gmm_sexp_aliases cannot serve as the warm guard.
-    ok <- tryCatch(.Call(syms$C_gmm_next, 1.0, TRUE), error = function(e) {
+    ok <- tryCatch(attr(syms, "calls")$C_gmm_next(1.0, TRUE), error = function(e) {
       if (inherits(e, "cdid_gmm_refusal")) stop(e)
       NULL
     })
@@ -1443,7 +1443,56 @@ gmm_require_native_dll <- function() {
       }
       syms[[nm]] <- si$address
     }
-    st <- .Call(syms$C_gmm_native_status)
+    # Fixed-arity calls close over this owner's registered symbol objects.
+    # Bind once at admission; neither a global DLL basename nor a computed
+    # .Call target participates in dispatch, including for source/mock owners.
+    native <- new.env(parent = baseenv())
+    for (nm in names(reg)) {
+      address <- if (nm %in% names(syms)) syms[[nm]] else
+        base::getNativeSymbolInfo(nm, PACKAGE = dll)$address
+      assign(nm, address, envir = native)
+    }
+    lockEnvironment(native, bindings = TRUE)
+    calls <- list(
+      C_gmm_reconstruction_zero_run = function(a1, a2, a3, a4, a5, a6) .Call(C_gmm_reconstruction_zero_run, a1, a2, a3, a4, a5, a6),
+      C_gmm_reconstruction_score_pullback = function(a1, a2, a3, a4, a5, a6) .Call(C_gmm_reconstruction_score_pullback, a1, a2, a3, a4, a5, a6),
+      C_gmm_reconstruction_coarse_create = function(a1, a2, a3, a4, a5) .Call(C_gmm_reconstruction_coarse_create, a1, a2, a3, a4, a5),
+      C_gmm_reconstruction_coarse_pullback = function(a1, a2, a3, a4, a5, a6, a7, a8) .Call(C_gmm_reconstruction_coarse_pullback, a1, a2, a3, a4, a5, a6, a7, a8),
+      C_gmm_legacy_ipw_chunk = function(a1, a2, a3, a4, a5, a6, a7, a8, a9) .Call(C_gmm_legacy_ipw_chunk, a1, a2, a3, a4, a5, a6, a7, a8, a9),
+      C_gmm_pair_operation_create = function(a1, a2, a3, a4, a5, a6, a7, a8, a9) .Call(C_gmm_pair_operation_create, a1, a2, a3, a4, a5, a6, a7, a8, a9),
+      C_gmm_pair_operation_query = function(a1, a2, a3, a4, a5, a6) .Call(C_gmm_pair_operation_query, a1, a2, a3, a4, a5, a6),
+      C_gmm_dr_separate_sparse_if = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) .Call(C_gmm_dr_separate_sparse_if, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12),
+      C_gmm_dr_sparse_prepare = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) .Call(C_gmm_dr_sparse_prepare, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11),
+      C_gmm_dr_sparse_assemble = function(a1, a2, a3, a4, a5, a6, a7) .Call(C_gmm_dr_sparse_assemble, a1, a2, a3, a4, a5, a6, a7),
+      C_gmm_ipw_raw_observer_collect = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) .Call(C_gmm_ipw_raw_observer_collect, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10),
+      C_gmm_or_sparse_if = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) .Call(C_gmm_or_sparse_if, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11),
+      C_gmm_native_status = function() .Call(C_gmm_native_status),
+      C_gmm_test_arithmetic_probe = function(a1, a2, a3, a4, a5) .Call(C_gmm_test_arithmetic_probe, a1, a2, a3, a4, a5),
+      C_gmm_sexp_aliases = function(a1, a2) .Call(C_gmm_sexp_aliases, a1, a2),
+      C_gmm_next = function(a1, a2) .Call(C_gmm_next, a1, a2),
+      C_gmm_iv_dot = function(a1, a2, a3) .Call(C_gmm_iv_dot, a1, a2, a3),
+      C_gmm_iv_norm = function(a1, a2, a3) .Call(C_gmm_iv_norm, a1, a2, a3),
+      C_gmm_iv_mat_residual = function(a1, a2, a3, a4) .Call(C_gmm_iv_mat_residual, a1, a2, a3, a4),
+      C_gmm_iv_eigen_residual = function(a1, a2, a3, a4) .Call(C_gmm_iv_eigen_residual, a1, a2, a3, a4),
+      C_gmm_iv_mat_product = function(a1, a2, a3, a4, a5) .Call(C_gmm_iv_mat_product, a1, a2, a3, a4, a5),
+      C_gmm_ipw_if_chunk = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18) .Call(C_gmm_ipw_if_chunk, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18),
+      C_gmm_cp08_support_chunk = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) .Call(C_gmm_cp08_support_chunk, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12),
+      C_gmm_cp08_pair_rows = function(a1, a2, a3, a4, a5, a6, a7, a8, a9) .Call(C_gmm_cp08_pair_rows, a1, a2, a3, a4, a5, a6, a7, a8, a9),
+      C_gmm_cp08_sparse_pair_rows = function(a1, a2, a3, a4, a5, a6) .Call(C_gmm_cp08_sparse_pair_rows, a1, a2, a3, a4, a5, a6),
+      C_gmm_cp08_fit_pass1 = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) .Call(C_gmm_cp08_fit_pass1, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15),
+      C_gmm_cp08_fit_pass2 = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) .Call(C_gmm_cp08_fit_pass2, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15),
+      C_gmm_cp08_or_if_chunk = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17) .Call(C_gmm_cp08_or_if_chunk, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17),
+      C_gmm_separate_complete_if = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) .Call(C_gmm_separate_complete_if, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12),
+      C_gmm_cp08_dr_if_prepare = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14) .Call(C_gmm_cp08_dr_if_prepare, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14),
+      C_gmm_cp08_dr_if_assemble = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17) .Call(C_gmm_cp08_dr_if_assemble, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17),
+      C_gmm_cp08_dr_treatment_batch = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19) .Call(C_gmm_cp08_dr_treatment_batch, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19),
+      C_gmm_if_unit_batch = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) .Call(C_gmm_if_unit_batch, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10),
+      C_gmm_cp08_payload = function(a1, a2, a3) .Call(C_gmm_cp08_payload, a1, a2, a3),
+      C_gmm_cp04_diagnostic_fields = function(a1, a2, a3) .Call(C_gmm_cp04_diagnostic_fields, a1, a2, a3)
+    )
+    for (nm in names(calls)) environment(calls[[nm]]) <- native
+    attr(syms, "calls") <- calls
+    st <- calls$C_gmm_native_status()
     if (!is.list(st) || !identical(st$backend, "native_c_ieee754_binary64") ||
         !isTRUE(st$c_registration) || !isTRUE(st$force_symbols) ||
         !identical(st$fallback_permitted, FALSE) ||
@@ -1465,7 +1514,7 @@ gmm_require_native_dll <- function() {
 
 gmm_native_backend_info <- function() {
   syms <- gmm_require_native_dll()
-  st <- .Call(syms$C_gmm_native_status)
+  st <- attr(syms, "calls")$C_gmm_native_status()
   owner <- environment(sys.function())
   dll <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs")[["cdid"]] else base::getLoadedDLLs()[["cdid"]]
   st$dll_name <- "cdid"
@@ -1478,7 +1527,7 @@ gmm_native_backend_info <- function() {
 
 gmm_sexp_aliases <- function(a, b) {
   syms <- gmm_require_native_dll()
-  isTRUE(.Call(syms$C_gmm_sexp_aliases, a, b))
+  isTRUE(attr(syms, "calls")$C_gmm_sexp_aliases(a, b))
 }
 
 # Scalar outward rounding. Assumptions: IEEE binary64, round-to-nearest ties-to-even,
@@ -1553,7 +1602,7 @@ gmm_iv_dot <- function(x, y, max_matrix_entries = NULL) {
   }
   if (typeof(x) != "double") x <- as.double(x)
   if (typeof(y) != "double") y <- as.double(y)
-  .Call(syms$C_gmm_iv_dot, x, y, max_matrix_entries)
+  attr(syms, "calls")$C_gmm_iv_dot(x, y, max_matrix_entries)
 }
 # Scaled validated norm, avoiding squaring huge/small values before scaling.
 gmm_iv_norm <- function(lo, hi = lo, max_matrix_entries = NULL) {
@@ -1601,7 +1650,7 @@ gmm_iv_norm <- function(lo, hi = lo, max_matrix_entries = NULL) {
     }
     if (typeof(hi) != "double") storage.mode(hi) <- "double"
   }
-  .Call(syms$C_gmm_iv_norm, lo, if (has_hi) hi else NULL, max_matrix_entries)
+  attr(syms, "calls")$C_gmm_iv_norm(lo, if (has_hi) hi else NULL, max_matrix_entries)
 }
 gmm_iv_mat_residual <- function(X, Y, D, max_matrix_entries = NULL) {
   syms <- gmm_require_native_dll()
@@ -1632,7 +1681,7 @@ gmm_iv_mat_residual <- function(X, Y, D, max_matrix_entries = NULL) {
   if (typeof(X) != "double") storage.mode(X) <- "double"
   if (typeof(Y) != "double") storage.mode(Y) <- "double"
   if (typeof(D) != "double") storage.mode(D) <- "double"
-  .Call(syms$C_gmm_iv_mat_residual, X, Y, D, max_matrix_entries)
+  attr(syms, "calls")$C_gmm_iv_mat_residual(X, Y, D, max_matrix_entries)
 }
 # Directed interval matrix product [xlo, xhi] (nr x nk) %*% [ylo, yhi] (nk x nc)
 # on the native backend (`C_gmm_iv_mat_product`): entry (i, j) is the same-order
@@ -1685,7 +1734,7 @@ gmm_iv_mat_product <- function(xlo, xhi, ylo, yhi = ylo, max_matrix_entries = NU
   if (typeof(xhi) != "double") storage.mode(xhi) <- "double"
   if (typeof(ylo) != "double") storage.mode(ylo) <- "double"
   if (typeof(yhi) != "double") storage.mode(yhi) <- "double"
-  .Call(syms$C_gmm_iv_mat_product, xlo, xhi, ylo, yhi, max_matrix_entries)
+  attr(syms, "calls")$C_gmm_iv_mat_product(xlo, xhi, ylo, yhi, max_matrix_entries)
 }
 gmm_iv_ratio_upper <- function(num, den) {
   if (num == 0) return(0)
@@ -1729,7 +1778,7 @@ certify_symmetric_eigen_bounds <- function(S, label = "matrix", max_matrix_entri
   Q <- eg$vectors; lam <- as.double(eg$values)
   if (typeof(Q) != "double") storage.mode(Q) <- "double"
   G <- gmm_iv_mat_residual(t(Q), Q, diag(m), max_matrix_entries = max_matrix_entries)
-  E_eig <- .Call(syms$C_gmm_iv_eigen_residual, S, Q, lam, max_matrix_entries)
+  E_eig <- attr(syms, "calls")$C_gmm_iv_eigen_residual(S, Q, lam, max_matrix_entries)
   lo <- E_eig$lo; hi <- E_eig$hi
   delta <- G$norm[2L]; eps <- E_eig$norm[2L]
   ans <- list(valid = FALSE, lambda_min_est = min(lam), lambda_max_est = max(lam),
@@ -2330,7 +2379,7 @@ gmm_if_unit_batch_eligible <- function(if_replay, J = 1L) {
     is.numeric(J) && length(J) == 1L && !is.na(J) && J >= 1L
 }
 
-gmm_require_unit_batch_symbol <- function(syms = NULL) {
+gmm_require_unit_batch_symbol <- function(syms = NULL, call = FALSE) {
   # Preserve the old nine-symbol generic resolver/cache. This extra kernel is
   # authenticated only on eligible unit replays, against that resolver's DLL.
   checked_syms <- gmm_require_native_dll()
@@ -2356,7 +2405,7 @@ gmm_require_unit_batch_symbol <- function(syms = NULL) {
         !inherits(supplied, "NativeSymbol") || !identical(supplied, sym) ||
         any(vapply(other, identical, logical(1L), sym))) refuse()
   }
-  sym
+  if (isTRUE(call)) attr(checked_syms, "calls")$C_gmm_if_unit_batch else sym
 }
 
 gmm_if_unit_batch <- function(
@@ -2364,7 +2413,7 @@ gmm_if_unit_batch <- function(
   weighted_sum = NULL, raw_sum = NULL, psi_mean = NULL, S = NULL,
   max_matrix_entries = NULL, syms = NULL
 ) {
-  sym <- gmm_require_unit_batch_symbol(syms)
+  kernel <- gmm_require_unit_batch_symbol(syms, call = TRUE)
   max_e <- gmm_int_bound(max_matrix_entries, "max_matrix_entries")
   if (!is.matrix(psi) || is.object(psi) || typeof(psi) != "double") {
     cdid_gmm_abort("`psi` in `C_gmm_if_unit_batch` must be a non-object double matrix.", "cdid_gmm_accuracy_error")
@@ -2384,7 +2433,8 @@ gmm_if_unit_batch <- function(
     jj2 <- gmm_safe_product(2, jj, max_e, "unit batch pass-2 covariance buffers (2 x J x J)")
     gmm_safe_product(1, bj + b2 + j2 + jj2 + 8, max_e, "unit batch pass-2 simultaneous buffers")
   }
-  .Call(sym, pass, psi, w, flags, counts, weighted_sum, raw_sum, psi_mean, S, max_e)
+  kernel(
+    pass, psi, w, flags, counts, weighted_sum, raw_sum, psi_mean, S, max_e)
 }
 
 project_gmm_if_stream <- function(if_replay, Lambda, m_R, bounds, provenance, materialize_target_if = FALSE) {

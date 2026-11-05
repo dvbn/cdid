@@ -189,9 +189,9 @@ testthat::test_that("diagnostic batch uses its registered three-argument symbol"
   resolved <- base::getNativeSymbolInfo("C_gmm_cp04_diagnostic_fields", PACKAGE = dll)
   kernel <- dfb_ns("cp04_diagnostic_field_native_kernel")()
   # getDLLRegisteredRoutines exposes a RegisteredNativeSymbol wrapper; the
-  # resolver returns the NativeSymbol address from getNativeSymbolInfo.
-  testthat::expect_identical(kernel, resolved$address)
-  testthat::expect_identical(.Call(kernel, list(a = 1), "a", environment()), 9)
+  # fixed call closes over the NativeSymbol address from getNativeSymbolInfo.
+  testthat::expect_identical(cdid_test_native_address(kernel), resolved$address)
+  testthat::expect_identical(kernel(list(a = 1), "a", environment()), 9)
   # The common existing probe supplies authoritative arithmetic refusal tests;
   # the new entry calls the same gmm_require_valid_arithmetic gate.
   syms <- dfb_ns("gmm_require_native_dll")()

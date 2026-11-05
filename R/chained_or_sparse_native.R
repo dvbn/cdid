@@ -144,7 +144,7 @@ or_sparse_native_if <- function(backend, reader, rows, links, scale, pre, plan) 
   live <- or_sparse_native_live(length(rows), length(links), length(plan$dates), length(pre$sids),
     ncol(plan$data$block), length(plan$data$beta), max(c(0L, plan$data$block[3L, ])))
   ipw_owner_safe_sum(c(plan$entries, live), pre$scratch, "sparse OR native replay")
-  res <- .Call(or_baseline_native_kernel("C_gmm_or_sparse_if"), panel$observations$y,
+  res <- or_baseline_native_kernel("C_gmm_or_sparse_if")(panel$observations$y,
     panel$postings$post_a_index, panel$postings$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$bounds, frame$Z_a, plan$data, as.double(live))
   if (!identical(res$status[1L], 0L)) or_baseline_native_refuse(res$status, or_baseline_abort)

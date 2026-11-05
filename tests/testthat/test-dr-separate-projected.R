@@ -368,7 +368,7 @@ dsp28_native <- function(a, plan, rows, data = plan$data, op = plan$v11, y = NUL
   if (is.null(y)) y <- panel$observations$y
   if (is.null(cap)) cap <- dsp("dr_separate_sparse_live")(length(rows), length(plan$sids),
     length(plan$dates), length(plan$tids), length(plan$links))
-  .Call(dsp("or_baseline_native_kernel")("C_gmm_dr_separate_sparse_if"), y,
+  dsp("or_baseline_native_kernel")("C_gmm_dr_separate_sparse_if")(y,
     panel$postings$post_a_index, panel$postings$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$bounds, frame$Z_a, data, op, as.double(cap))
 }

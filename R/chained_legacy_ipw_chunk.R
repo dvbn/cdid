@@ -21,13 +21,14 @@ cp04_legacy_ipw_native <- local({
       exists(name, owner, inherits = FALSE) && bindingIsLocked(name, owner) &&
         !bindingIsActive(name, owner) && identical(get(name, owner, inherits = FALSE), expected)
     }, logical(1L)))) return(NULL)
+    syms <- gmm_require_native_dll()
     dll <- getNamespaceInfo(owner, "DLLs")[["cdid"]]
     si <- base::getNativeSymbolInfo("C_gmm_legacy_ipw_chunk", PACKAGE = dll)
     if (!inherits(si, "NativeSymbolInfo") || is.null(si$address) ||
         !identical(as.integer(si$numParameters), 9L))
       cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_legacy_ipw_chunk`.",
         c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-    .Call(si$address, reader, frame, backend, rows, tids, sids, pair_op$pair, helpers, funding_entries)
+    attr(syms, "calls")$C_gmm_legacy_ipw_chunk(reader, frame, backend, rows, tids, sids, pair_op$pair, helpers, funding_entries)
   }
   lockEnvironment(environment(), bindings = TRUE)
   run

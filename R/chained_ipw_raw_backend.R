@@ -354,7 +354,7 @@ ipw_raw_verify_pair_masks_equal <- function(frame_owner, panel_owner, pair1_summ
 # `obs_s`, `obs_t`) for `(pair_summary, coh_desc)` in bounded chunks of `step`.
 # No outcome values (`y`) are read here.
 ipw_raw_observer_collector_kernel <- function() {
-  gmm_require_native_dll()
+  syms <- gmm_require_native_dll()
   owner <- environment(sys.function())
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- tryCatch(base::getNativeSymbolInfo("C_gmm_ipw_raw_observer_collect", PACKAGE = dlls[["cdid"]]),
@@ -363,7 +363,7 @@ ipw_raw_observer_collector_kernel <- function() {
       !identical(as.integer(si$numParameters), 10L))
     cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_ipw_raw_observer_collect`.",
       c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-  si$address
+  attr(syms, "calls")[["C_gmm_ipw_raw_observer_collect"]]
 }
 
 ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summary, coh_desc, n_obs, step) {
@@ -403,7 +403,7 @@ ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summa
           declared <= .Machine$integer.max && entries <= old_slice &&
           entries <= frame_owner$control$max_matrix_entries) {
         bounds <- c(post$date_start[ds], post$date_end[ds], post$date_start[dt], post$date_end[dt])
-        out <- .Call(ipw_raw_observer_collector_kernel(), post$post_a_index, post$post_obs_index,
+        out <- ipw_raw_observer_collector_kernel()(post$post_a_index, post$post_obs_index,
           bounds, a_cohort_idx, w_a, Z_a, coh_desc$owner_cohort_index, coh_desc$view_cohort_index,
           as.integer(c(n, chunk, declared)), entries)
         if (identical(out$status, 1L))

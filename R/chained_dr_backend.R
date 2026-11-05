@@ -338,7 +338,7 @@ dr_baseline_treatment_fit <- function(reader, spec, supports, reg, shared,
       rows <- sort(unlist(lapply(spec$cohorts, function(k) st$cohort_order[seq_len(st$cohort_end[k] -
         st$cohort_start[k] + 1) + st$cohort_start[k] - 1])), method = "radix")
     post <- panel$postings
-    res <- .Call(or_baseline_native_kernel("C_gmm_cp08_pair_rows"), panel$observations$y, post$date_start,
+    res <- or_baseline_native_kernel("C_gmm_cp08_pair_rows")(panel$observations$y, post$date_start,
       post$post_a_index, post$post_obs_index, rows, st$a_index,
       as.integer(c(spec$pair$s_calendar_index, spec$pair$t_calendar_index)), as.integer(ctrl$max_chunk_rows),
       ctrl$max_matrix_entries)
@@ -523,7 +523,7 @@ dr_baseline_treatment_batch <- function(reader, specs, supports, regressions, sh
                                         recipe, or_frame_index, trt_recipe,
                                         glm_control, ctrl, reference = NULL,
                                         complete = NULL, share = NULL,
-                                        scratch = NULL, call_fn = .Call) {
+                                        scratch = NULL, call_fn = function(kernel, ...) kernel(...)) {
   if (is.null(complete) || !is.null(reference) || !is.environment(share) ||
       !is.list(specs) || !length(specs) || !is.list(supports) ||
       !is.list(regressions) || !is.list(shared) || !is.list(reader))
@@ -1227,7 +1227,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
       rest_trt <- dr_baseline_treatment_batch(
         reader, ts[-1L], state$supports, state$regressions, state$shared,
         recipe, or_frame_index, trt_recipe, gc, ctrl, reference, complete,
-        share, scratch = scratch, call_fn = .Call
+        share, scratch = scratch, call_fn = function(kernel, ...) kernel(...)
       )
       if (is.null(rest_trt)) {
         # Structural decline precedes any native summary execution. Reserve the
@@ -1281,7 +1281,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
         rest_g <- dr_baseline_treatment_batch(
           reader, ts[g_idx[-1L]], state$supports, state$regressions, state$shared,
           recipe, or_frame_index, trt_recipe, gc, ctrl, reference, complete,
-          share_g, scratch = scratch, call_fn = .Call
+          share_g, scratch = scratch, call_fn = function(kernel, ...) kernel(...)
         )
         if (is.null(rest_g)) {
           ng <- ts[[g_idx[1L]]]$n_observers
@@ -1875,7 +1875,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
   po <- or_baseline_complete_panel(reader, backend$complete_support, dr_baseline_abort)
   post <- po$postings; rows_i <- as.integer(rows); cap <- backend$control$max_matrix_entries
   if (is.null(plan$groups)) {
-    a <- .Call(or_baseline_native_kernel("C_gmm_cp08_dr_if_prepare"), po$observations$y, post$date_start,
+    a <- or_baseline_native_kernel("C_gmm_cp08_dr_if_prepare")(po$observations$y, post$date_start,
       post$post_a_index, post$post_obs_index, rows_i, st$cohort_index, st$a_index, st$w, plan$dates,
       plan$sup, plan$sup_par, plan$mdl, plan$mdl_cross, cap)
     code <- a$status
@@ -1902,7 +1902,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
     if (!is.null(dn) && !is.null(dn[[1L]])) {
       dn[[1L]][[1L]][[1L]] <- frame$Z_a
     }
-    b <- .Call(or_baseline_native_kernel("C_gmm_cp08_dr_if_assemble"), rows_i, st$cohort_index, st$a_index, st$w,
+    b <- or_baseline_native_kernel("C_gmm_cp08_dr_if_assemble")(rows_i, st$cohort_index, st$a_index, st$w,
       a$gather, plan$sup, plan$sup_par, plan$mdl, plan$mdl_par, xi, as.integer(rr), wp, wm, plan$lnk,
       as.integer(n_ok), dn, cap)
     if (!identical(b$status[1L], 0L)) or_baseline_native_refuse(b$status, dr_baseline_abort)
@@ -1914,7 +1914,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
     prep_kernel <- or_baseline_native_kernel("C_gmm_cp08_dr_if_prepare")
     asm_kernel <- or_baseline_native_kernel("C_gmm_cp08_dr_if_assemble")
     for (grp in plan$groups) {
-      a <- .Call(prep_kernel, po$observations$y, post$date_start,
+      a <- prep_kernel(po$observations$y, post$date_start,
         post$post_a_index, post$post_obs_index, rows_i, st$cohort_index, st$a_index, st$w, plan$dates,
         plan$sup, plan$sup_par, grp$mdl, grp$mdl_cross, cap)
       code <- a$status
@@ -1940,7 +1940,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
       if (!is.null(dn) && !is.null(dn[[1L]])) {
         dn[[1L]][[1L]][[1L]] <- frame$Z_a
       }
-      b <- .Call(asm_kernel, rows_i, st$cohort_index, st$a_index, st$w,
+      b <- asm_kernel(rows_i, st$cohort_index, st$a_index, st$w,
         a$gather, plan$sup, plan$sup_par, grp$mdl, grp$mdl_par, xi, as.integer(rr), wp, wm, grp$lnk,
         as.integer(n_ok), dn, cap)
       if (!identical(b$status[1L], 0L)) or_baseline_native_refuse(b$status, dr_baseline_abort)

@@ -972,17 +972,17 @@ cp04_retained_if_reserve <- function(backend, links, chunk_rows, cov_plan, retai
   store$layout_state_snapshot <- if (is.null(backend$layout)) NULL else backend$layout$state
   store$X_F_snapshot <- backend$X_F
   store$pair_outcomes_snapshot <- backend$pair_outcomes
-  for (nm in c("reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot",
-               "reference_snapshot", "selection_snapshot", "design_snapshot",
-               "layout_snapshot", "layout_state_snapshot", "X_F_snapshot", "pair_outcomes_snapshot"))
-    lockBinding(nm, store)
   store$id <- dom$id; store$N <- N; store$n_A <- dom$n_A; store$lambda <- dom$lambda
   store$links <- as.integer(links); store$L <- L; store$B <- chunk_rows; store$scale <- "core"
   store$entries <- entries; store$work <- cache_work; store$work_total <- work_total; store$admission_total <- total; store$cap <- cap
   store$producer_passes <- 0L; store$slice_passes <- 0L; store$batches <- 0L
   store$metadata_entries <- boundary$entries; store$boundary_work <- boundary$work
-  for (nm in setdiff(ls(store, all.names = TRUE), c("state", "producer_passes", "slice_passes", "batches")))
-    if (!bindingIsLocked(nm, store)) lockBinding(nm, store)
+  # Releasable source snapshots live in this phase-owned mutable store.
+  # The configuration contains no reference back to a large source payload.
+  lifetime <- c("phi", "raw_ref", "id", "backend_snapshot", "backend_ref", "reader_ref", "frame_ref", "panel_ref", "reference_ref", "selection_ref", "design_ref", "reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot", "reference_snapshot", "selection_snapshot", "selection_reader_snapshot", "design_snapshot", "layout_snapshot", "layout_state_snapshot", "X_F_snapshot", "pair_outcomes_snapshot", "auxiliary", "gmm_transfer")
+  for (nm in setdiff(ls(store, all.names = TRUE),
+      c(lifetime, "state", "producer_passes", "slice_passes", "batches")))
+    lockBinding(nm, store)
   store
 }
 
@@ -1165,17 +1165,17 @@ cp04_retained_if_phase_reserve <- function(backend, links, phase = c("covariance
   store$layout_state_snapshot <- if (is.null(backend$layout)) NULL else backend$layout$state
   store$X_F_snapshot <- backend$X_F
   store$pair_outcomes_snapshot <- backend$pair_outcomes
-  for (nm in c("reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot",
-               "reference_snapshot", "selection_snapshot", "design_snapshot",
-               "layout_snapshot", "layout_state_snapshot", "X_F_snapshot", "pair_outcomes_snapshot"))
-    lockBinding(nm, store)
   store$id <- dom$id; store$N <- N; store$n_A <- dom$n_A; store$lambda <- dom$lambda
   store$links <- as.integer(links); store$L <- L; store$B <- chunk_rows; store$scale <- "core"
   store$entries <- entries; store$work <- cache_work; store$work_total <- work_total; store$admission_total <- total; store$cap <- cap
   store$producer_passes <- 0L; store$slice_passes <- 0L; store$batches <- 0L
   store$metadata_entries <- boundary$entries; store$boundary_work <- boundary$work
-  for (nm in setdiff(ls(store, all.names = TRUE), c("state", "producer_passes", "slice_passes", "batches")))
-    if (!bindingIsLocked(nm, store)) lockBinding(nm, store)
+  # Releasable source snapshots live in this phase-owned mutable store.
+  # The configuration contains no reference back to a large source payload.
+  lifetime <- c("phi", "raw_ref", "id", "backend_snapshot", "backend_ref", "reader_ref", "frame_ref", "panel_ref", "reference_ref", "selection_ref", "design_ref", "reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot", "reference_snapshot", "selection_snapshot", "selection_reader_snapshot", "design_snapshot", "layout_snapshot", "layout_state_snapshot", "X_F_snapshot", "pair_outcomes_snapshot", "auxiliary", "gmm_transfer")
+  for (nm in setdiff(ls(store, all.names = TRUE),
+      c(lifetime, "state", "producer_passes", "slice_passes", "batches")))
+    lockBinding(nm, store)
   store
 }
 
@@ -1215,7 +1215,6 @@ cp04_retained_if_covariance_to_gmm <- function(store, backend, links, chunk_rows
   store$gmm_transfer <- list(chunk_rows = chunk_rows, entries = entries,
     admission_total = total, work = slice_work, metadata_entries = boundary$entries, boundary_work = boundary$work,
     max_slice_passes = store$slice_passes + 2L)
-  lockBinding("gmm_transfer", store)
   store
 }
 
@@ -1361,7 +1360,7 @@ cp04_retained_if_check <- function(store, backend, links, B, scale) {
 
 # One producer pass (the original plan and chunk loop; each chunk is stored raw
 # and handed on unchanged), then slice passes over the same row partition. A
-# locked raw-matrix binding retains the exact completed object; copy-on-modify
+# private raw-matrix reference retains the exact completed object; copy-on-modify
 # value, label or order changes cannot alias it. IDs come from the live reader,
 # checked against the compact source snapshots. The caller's preflight admitted the original replay
 # work; the fill/slice work is charged in addition.
@@ -1404,8 +1403,8 @@ cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, p
     if (filled != N) cp04_abort("The producer pass did not cover every roster row exactly once.", "integrity")
     colnames(phi) <- cn
     raw_ref <- new.env(parent = emptyenv()); raw_ref$phi <- phi
-    lockEnvironment(raw_ref, bindings = TRUE)
-    store$phi <- phi; store$raw_ref <- raw_ref; lockBinding("raw_ref", store)
+    lockEnvironment(raw_ref, bindings = FALSE)
+    store$phi <- phi; store$raw_ref <- raw_ref
     store$state <- "filled"; store$producer_passes <- store$producer_passes + 1L; store$batches <- length(starts)
     completed <- TRUE
     return(invisible(NULL))
@@ -1420,10 +1419,10 @@ cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, p
     if (!identical(store$state, "filled"))
       cp04_abort("Retained moment IF storage was not completely filled.", "integrity")
     full <- store$phi
-    if (!exists("raw_ref", store, inherits = FALSE) || !bindingIsLocked("raw_ref", store) ||
+    if (!exists("raw_ref", store, inherits = FALSE) || bindingIsLocked("raw_ref", store) ||
         !is.environment(store$raw_ref) || !identical(parent.env(store$raw_ref), emptyenv()) ||
         !environmentIsLocked(store$raw_ref) || !exists("phi", store$raw_ref, inherits = FALSE) ||
-        !bindingIsLocked("phi", store$raw_ref) || !gmm_sexp_aliases(full, get("phi", store$raw_ref, inherits = FALSE)) ||
+        bindingIsLocked("phi", store$raw_ref) || !gmm_sexp_aliases(full, get("phi", store$raw_ref, inherits = FALSE)) ||
         !is.matrix(full) || !is.double(full) || nrow(full) != N || ncol(full) != L)
       cp04_abort("Retained moment IF storage lost its shape after the producer pass.", "integrity")
     st
@@ -1655,10 +1654,10 @@ cp04_retained_if_auxiliary_slices <- function(store, backend, backend_ids, callb
         !isTRUE(store$lambda == 1) || !identical(as.double(store$N), as.double(store$n_A)))
       cp04_abort("Retained moment IF storage serves auxiliary columns only on the F = A, lambda = 1 frame.", "integrity")
     full <- store$phi
-    if (!exists("raw_ref", store, inherits = FALSE) || !bindingIsLocked("raw_ref", store) ||
+    if (!exists("raw_ref", store, inherits = FALSE) || bindingIsLocked("raw_ref", store) ||
         !is.environment(store$raw_ref) || !identical(parent.env(store$raw_ref), emptyenv()) ||
         !environmentIsLocked(store$raw_ref) || !exists("phi", store$raw_ref, inherits = FALSE) ||
-        !bindingIsLocked("phi", store$raw_ref) || !gmm_sexp_aliases(full, get("phi", store$raw_ref, inherits = FALSE)) ||
+        bindingIsLocked("phi", store$raw_ref) || !gmm_sexp_aliases(full, get("phi", store$raw_ref, inherits = FALSE)) ||
         !is.matrix(full) || !is.double(full) || nrow(full) != N || ncol(full) != L)
       cp04_abort("Retained moment IF storage lost its shape after the producer pass.", "integrity")
     st
@@ -1736,7 +1735,8 @@ cp04_retained_if_release <- function(store) {
     "reference_ref", "selection_ref", "design_ref", "reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot",
     "reference_snapshot", "selection_snapshot", "selection_reader_snapshot", "design_snapshot", "layout_snapshot", "layout_state_snapshot",
     "X_F_snapshot", "pair_outcomes_snapshot", "auxiliary", "gmm_transfer"), ls(store, all.names = TRUE))
-  for (nm in drop) if (bindingIsLocked(nm, store)) unlockBinding(nm, store)
+  # Clear the borrowed raw identity too, including any surviving holder alias.
+  if (is.environment(store$raw_ref)) store$raw_ref$phi <- NULL
   rm(list = drop, envir = store)
   store$state <- "released"
   rec

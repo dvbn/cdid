@@ -240,7 +240,7 @@ testthat::test_that("guarded coarse contraction accepts saved dense and structur
   testthat::expect_type(ptr, "externalptr")
   ref <- do.call(v57_old$v53_scalar, x)
   contract <- function(adj, view = x$view, state = x$state, ids = x$ids)
-    .Call(api$kernels[[2L]], ptr, view, state, adj, NULL, NULL, ids, NULL)
+    api$kernels[[2L]](ptr, view, state, adj, NULL, NULL, ids, NULL)
   testthat::expect_equal(contract(ref$adjoint), ref$phi, tolerance = 1e-12)
   structural <- sort(unique(unlist(lapply(x$state$groups[x$active], `[[`, "cell_ids"))))
   compact <- v57_ns("reconstruction_pack_plain_adjoint")(ref$adjoint$tilde_lambda,

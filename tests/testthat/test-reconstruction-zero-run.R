@@ -6,8 +6,7 @@ zt_fixture <- function() {
     group = g, cells = cells[g$cell_ids], N = 48L))
   list(templates = templates, groups = groups, cells = cells, active = integer(), N = 48L)
 }
-zt_native <- function(a, cursor = 1L) .Call(zt_ns("reconstruction_zero_run_native_kernel")(),
-  a$templates, a$groups, a$cells, a$active, a$N, cursor)
+zt_native <- function(a, cursor = 1L) zt_ns("reconstruction_zero_run_native_kernel")()(a$templates, a$groups, a$cells, a$active, a$N, cursor)
 zt_reference <- function(a, cursor = 1L) {
   ids <- integer(); lambda <- numeric(); gids <- integer(); nu <- list(); next_gid <- cursor
   for (gid in seq.int(cursor, length(a$groups))) {

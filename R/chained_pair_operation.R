@@ -1,6 +1,6 @@
 # Shared ordinary, callback-free sparse POSITION reads. Source/helper/DLL
 # permission belongs to this issued chunk only; standalone reads stay intact.
-cp04_pair_operation_kernels <- function() {
+cp04_pair_operation_kernels <- function(syms = gmm_require_native_dll()) {
   owner <- environment(cp04_pair_rows)
   if (!isNamespace(owner)) return(NULL)
   dll <- getNamespaceInfo(owner, "DLLs")[["cdid"]]
@@ -11,7 +11,7 @@ cp04_pair_operation_kernels <- function() {
         !identical(as.integer(si$numParameters), arities[[name]]))
       cdid_gmm_abort(paste0("Native symbol registration/forcing verification failed for `", name, "`."),
         c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-    si$address
+    attr(syms, "calls")[[name]]
   })
 }
 
@@ -44,10 +44,10 @@ cp04_pair_read_operation <- local({
     }
     if (!helper_check()) return(NULL)
     syms <- gmm_require_native_dll()
-    kernels <- cp04_pair_operation_kernels()
+    kernels <- cp04_pair_operation_kernels(syms)
     if (is.null(kernels)) return(NULL)
     post <- panel$postings
-    state <- .Call(kernels[[1L]], owned_rows, reader$state$a_index,
+    state <- kernels[[1L]](owned_rows, reader$state$a_index,
       post$post_a_index, post$post_obs_index, post$date_start, post$date_end,
       post$date_count, panel$observations$y, reservation)
     if (is.null(state)) return(NULL)
@@ -77,7 +77,7 @@ cp04_pair_read_operation <- local({
         fallbacks <<- fallbacks + 1L
         return(cp04_pair_rows(reader, r_sub, descriptor, read_outcomes))
       }
-      hit <- .Call(kernels[[2L]], state, r_sub, as.integer(c(ds, dt)), read_outcomes, reservation, 0L)
+      hit <- kernels[[2L]](state, r_sub, as.integer(c(ds, dt)), read_outcomes, reservation, 0L)
       if (is.null(hit)) {
         fallbacks <<- fallbacks + 1L
         return(cp04_pair_rows(reader, r_sub, descriptor, read_outcomes))
@@ -98,7 +98,7 @@ cp04_pair_read_operation <- local({
     finish <- function() {
       if (!active) cp04_abort("Sparse pair operation is closed.", "integrity")
       current <- gmm_require_native_dll()
-      if (!isTRUE(.Call(current$C_gmm_sexp_aliases, syms, current)) || !helper_check())
+      if (!isTRUE(attr(current, "calls")$C_gmm_sexp_aliases(syms, current)) || !helper_check())
         cp04_abort("Sparse pair operation DLL or private reader helper changed.", "integrity")
       for (source in list(reader, frame, panel)) {
         binding <- if (inherits(source, "cdid_cp04_frame_reader")) "cp04_reader" else
@@ -106,23 +106,23 @@ cp04_pair_read_operation <- local({
         ref <- source$ref
         if (!is.environment(ref) || !environmentIsLocked(ref) || !exists(binding, ref, inherits = FALSE) ||
             !bindingIsLocked(binding, ref) || bindingIsActive(binding, ref) ||
-            !isTRUE(.Call(current$C_gmm_sexp_aliases, source, get(binding, ref, inherits = FALSE))))
+            !isTRUE(attr(current, "calls")$C_gmm_sexp_aliases(source, get(binding, ref, inherits = FALSE))))
           cp04_abort("Sparse pair operation source changed before its successful boundary.", "integrity")
       }
-      final_counts <<- c(.Call(kernels[[2L]], state, NULL, NULL, FALSE, reservation, 1L), fallbacks)
+      final_counts <<- c(kernels[[2L]](state, NULL, NULL, FALSE, reservation, 1L), fallbacks)
       names(final_counts) <<- c("searches", "cache_hits", "queries", "fallbacks")
       active <<- FALSE
       invisible(NULL)
     }
     abort <- function() {
       active <<- FALSE
-      .Call(kernels[[2L]], state, NULL, NULL, FALSE, reservation, 2L)
+      kernels[[2L]](state, NULL, NULL, FALSE, reservation, 2L)
       invisible(NULL)
     }
     counts <- function() {
       if (!is.null(final_counts)) return(final_counts)
       if (!active) return(NULL)
-      out <- c(.Call(kernels[[2L]], state, NULL, NULL, FALSE, reservation, 1L), fallbacks)
+      out <- c(kernels[[2L]](state, NULL, NULL, FALSE, reservation, 1L), fallbacks)
       stats::setNames(out, c("searches", "cache_hits", "queries", "fallbacks"))
     }
     list(pair = pair, finish = finish, abort = abort, counts = counts,

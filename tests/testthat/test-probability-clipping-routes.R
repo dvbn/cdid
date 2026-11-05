@@ -377,8 +377,7 @@ testthat::test_that("native treatment-summary rate floor is actually active with
   co <- lapply(seq_along(o$rate),function(k) as.integer(which(o$k[rows] %in% k)))
   ss <- vapply(co,function(rr) colSums(pp$score[rows[rr],,drop=FALSE]),numeric(2))
   or <- o$value[c("or0","orz")]
-  res <- .Call(d93r_fn("or_baseline_native_kernel")("C_gmm_cp08_dr_treatment_batch"),
-    as.double(c(rep(0,N),o$y,rep(0,N))),as.integer(c(1,N+1,2*N+1)),
+  res <- d93r_fn("or_baseline_native_kernel")("C_gmm_cp08_dr_treatment_batch")(as.double(c(rep(0,N),o$y,rep(0,N))),as.integer(c(1,N+1,2*N+1)),
     rep(seq_len(N),3L),seq_len(3L*N),rows,seq_len(N),o$V[rows,,drop=FALSE],
     X[rows,3,drop=FALSE],as.double(or[2]),o$wp[rows],o$wm[rows],co,ss,
     colSums(o$wm*o$V),as.double(c(sum(o$wp),sum(o$wm),o$value[c("dp","dm")],N)),

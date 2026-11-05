@@ -92,6 +92,8 @@ od_counted <- function(decline = FALSE) {
   n$logit <- n$search <- n$complete <- n$replay <- n$core <- 0L
   n$native <- setNames(integer(length(od_kernels)), od_kernels)
   addr <- lapply(od_kernels, api$or_baseline_native_kernel)
+  addr <- lapply(addr, cdid_test_native_address)
+  e$or_baseline_native_kernel <- cdid_test_native_calls_in(api$or_baseline_native_kernel, e)
   e$.Call <- function(.NAME, ...) {
     k <- which(vapply(addr, identical, logical(1), .NAME))
     if (length(k)) n$native[k] <- n$native[k] + 1L

@@ -17,7 +17,7 @@ reconstruction_coarse_source <- function(view) {
   FALSE
 }
 reconstruction_coarse_kernels <- function() {
-  gmm_require_native_dll()
+  syms <- gmm_require_native_dll()
   owner <- environment(sys.function()); dll <- getNamespaceInfo(owner, "DLLs")[["cdid"]]
   names <- c("C_gmm_reconstruction_coarse_create", "C_gmm_reconstruction_coarse_pullback",
     "C_gmm_reconstruction_score_pullback")
@@ -26,7 +26,7 @@ reconstruction_coarse_kernels <- function() {
     si <- base::getNativeSymbolInfo(names[j], PACKAGE = dll)
     if (!inherits(si, "NativeSymbolInfo") || is.null(si$address) || !identical(as.integer(si$numParameters), arities[j]))
       cdid_gmm_abort("Native coarse-pullback registration/forcing verification failed.", c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-    si$address
+    attr(syms, "calls")[[names[j]]]
   })
 }
 reconstruction_coarse_operation <- local({
@@ -57,7 +57,7 @@ reconstruction_coarse_operation <- local({
     names(functions) <- names(defaults)
     functions$.owner <- owner
     kernels <- reconstruction_coarse_kernels()
-    ptr <- .Call(kernels[[1L]], view, state, centered, functions, state$core$control$max_matrix_entries)
+    ptr <- kernels[[1L]](view, state, centered, functions, state$core$control$max_matrix_entries)
     if (is.null(ptr)) return(NULL)
     issued_view <- view; issued_state <- state; issued_centered <- centered
     issued_reader <- view$reader; cap <- state$core$control$max_matrix_entries
@@ -65,21 +65,21 @@ reconstruction_coarse_operation <- local({
     active <- TRUE
     pullback <- function(view, state, lambda, nu, groups, ids, templates) {
       if (!active) return(NULL)
-      .Call(kernels[[2L]], ptr, view, state, lambda, nu, groups, ids, templates)
+      kernels[[2L]](ptr, view, state, lambda, nu, groups, ids, templates)
     }
     contract <- function(view, state, adjoint, ids) {
       if (!active || !identical(view, issued_view) || !identical(state, issued_state)) return(NULL)
-      .Call(kernels[[3L]], view, state, adjoint, ids, issued_centered, cap)
+      kernels[[3L]](view, state, adjoint, ids, issued_centered, cap)
     }
     contract_current <- function(current_reader, adjoint, structural_cids) {
       if (!active || !identical(current_reader, issued_reader)) return(NULL)
       ids <- reconstruction_sparse_adjoint_ids(complete, structural_cids)
       if (is.null(ids)) return(NULL)
-      .Call(kernels[[3L]], issued_view, issued_state, adjoint, ids, issued_centered, cap)
+      kernels[[3L]](issued_view, issued_state, adjoint, ids, issued_centered, cap)
     }
     abort <- function() {
       active <<- FALSE
-      .Call(kernels[[2L]], ptr, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+      kernels[[2L]](ptr, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
       invisible(NULL)
     }
     finish <- function() abort()

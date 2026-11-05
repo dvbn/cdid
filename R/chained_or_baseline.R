@@ -255,8 +255,8 @@ or_baseline_native_kernel <- function(name) {
       !identical(as.integer(si$numParameters), unname(arity[name])))
     cdid_gmm_abort(paste0("Native symbol registration/forcing verification failed for `", name, "`."),
       c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-  if (is.environment(cache)) assign(name, list(owner = owner, syms = syms, address = si$address), envir = cache)
-  si$address
+  if (is.environment(cache)) assign(name, list(owner = owner, syms = syms, address = attr(syms, "calls")[[name]]), envir = cache)
+  attr(syms, "calls")[[name]]
 }
 
 # A kernel status (code, stage, index, row) raises the original route's own
@@ -320,7 +320,7 @@ or_baseline_complete_supports <- function(reader, specs, recipe, ctrl, complete,
     first <- st$cohort_start[spec$cohort]; last <- st$cohort_end[spec$cohort]
     dates <- as.integer(c(spec$pair$s_calendar_index, spec$pair$t_calendar_index))
     for (start in seq.int(first, last, by = B)) {
-      res <- .Call(kernel, y, post$date_start, post$post_a_index, post$post_obs_index, st$cohort_order,
+      res <- kernel(y, post$date_start, post$post_a_index, post$post_obs_index, st$cohort_order,
         st$a_index, st$w, frame$Z_a, as.integer(c(start, min(last, start + B - 1), z_col)), dates, ld,
         ctrl$max_matrix_entries)
       if (!identical(res$status[1L], 0L)) or_baseline_native_refuse(res$status, abort)
@@ -407,7 +407,7 @@ or_baseline_complete_state <- function(reader, specs, pools, links, recipe, ctrl
     if (multi_ctrl) checked_cache[[sid]] <<- checked
     invisible(NULL)
   }
-  p1 <- .Call(or_baseline_native_kernel("C_gmm_cp08_fit_pass1"), y, post$date_start,
+  p1 <- or_baseline_native_kernel("C_gmm_cp08_fit_pass1")(y, post$date_start,
     post$post_a_index, post$post_obs_index, st$cohort_order, st$a_index, st$w, frame$Z_a,
     sup_mat, slope_cols, ystar_w, as.integer(c(icpt_col, B, ctrl_first, ctrl_last)), ld,
     ctrl$max_matrix_entries, validate_raw_factor)
@@ -469,7 +469,7 @@ or_baseline_complete_state <- function(reader, specs, pools, links, recipe, ctrl
     v_vec <- vapply(ctrl_sids, function(s) supports[[s]]$v, numeric(1))
     blk_par <- rbind(L_vec, v_vec, as.double(alpha), as.double(e_bar))
     kept_cols <- if (length(keep)) slope_cols[keep] else integer(0)
-    p2 <- .Call(or_baseline_native_kernel("C_gmm_cp08_fit_pass2"), y, post$date_start,
+    p2 <- or_baseline_native_kernel("C_gmm_cp08_fit_pass2")(y, post$date_start,
       post$post_a_index, post$post_obs_index, st$cohort_order, st$a_index, st$w,
       frame$Z_a, blk_mat, blk_par, as.integer(kept_cols), as.double(beta),
       if (length(keep)) p1$ystar else numeric(0),
@@ -693,7 +693,7 @@ or_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
     frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
     dn[[1L]][[1L]][[1L]] <- frame$Z_a
   }
-  res <- .Call(or_baseline_native_kernel("C_gmm_cp08_or_if_chunk"), po$observations$y, post$date_start,
+  res <- or_baseline_native_kernel("C_gmm_cp08_or_if_chunk")(po$observations$y, post$date_start,
     post$post_a_index, post$post_obs_index, as.integer(rows), st$cohort_index, st$a_index, st$w, plan$dates,
     plan$sup, plan$sup_par, plan$blk, plan$blk_par, plan$lnk, plan$lnk_par, dn,
     backend$control$max_matrix_entries)

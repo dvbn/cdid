@@ -132,7 +132,7 @@ dr_separate_sparse_if <- function(backend, reader, rows, links, scale, pre, plan
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   panel <- get("panel_owner", reader$panel_ref, inherits = FALSE)
   live <- dr_separate_sparse_live(B, length(pre$sids), length(plan$dates), length(pre$tids), length(links))
-  res <- .Call(or_baseline_native_kernel("C_gmm_dr_separate_sparse_if"), panel$observations$y,
+  res <- or_baseline_native_kernel("C_gmm_dr_separate_sparse_if")(panel$observations$y,
     panel$postings$post_a_index, panel$postings$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$bounds, frame$Z_a, plan$data, plan$v11, as.double(live))
   if (!identical(res$status[1L], 0L)) or_baseline_native_refuse(res$status, dr_baseline_abort)

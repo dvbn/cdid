@@ -286,7 +286,7 @@ qsp_native <- function(fit, plan, rows, data = plan$data, cap = NULL) {
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE); st <- reader$state
   if (is.null(cap)) cap <- qbf("or_sparse_native_live")(length(rows), length(plan$links),
     length(plan$dates), length(plan$sids), ncol(data$block), length(data$beta), max(c(0L, data$block[3L, ])))
-  .Call(qbf("or_baseline_native_kernel")("C_gmm_or_sparse_if"), panel$observations$y,
+  qbf("or_baseline_native_kernel")("C_gmm_or_sparse_if")(panel$observations$y,
     panel$postings$post_a_index, panel$postings$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$bounds, frame$Z_a, data, as.double(cap))
 }
@@ -497,7 +497,7 @@ dsp27_prepare <- function(fit, plan, rows, data = plan$data, outcomes = NULL, ca
   if (is.null(cap)) cap <- qbf("dr_sparse_native_inventory")(length(rows), length(plan$sids),
     length(plan$dates), length(plan$tids), length(plan$links), fit$shared$p,
     fit$treatment_recipe$p, plan$metadata)$prepare
-  .Call(qbf("or_baseline_native_kernel")("C_gmm_dr_sparse_prepare"), outcomes,
+  qbf("or_baseline_native_kernel")("C_gmm_dr_sparse_prepare")(outcomes,
     panel$postings$post_a_index, panel$postings$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$bounds, frame$Z_a, data, as.double(cap))
 }
@@ -517,7 +517,7 @@ dsp27_assemble <- function(fit, plan, prepared, solved, data = plan$data, cap = 
   if (is.null(cap)) cap <- qbf("dr_sparse_native_inventory")(nrow(prepared$up), length(plan$sids),
     length(plan$dates), length(plan$tids), length(plan$links), fit$shared$p,
     fit$treatment_recipe$p, plan$metadata)$assembler
-  .Call(qbf("or_baseline_native_kernel")("C_gmm_dr_sparse_assemble"), prepared$up,
+  qbf("or_baseline_native_kernel")("C_gmm_dr_sparse_assemble")(prepared$up,
     solved$beta, prepared$direct, solved$gamma, data, as.integer(solved$n_ok), as.double(cap))
 }
 

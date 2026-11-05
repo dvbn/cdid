@@ -507,7 +507,7 @@ cp20_native_call <- function(fit, plan, rows, blk = plan$blk, cap = fit$control$
     frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
     dn[[1L]][[1L]][[1L]] <- frame$Z_a
   }
-  .Call(cp09_api$or_baseline_native_kernel("C_gmm_cp08_or_if_chunk"), po$observations$y,
+  cp09_api$or_baseline_native_kernel("C_gmm_cp08_or_if_chunk")(po$observations$y,
     post$date_start, post$post_a_index, post$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$dates, plan$sup, plan$sup_par, blk, plan$blk_par,
     plan$lnk, plan$lnk_par, dn, cap)

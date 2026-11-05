@@ -113,6 +113,8 @@ nb_counted <- function() {
   n$calls <- setNames(integer(length(nb_kernels)), nb_kernels); n$reads <- 0; n$slots <- 0; n$compress <- 0L
   n$pair_rows <- 0L; n$solve <- 0L
   addr <- lapply(nb_kernels, api$or_baseline_native_kernel)
+  addr <- lapply(addr, cdid_test_native_address)
+  e$or_baseline_native_kernel <- cdid_test_native_calls_in(api$or_baseline_native_kernel, e)
   e$.Call <- function(.NAME, ...) {
     k <- which(vapply(addr, identical, logical(1), .NAME))
     res <- base::.Call(.NAME, ...)
@@ -329,7 +331,7 @@ test_that("native preflight, plan identity, mutants and malformed kernel argumen
       st$a_index, st$w, plan$dates, plan$sup, plan$sup_par, plan$blk, plan$blk_par, plan$lnk, plan$lnk_par,
       plan$dimnames, 1e7)
     edits <- list(...); for (k in names(edits)) a[[as.integer(k)]] <- edits[[k]]
-    do.call(.Call, c(list(k_or), a))
+    do.call(k_or, a)
   }
   expect_identical(or_call()$status, c(0L, 0L, 0L, 0L))
   bad <- list(`5` = as.double(1:7), `5` = c(1L, 99L), `9` = c(plan$dates, NA_integer_), `10` = plan$sup[1:2, ],
@@ -337,7 +339,7 @@ test_that("native preflight, plan identity, mutants and malformed kernel argumen
     `8` = st$w[-1L], `11` = matrix(plan$sup_par, 1L))
   for (k in seq_along(bad)) expect_error(do.call(or_call, bad[k]), class = "cdid_gmm_bound_error", info = names(bad)[k])
   k_sup <- api$or_baseline_native_kernel("C_gmm_cp08_support_chunk")
-  sup_call <- function(ctl = c(1L, 7L, 1L), dates = c(1L, 2L), ld = TRUE, z = fx$fo$Z_a) .Call(k_sup,
+  sup_call <- function(ctl = c(1L, 7L, 1L), dates = c(1L, 2L), ld = TRUE, z = fx$fo$Z_a) k_sup(
     po$observations$y, post$date_start, post$post_a_index, post$post_obs_index, st$cohort_order, st$a_index, st$w,
     z, ctl, dates, ld, 1e7)
   expect_identical(sup_call()$status, c(0L, 0L, 0L, 0L))
@@ -345,7 +347,7 @@ test_that("native preflight, plan identity, mutants and malformed kernel argumen
                     list(ld = NA), list(z = as.vector(fx$fo$Z_a)), list(ctl = c(7L, 1L, 1L))))
     expect_error(do.call(sup_call, args), class = "cdid_gmm_bound_error")
   k_pr <- api$or_baseline_native_kernel("C_gmm_cp08_pair_rows")
-  pr_call <- function(rows = 1:7, dates = c(1L, 2L), chunk = 7L) .Call(k_pr, po$observations$y, post$date_start,
+  pr_call <- function(rows = 1:7, dates = c(1L, 2L), chunk = 7L) k_pr(po$observations$y, post$date_start,
     post$post_a_index, post$post_obs_index, rows, st$a_index, dates, chunk, 1e7)
   expect_identical(pr_call()$status, c(0L, 0L, 0L, 0L))
   for (args in list(list(rows = c(2L, 1L)), list(rows = c(1L, 99L)), list(dates = c(0L, 2L)), list(chunk = 0L),
@@ -444,7 +446,7 @@ test_that("common-design fit_pass1, fit_pass2 and IF kernels count calls, QR com
     a <- list(po$observations$y, post$date_start, post$post_a_index, post$post_obs_index, st$cohort_order,
       st$a_index, st$w, frame$Z_a, sup_mat, c(2L, 3L), ystar_w, c(1L, 7L, c_first, c_last), TRUE, 1e7, NULL)
     edits <- list(...); for (k in names(edits)) a[[as.integer(k)]] <- edits[[k]]
-    do.call(.Call, c(list(k_p1), a))
+    do.call(k_p1, a)
   }
   p1_ok <- p1_call()
   expect_identical(p1_ok$status, c(0L, 0L, 0L, 0L))
@@ -462,7 +464,7 @@ test_that("common-design fit_pass1, fit_pass2 and IF kernels count calls, QR com
     a <- list(po$observations$y, post$date_start, post$post_a_index, post$post_obs_index, st$cohort_order,
       st$a_index, st$w, frame$Z_a, blk_mat, blk_par, c(2L, 3L), fit$shared$beta, p1_ok$ystar, c(c_first, c_last, 7L), 1e7)
     edits <- list(...); for (k in names(edits)) a[[as.integer(k)]] <- edits[[k]]
-    do.call(.Call, c(list(k_p2), a))
+    do.call(k_p2, a)
   }
   expect_identical(p2_call()$status, c(0L, 0L, 0L, 0L))
   # The second pass must validate positions before dereferencing either posting.

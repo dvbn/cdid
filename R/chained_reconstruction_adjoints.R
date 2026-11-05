@@ -92,7 +92,7 @@ reconstruction_zero_run_native_kernel <- function() {
   cache <- get0("reconstruction_zero_run_native_cache", envir = owner, mode = "environment", inherits = FALSE)
   hit <- if (is.environment(cache)) get0("kernel", envir = cache, inherits = FALSE) else NULL
   if (is.list(hit) && identical(hit$owner, owner) &&
-      isTRUE(.Call(syms$C_gmm_sexp_aliases, hit$syms, syms))) return(hit$address)
+      isTRUE(attr(syms, "calls")$C_gmm_sexp_aliases(hit$syms, syms))) return(hit$address)
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- tryCatch(base::getNativeSymbolInfo("C_gmm_reconstruction_zero_run", PACKAGE = dlls[["cdid"]]),
     error = function(e) NULL)
@@ -100,8 +100,8 @@ reconstruction_zero_run_native_kernel <- function() {
       !identical(as.integer(si$numParameters), 6L))
     cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_reconstruction_zero_run`.",
       c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-  if (is.environment(cache)) assign("kernel", list(owner = owner, syms = syms, address = si$address), envir = cache)
-  si$address
+  if (is.environment(cache)) assign("kernel", list(owner = owner, syms = syms, address = attr(syms, "calls")[["C_gmm_reconstruction_zero_run"]]), envir = cache)
+  attr(syms, "calls")[["C_gmm_reconstruction_zero_run"]]
 }
 
 # Called only after the first inactive cache hit has passed the original R
@@ -115,7 +115,7 @@ reconstruction_zero_template_run <- local({
         !is.integer(active) || is.object(active) || !is.null(attributes(active)) ||
         length(cursor) != 1L || is.na(cursor) || cursor < 1L || cursor >= length(groups) ||
         cursor > length(templates) || cursor %in% active) return(NULL)
-    .Call(reconstruction_zero_run_native_kernel(), templates, groups, cells, active, N, cursor)
+    reconstruction_zero_run_native_kernel()(templates, groups, cells, active, N, cursor)
   }
 })
 lockBinding("scalar", environment(reconstruction_zero_template_run))

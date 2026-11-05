@@ -150,7 +150,7 @@ separate_complete_native_if <- function(backend, reader, rows, links, scale, pre
   ipw_owner_safe_sum(c(plan$entries, live), pre$scratch, "complete separate native replay")
   po <- or_baseline_complete_panel(reader, backend$separate_complete); post <- po$postings
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
-  res <- .Call(or_baseline_native_kernel("C_gmm_separate_complete_if"), po$observations$y,
+  res <- or_baseline_native_kernel("C_gmm_separate_complete_if")(po$observations$y,
     post$date_start, post$post_a_index, post$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$dates, frame$Z_a, plan$data, as.double(live))
   if (!identical(res$status[1L], 0L)) or_baseline_native_refuse(res$status,

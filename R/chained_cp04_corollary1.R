@@ -38,19 +38,19 @@ cp04_payload_native_kernel <- function() {
   cache <- get0("cp04_payload_native_cache", envir = owner, mode = "environment", inherits = FALSE)
   hit <- if (is.environment(cache)) get0("C_gmm_cp08_payload", envir = cache, inherits = FALSE) else NULL
   if (is.list(hit) && identical(hit$owner, owner) &&
-      isTRUE(.Call(syms$C_gmm_sexp_aliases, hit$syms, syms))) return(hit$address)
+      isTRUE(attr(syms, "calls")$C_gmm_sexp_aliases(hit$syms, syms))) return(hit$address)
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- tryCatch(base::getNativeSymbolInfo("C_gmm_cp08_payload", PACKAGE = dlls[["cdid"]]), error = function(e) NULL)
   if (is.null(si) || !inherits(si, "NativeSymbolInfo") || is.null(si$address) ||
       !identical(as.integer(si$numParameters), 3L))
     cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_cp08_payload`.",
       c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-  if (is.environment(cache)) assign("C_gmm_cp08_payload", list(owner = owner, syms = syms, address = si$address), envir = cache)
-  si$address
+  if (is.environment(cache)) assign("C_gmm_cp08_payload", list(owner = owner, syms = syms, address = attr(syms, "calls")[["C_gmm_cp08_payload"]]), envir = cache)
+  attr(syms, "calls")[["C_gmm_cp08_payload"]]
 }
 
 cp04_payload <- function(x, scan_attrs = TRUE) {
-  .Call(cp04_payload_native_kernel(), x, scan_attrs, environment())
+  cp04_payload_native_kernel()(x, scan_attrs, environment())
 }
 
 # CP08 general-panel performance: the sparse two-date pair-row join of
@@ -65,7 +65,7 @@ cp04_pair_rows_native_kernel <- function() {
   cache <- get0("cp04_pair_rows_native_cache", envir = owner, mode = "environment", inherits = FALSE)
   hit <- if (is.environment(cache)) get0("C_gmm_cp08_sparse_pair_rows", envir = cache, inherits = FALSE) else NULL
   if (is.list(hit) && identical(hit$owner, owner) &&
-      isTRUE(.Call(syms$C_gmm_sexp_aliases, hit$syms, syms))) return(hit$address)
+      isTRUE(attr(syms, "calls")$C_gmm_sexp_aliases(hit$syms, syms))) return(hit$address)
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- tryCatch(base::getNativeSymbolInfo("C_gmm_cp08_sparse_pair_rows", PACKAGE = dlls[["cdid"]]),
     error = function(e) NULL)
@@ -73,8 +73,8 @@ cp04_pair_rows_native_kernel <- function() {
       !identical(as.integer(si$numParameters), 6L))
     cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_cp08_sparse_pair_rows`.",
       c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-  if (is.environment(cache)) assign("C_gmm_cp08_sparse_pair_rows", list(owner = owner, syms = syms, address = si$address), envir = cache)
-  si$address
+  if (is.environment(cache)) assign("C_gmm_cp08_sparse_pair_rows", list(owner = owner, syms = syms, address = attr(syms, "calls")[["C_gmm_cp08_sparse_pair_rows"]]), envir = cache)
+  attr(syms, "calls")[["C_gmm_cp08_sparse_pair_rows"]]
 }
 
 # Structural admission of one pair-row query to the native join: plain integer
@@ -324,7 +324,7 @@ cp04_pair_rows <- function(reader, rows, pair, read_outcomes = FALSE) {
       post$date_count[ds] > 0L && post$date_count[dt] > 0L) {
     bounds <- c(post$date_start[ds], post$date_end[ds], post$date_start[dt], post$date_end[dt])
     if (cp04_pair_rows_native_ok(ai, post, bounds, read_outcomes)) {
-      hit <- .Call(cp04_pair_rows_native_kernel(), ai, post$post_a_index, post$post_obs_index,
+      hit <- cp04_pair_rows_native_kernel()(ai, post$post_a_index, post$post_obs_index,
         bounds, read_outcomes, reader$control$max_matrix_entries)
       obs <- hit$obs
       if (length(obs)) {

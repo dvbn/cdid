@@ -147,7 +147,7 @@ dr_sparse_native_if <- function(backend, reader, rows, links, scale, pre, plan) 
   panel <- get("panel_owner", reader$panel_ref, inherits = FALSE); B <- length(rows)
   p <- backend$shared$p; pt <- backend$treatment_recipe$p; nt <- length(pre$tids)
   inventory <- dr_sparse_native_inventory(B, length(pre$sids), length(plan$dates), nt, length(links), p, pt, plan$metadata)
-  a <- .Call(or_baseline_native_kernel("C_gmm_dr_sparse_prepare"), panel$observations$y,
+  a <- or_baseline_native_kernel("C_gmm_dr_sparse_prepare")(panel$observations$y,
     panel$postings$post_a_index, panel$postings$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$bounds, frame$Z_a, plan$data, as.double(inventory$prepare))
   code <- a$status
@@ -164,7 +164,7 @@ dr_sparse_native_if <- function(backend, reader, rows, links, scale, pre, plan) 
   }
   # A later model's read/replay failure is deferred until all earlier model
   # gamma/four-coordinate checks have run, matching the complete staged path.
-  b <- .Call(or_baseline_native_kernel("C_gmm_dr_sparse_assemble"), a$up, xi_beta, a$direct, xi,
+  b <- or_baseline_native_kernel("C_gmm_dr_sparse_assemble")(a$up, xi_beta, a$direct, xi,
     plan$data, as.integer(n_ok), as.double(inventory$assembler))
   if (!identical(b$status[1L], 0L)) dr_sparse_native_refuse(b$status)
   if (!identical(code[1L], 0L)) dr_sparse_native_refuse(code)

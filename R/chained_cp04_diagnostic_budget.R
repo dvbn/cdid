@@ -10,7 +10,7 @@ cp04_diagnostic_field_native_kernel <- function() {
   cache <- get0("cp04_diagnostic_field_native_cache", envir = owner, mode = "environment", inherits = FALSE)
   hit <- if (is.environment(cache)) get0("C_gmm_cp04_diagnostic_fields", envir = cache, inherits = FALSE) else NULL
   if (is.list(hit) && identical(hit$owner, owner) &&
-      isTRUE(.Call(syms$C_gmm_sexp_aliases, hit$syms, syms))) return(hit$address)
+      isTRUE(attr(syms, "calls")$C_gmm_sexp_aliases(hit$syms, syms))) return(hit$address)
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- tryCatch(base::getNativeSymbolInfo("C_gmm_cp04_diagnostic_fields", PACKAGE = dlls[["cdid"]]),
     error = function(e) NULL)
@@ -19,8 +19,8 @@ cp04_diagnostic_field_native_kernel <- function() {
     cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_cp04_diagnostic_fields`.",
       c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
   if (is.environment(cache)) assign("C_gmm_cp04_diagnostic_fields",
-    list(owner = owner, syms = syms, address = si$address), envir = cache)
-  si$address
+    list(owner = owner, syms = syms, address = attr(syms, "calls")[["C_gmm_cp04_diagnostic_fields"]]), envir = cache)
+  attr(syms, "calls")[["C_gmm_cp04_diagnostic_fields"]]
 }
 
 cp04_diagnostic_field_native <- function(x, nms, call_env) {
@@ -35,7 +35,7 @@ cp04_diagnostic_field_native <- function(x, nms, call_env) {
       !identical(get("+", call_env, inherits = TRUE), base::`+`) ||
       !identical(get("[", call_env, inherits = TRUE), base::`[`) ||
       !identical(get("unname", call_env, inherits = TRUE), base::unname)) return(NULL)
-  .Call(cp04_diagnostic_field_native_kernel(), x, nms, call_env)
+  cp04_diagnostic_field_native_kernel()(x, nms, call_env)
 }
 
 # Static modeled-selection/reconstruction diagnostics only. Baseline and dated

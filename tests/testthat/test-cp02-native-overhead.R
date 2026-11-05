@@ -290,6 +290,15 @@ test_that("1. Native symbol table cache follows current owner across same-basena
     expect_identical(syms_b1[[nm]], addrs_b[[nm]], info = nm)
     expect_identical(syms_b2[[nm]], addrs_b[[nm]], info = nm)
     expect_false(identical(syms_a2[[nm]], syms_b2[[nm]]), info = nm)
+    # The actual fixed-name dispatch closures use these owners' admitted
+    # addresses even when both loaded DLLs have the same cdid basename.
+    for (item in list(list(syms = syms_a2, address = addrs_a[[nm]]),
+                      list(syms = syms_b2, address = addrs_b[[nm]]))) {
+      call <- attr(item$syms, "calls")[[nm]]
+      expect_true(is.function(call), info = nm)
+      expect_identical(body(call)[[2L]], as.name(nm), info = nm)
+      expect_identical(get(nm, environment(call), inherits = FALSE), item$address, info = nm)
+    }
   }
   expect_identical(ns_a$gmm_native_backend_info()$dll_path, dll_a[["path"]])
   expect_identical(ns_b$gmm_native_backend_info()$dll_path, dll_b[["path"]])
@@ -870,6 +879,11 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # eligible unweighted unit replays through the two-pass native accumulator.
     # The exact changed-body set is unchanged; the current pin binds both deltas.
     cp08_changed_bodies <- "project_gmm_if_stream"
+    # PR11 changes only dispatch in these existing bodies. C registration,
+    # kernels, immutable original references and scientific checks are intact.
+    registered_call_changed_bodies <- c("certify_symmetric_eigen_bounds", "gmm_iv_dot",
+      "gmm_iv_mat_product", "gmm_iv_mat_residual", "gmm_iv_norm",
+      "gmm_native_backend_info", "gmm_sexp_aliases")
     actual_changed_formals <- orig_core_names[vapply(orig_core_names, function(nm)
       !identical(formals(get(nm, e_cand_core)), formals(get(nm, e_orig_core))), logical(1))]
     actual_changed_bodies <- orig_core_names[vapply(orig_core_names, function(nm)
@@ -877,7 +891,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
         body(utils::removeSource(get(nm, e_orig_core)))), logical(1))]
     expect_identical(actual_changed_formals, names(d28_formal_additions))
     expect_identical(actual_changed_bodies,
-      sort(c("gmm_require_native_dll", d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies)))
+      sort(c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies)))
     # Historical D28-only core SHA256 (before the accepted CP03 gauge delta):
     # 5f1fd263e702fecfe8ccc04e9005d83a3e67ce265bc5be418df7fe38e0e23b7e
     # Historical CP08 cache-stage whole-core pin (not the current source):
@@ -885,9 +899,10 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # Earlier CP03 acceptance remains in cp03_backend_acceptance.json.
     # Historical sharedX_unit_integration.json pin:
     # 93adc0e289ba55f84b4cd8c1c79d8127f0d5f95d58f423cc6f61146cbaa02a38.
-    # Current accepted pin (post_validation_fixes_20261029/CONFIRMED_PINS.json):
+    # PR11 candidate pin: owner-bound fixed registered dispatch only beyond
+    # the accepted core; independent installed acceptance remains required.
     expect_identical(digest::digest(file = file.path(pkg_root, "R", "chained_gmm_core.R"), algo = "sha256"),
-      "c1b5f022ac8d7771c5ef6eb8c1e0b1148182ab244668408cb124090ffe74ea3f")
+      "2ca9f1b2dba7b82e8153d9de2970140d32b3db30e133c8b14526b977e57f4e01")
     for (nm in orig_core_names) {
       vo <- get(nm, envir = e_orig_core, inherits = FALSE)
       vc <- get(nm, envir = e_cand_core, inherits = FALSE)
@@ -902,7 +917,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
         expect_identical(formals(vc)[names(additions)], additions,
           info = paste0("core_added_defaults_", ks, "_", nm))
       }
-      if (!(nm %in% c("gmm_require_native_dll", d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies))) {
+      if (!(nm %in% c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies))) {
         expect_identical(body(vc), body(vo), info = paste0("core_body_", ks, "_", nm))
       }
     }
