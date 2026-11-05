@@ -240,12 +240,16 @@ augmented_public_selection_record <- function(cp04, backend = NULL, reader = NUL
 # Public nuisance diagnostics (compact copy, charged before it is built)
 # ------------------------------------------------------------------------------
 
-augmented_public_diagnostics <- function(res, control) {
+augmented_public_diagnostics <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
-  bound <- 4 * b$accounting$owned_entries + 4096
-  cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
-    res$resource_accounting$initial_envelope_entries)), bound),
-    4 * bound, 8 * bound, bound, "Augmented public diagnostic copy")
+  bound <- if (cp04_field_diagnostics(b))
+    cp04_public_diagnostic_admit(res, control, public_object, "Augmented public diagnostic copy") else {
+    bound <- 4 * b$accounting$owned_entries + 4096
+    cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
+      res$resource_accounting$initial_envelope_entries)), bound),
+      4 * bound, 8 * bound, bound, "Augmented public diagnostic copy")
+    bound
+  }
   reader <- get("cp04_reader", b$reader_ref, inherits = FALSE)
   st <- reader$state
   sb <- b$selection_backend
@@ -340,7 +344,7 @@ augmented_public_diagnostics <- function(res, control) {
     treatment = treatment, coefficients = coefficients, fitted_catalog = fitted_catalog, support = support)
   if (unname(cp04_payload(diag_copy)["entries"]) > bound)
     cp04_abort("Augmented diagnostic copy bound underestimated.", "bound")
-  c(list(status = "available", method = "augmented", selection_est_method = "dr",
+  out <- c(list(status = "available", method = "augmented", selection_est_method = "dr",
     est_method = "dr", imputation_pooling = b$imputation_pooling, outcome_pooling = b$outcome_pooling,
     selection_model = b$selection_model, selection_pooling = b$selection_pooling),
     augmented_public_model_text(b$outcome_recipe$intercept, b$selection_model, b$selection_pooling, b$imputation_pooling, b$outcome_pooling),
@@ -361,4 +365,5 @@ augmented_public_diagnostics <- function(res, control) {
       "observation-probability fit (every F row). Complete F-row influence functions include the observation-probability,",
       "imputation, repeat-rate, treatment-propensity and shared counterfactual OR paths and both normalizers.",
       "T - C and T - B_g are internal algebra, not reported routes. No numerical certificate.")))
+  cp04_public_diagnostic_check(out, b, bound)
 }

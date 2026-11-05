@@ -207,12 +207,16 @@ imputation_public_selection_record <- function(cp04, backend = NULL, reader = NU
 # Public nuisance diagnostics (compact copy, charged before it is built)
 # ------------------------------------------------------------------------------
 
-imputation_public_diagnostics <- function(res, control) {
+imputation_public_diagnostics <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
-  bound <- 4 * b$accounting$owned_entries + 4096
-  cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
-    res$resource_accounting$initial_envelope_entries)), bound),
-    4 * bound, 8 * bound, bound, "Imputation public diagnostic copy")
+  bound <- if (cp04_field_diagnostics(b))
+    cp04_public_diagnostic_admit(res, control, public_object, "Imputation public diagnostic copy") else {
+    bound <- 4 * b$accounting$owned_entries + 4096
+    cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
+      res$resource_accounting$initial_envelope_entries)), bound),
+      4 * bound, 8 * bound, bound, "Imputation public diagnostic copy")
+    bound
+  }
   reader <- get("cp04_reader", b$reader_ref, inherits = FALSE)
   st <- reader$state
   icpt <- isTRUE(b$outcome_recipe$intercept)
@@ -285,7 +289,7 @@ imputation_public_diagnostics <- function(res, control) {
     treatment = treatment, coefficients = coefficients, fitted_catalog = fitted_catalog, support = support)
   if (unname(cp04_payload(diag_copy)["entries"]) > bound)
     cp04_abort("Imputation diagnostic copy bound underestimated.", "bound")
-  c(list(status = "available", method = "imputation", selection_est_method = "imputation",
+  out <- c(list(status = "available", method = "imputation", selection_est_method = "imputation",
     est_method = b$est_method, imputation_pooling = b$imputation_pooling, outcome_pooling = b$outcome_pooling),
     imputation_public_model_text(b$est_method, b$outcome_recipe$intercept, b$outcome_pooling),
     list(fit_structure = paste("one WLS fit per imputation pooling group (", length(b$groups), " group(s), ",
@@ -306,4 +310,5 @@ imputation_public_diagnostics <- function(res, control) {
       paste0("include repeat-rate and imputation paths",
         if (length(b$treatments)) ", treatment propensity paths" else "",
         if (!is.null(so)) ", counterfactual OR paths" else "", ". No numerical certificate."))))
+  cp04_public_diagnostic_check(out, b, bound)
 }

@@ -6023,8 +6023,13 @@ run_chained_ipw_pipeline <- function(
   # Final public diagnostic copying is checked against the recorded pipeline
   # peak. Reserve its existing one-output plus four-scratch charge before the
   # automatic OR/DR row planner consumes the remaining workspace.
+  cp04_diagnostic_selection <- if (cp04_auto_plan && cp04_field_diagnostics(nuis_res$cp04))
+    cp04_selection_record(cp04, nuis_res$cp04, cp04_reader) else NULL
   final_diagnostic_copy_entries <- if (cp04_auto_plan && is.null(memory_phase))
-    5 * (4 * nuis_res$cp04$accounting$owned_entries + 4096) else 0
+    if (cp04_field_diagnostics(nuis_res$cp04)) cp04_public_diagnostic_plan(nuis_res$cp04,
+      cp04_diagnostic_selection, controls_out$or_basis,
+      cp04_public_auxiliary_diagnostic_bound(nuis_res))$peak else
+      5 * (4 * nuis_res$cp04$accounting$owned_entries + 4096) else 0
   # The automatic planner's retained argument (zero on every other CP04 route);
   # the retained moment IF admission below probes the same planner with it.
   cp04_planner_retained <- if (cp04_auto_plan || use_raw_ipw)
@@ -6032,7 +6037,7 @@ run_chained_ipw_pipeline <- function(
       d5_arrays$ledger_if_entries + d5_arrays$basis_if_entries +
       d5_arrays$ledger_enclosure_entries + d5_arrays$basis_enclosure_entries +
       d5_arrays$retained_diagnostic_entries else 0
-  # The same registry's fitted baseline backend already carries X from this
+  # The same registry's fitted backend already carries X from this
   # pipeline prefix. Remove that recorded overlap only at CP04 composition;
   # retain the original initial and persistent envelope records unchanged.
   cp04_memory_overlap <- combined_initial - cp04_registry_retained_entries(nuis_res, combined_initial)
@@ -6779,7 +6784,8 @@ run_chained_ipw_pipeline <- function(
       metadata = metadata_obj,
       design_all = design_all,
       design_used = design_used,
-      selection = cp04_selection_record(cp04, nuis_res$cp04, cp04_reader),
+      selection = if (!is.null(cp04_diagnostic_selection)) cp04_diagnostic_selection else
+        cp04_selection_record(cp04, nuis_res$cp04, cp04_reader),
       nuisance_registry = nuis_res,
       point_links_all = point_links_all,
       point_links_used = point_links_used,

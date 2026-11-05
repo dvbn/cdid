@@ -344,8 +344,11 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
 # where E0 is this registry's pipeline prefix and O the reader's borrowed owners.
 # Bind that exact lineage once. Standalone CP04 budgets never use this record.
 cp04_registry_memory_accounting <- function(prefix, reader, backend) {
-  if (is.null(backend) || !inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline")) ||
+  if (is.null(backend) || !inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline", "cdid_or_corollary1",
+        "cdid_dr_corollary1", "cdid_imputation_backend", "cdid_augmented_backend")) ||
       !is.null(backend$reference_ref)) return(NULL)
+  if (!inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline")))
+    return(cp04_registry_field_memory_accounting(prefix, reader, backend))
   if (inherits(backend, "cdid_or_baseline")) validate_or_baseline_backend(backend) else validate_dr_baseline_backend(backend)
   prefix <- ipw_owner_int_bound(prefix, "registry retained pipeline prefix", min_val = 0)
   validate_cp04_reader(reader)
@@ -372,6 +375,8 @@ cp04_registry_retained_entries <- function(registry, retained) {
   retained <- ipw_owner_int_bound(retained, "pipeline retained entries", min_val = 0)
   rec <- registry$cp04_memory_accounting
   if (is.null(rec)) return(retained)
+  if (identical(rec$kind, "cp04_registry_field_memory_prefix"))
+    return(cp04_registry_field_retained_entries(registry, retained))
   backend <- registry$cp04; reader <- registry$cp04_reader
   if (!ipw_owner_seal_ok(rec, "cp04_registry_memory_prefix") ||
       !identical(rec$kind, "cp04_registry_memory_prefix") || !is.list(backend) || !is.list(reader) ||
@@ -1835,8 +1840,8 @@ cp04_public_diagnostics <- function(res, control, public_object = NULL) {
 cp04_public_diagnostics_route <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
   if (inherits(b, "cdid_reference_ipw_backend")) return(reference_ipw_public_diagnostics(res, control))
-  if (inherits(b, "cdid_augmented_backend")) return(augmented_public_diagnostics(res, control))
-  if (inherits(b, "cdid_imputation_backend")) return(imputation_public_diagnostics(res, control))
+  if (inherits(b, "cdid_augmented_backend")) return(augmented_public_diagnostics(res, control, public_object))
+  if (inherits(b, "cdid_imputation_backend")) return(imputation_public_diagnostics(res, control, public_object))
   if (inherits(b, c("cdid_dr_baseline", "cdid_dr_corollary1"))) return(dr_public_diagnostics(res, control, public_object))
   if (inherits(b, c("cdid_or_baseline", "cdid_or_corollary1"))) return(or_public_diagnostics(res, control, public_object))
   # Reserve the compact copy before constructing lists; source factors are

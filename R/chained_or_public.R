@@ -256,9 +256,13 @@ chained_full_link_estimate <- function(backend, j) {
 
 or_public_diagnostics <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
-  bound <- 4 * b$accounting$owned_entries + 4096
-  cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
-    4 * bound, 8 * bound, bound, "OR public diagnostic copy")
+  bound <- if (cp04_field_diagnostics(b))
+    cp04_public_diagnostic_admit(res, control, public_object, "OR public diagnostic copy") else {
+    bound <- 4 * b$accounting$owned_entries + 4096
+    cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
+      4 * bound, 8 * bound, bound, "OR public diagnostic copy")
+    bound
+  }
   local_blocks <- if (identical(b$outcome_pooling, "separate")) outcome_public_blocks(b) else NULL
   shared <- b$shared[intersect(c("p", "keep", "beta", "coefficients", "fit", "summary",
     "basis", "control_support_ids", "rss", "objective", "verification_scan"), names(b$shared))]
@@ -341,14 +345,18 @@ or_public_diagnostics <- function(res, control, public_object = NULL) {
       "local slopes and prediction-preserving bases remain unrestricted across distinct comparison blocks.")
   }
   if (!is.null(b$reference_ref)) out$reference_inputs <- chained_reference_record(chained_backend_reference(b))
-  out
+  cp04_public_diagnostic_check(out, b, bound)
 }
 
 dr_public_diagnostics <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
-  bound <- 4 * b$accounting$owned_entries + 4096
-  cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
-    4 * bound, 8 * bound, bound, "DR public diagnostic copy")
+  bound <- if (cp04_field_diagnostics(b))
+    cp04_public_diagnostic_admit(res, control, public_object, "DR public diagnostic copy") else {
+    bound <- 4 * b$accounting$owned_entries + 4096
+    cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
+      4 * bound, 8 * bound, bound, "DR public diagnostic copy")
+    bound
+  }
   local_blocks <- if (identical(b$outcome_pooling, "separate")) outcome_public_blocks(b) else NULL
   shared <- b$shared[intersect(c("p", "keep", "beta", "coefficients", "fit", "summary",
     "basis", "control_support_ids", "rss", "objective", "verification_scan"), names(b$shared))]
@@ -439,5 +447,5 @@ dr_public_diagnostics <- function(res, control, public_object = NULL) {
       "local slopes and prediction-preserving bases remain unrestricted across distinct comparison blocks.")
   }
   if (!is.null(b$reference_ref)) out$reference_inputs <- chained_reference_record(chained_backend_reference(b))
-  out
+  cp04_public_diagnostic_check(out, b, bound)
 }
