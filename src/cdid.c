@@ -566,6 +566,10 @@ SEXP C_gmm_cp08_support_chunk(
 SEXP C_gmm_cp08_pair_rows(
     SEXP y_sexp, SEXP date_start_sexp, SEXP post_a_sexp, SEXP post_obs_sexp,
     SEXP rows_sexp, SEXP a_sexp, SEXP dates_sexp, SEXP chunk_sexp, SEXP max_entries_sexp);
+extern SEXP C_gmm_reconstruction_score_pullback(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_gmm_reconstruction_coarse_create(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_gmm_reconstruction_coarse_pullback(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+SEXP C_gmm_legacy_ipw_chunk(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 SEXP C_gmm_pair_operation_create(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 SEXP C_gmm_pair_operation_query(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 SEXP C_gmm_cp08_sparse_pair_rows(
@@ -5839,6 +5843,10 @@ extern SEXP C_gmm_reconstruction_zero_run(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 
 static const R_CallMethodDef CallEntries[] = {
   {"C_gmm_reconstruction_zero_run", (DL_FUNC) &C_gmm_reconstruction_zero_run, 6},
+  {"C_gmm_reconstruction_score_pullback", (DL_FUNC) &C_gmm_reconstruction_score_pullback, 6},
+  {"C_gmm_reconstruction_coarse_create", (DL_FUNC) &C_gmm_reconstruction_coarse_create, 5},
+  {"C_gmm_reconstruction_coarse_pullback", (DL_FUNC) &C_gmm_reconstruction_coarse_pullback, 8},
+  {"C_gmm_legacy_ipw_chunk", (DL_FUNC) &C_gmm_legacy_ipw_chunk, 9},
   {"C_gmm_pair_operation_create", (DL_FUNC) &C_gmm_pair_operation_create, 9},
   {"C_gmm_pair_operation_query", (DL_FUNC) &C_gmm_pair_operation_query, 6},
   {"C_gmm_dr_separate_sparse_if", (DL_FUNC) &C_gmm_dr_separate_sparse_if, 12},

@@ -412,7 +412,10 @@ imputation_build_catalog <- function(records, cohorts, est_method, imputation_po
     }
   } else if (is.null(families)) {
     # across_cohorts: single global slope-pooling group across all active cells
-    cids <- seq_len(n_cells)
+    # Own this PACKAGE-GENERATED compact metadata once; no caller/source
+    # numerical array is coerced and no replay permission is broadened.
+    cids <- integer(n_cells)
+    cids[] <- seq_len(n_cells)
     for (loc in cids) {
       cell_specs[[loc]]$group_id <- 1L
       cell_specs[[loc]]$local_id <- as.integer(loc)
@@ -1650,8 +1653,31 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
   # or row-by-group parameter IF arrays. This uses the same coupled Gram factors
   # and normalized inverse-transpose identity as the precomputed link adjoints.
   zero_linear <- vector("list", n_groups)
+  coarse_operation <- NULL; coarse_attempted <- FALSE
+  on.exit(if (!is.null(coarse_operation)) coarse_operation$abort(), add = TRUE)
   eval_imp_linear <- function(lambda_vec, nu_list, structural_cids) {
     active_groups <- unique(vapply(core_fit$cells[structural_cids], `[[`, integer(1L), "group_id"))
+    if (!details && !is.null(complete_cache)) {
+      arm_view <- reconstruction_score_cache_view(read_cell_score)
+      arm_state <- list(core = core_fit, cells = core_fit$cells, groups = core_fit$groups,
+        intercept = recipe$intercept, cids = sets$cids, N = N, B = B)
+      if (!is.null(arm_view) && identical(arm_view, complete_cache$view) && identical(arm_state, complete_cache$state)) {
+        visit_cids <- reconstruction_sparse_adjoint_ids(complete_cache, structural_cids)
+        centered <- reconstruction_complete_cache_centered(complete_cache)
+        if (!coarse_attempted) {
+          coarse_operation <<- reconstruction_coarse_operation(arm_view, arm_state, centered)
+          coarse_attempted <<- TRUE
+        }
+        if (!is.null(visit_cids) && !is.null(coarse_operation)) {
+          native <- coarse_operation$pullback(arm_view, arm_state, lambda_vec, nu_list,
+            active_groups, visit_cids, zero_linear)
+          if (!is.null(native)) {
+            zero_linear <<- native$templates
+            return(native$phi)
+          }
+        }
+      }
+    }
     tilde_lambda <- numeric(n_cells)
     tilde_nu <- vector("list", n_groups)
     next_gid <- 1L
@@ -2206,6 +2232,7 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
     )
   }
 
+  if (!is.null(coarse_operation)) coarse_operation$finish()
   list(
     rows = rows,
     id = st$id[rows],

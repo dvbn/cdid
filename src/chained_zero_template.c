@@ -151,3 +151,13 @@ SEXP C_gmm_reconstruction_zero_run(SEXP templates, SEXP groups, SEXP cells,
   SET_VECTOR_ELT(out, 4, Rf_ScalarInteger(stop));
   UNPROTECT(6); return out;
 }
+
+/* V53 bridges preserve the existing V50 decision and materialization rules. */
+int cdid_reconstruction_zero_hit(SEXP templates, SEXP groups, SEXP cells, SEXP active,
+                                  SEXP N, int gid, SEXP *ids, SEXP *lambda, SEXP *nu) {
+  return zr_hit(templates, groups, cells, active, N, gid, ids, lambda, nu);
+}
+int cdid_reconstruction_materialized(SEXP x) {
+  int left = 65536;
+  return zr_materialized(x, 0, &left);
+}

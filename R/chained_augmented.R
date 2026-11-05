@@ -1499,8 +1499,31 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
     out_vec
   }
   zero_linear <- vector("list", n_groups)
+  coarse_operation <- NULL; coarse_attempted <- FALSE
+  on.exit(if (!is.null(coarse_operation)) coarse_operation$abort(), add = TRUE)
   eval_imp_linear <- function(lambda_vec, nu_list, structural_cids) {
     active_groups <- unique(vapply(cells[structural_cids], `[[`, integer(1L), "group_id"))
+    if (!details && !is.null(complete_cache)) {
+      arm_view <- reconstruction_score_cache_view(read_cell_score)
+      arm_state <- list(core = backend, cells = cells, groups = groups,
+        intercept = recipe$intercept, cids = sets$cids, N = N, B = B)
+      if (!is.null(arm_view) && identical(arm_view, complete_cache$view) && identical(arm_state, complete_cache$state)) {
+        visit_cids <- reconstruction_sparse_adjoint_ids(complete_cache, structural_cids)
+        centered <- NULL
+        if (!coarse_attempted) {
+          coarse_operation <<- reconstruction_coarse_operation(arm_view, arm_state, centered)
+          coarse_attempted <<- TRUE
+        }
+        if (!is.null(visit_cids) && !is.null(coarse_operation)) {
+          native <- coarse_operation$pullback(arm_view, arm_state, lambda_vec, nu_list,
+            active_groups, visit_cids, zero_linear)
+          if (!is.null(native)) {
+            zero_linear <<- native$templates
+            return(native$phi)
+          }
+        }
+      }
+    }
     tilde_lambda <- numeric(n_cells)
     tilde_nu <- vector("list", n_groups)
     next_gid <- 1L
@@ -1912,6 +1935,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
     )
   }
 
+  if (!is.null(coarse_operation)) coarse_operation$finish()
   list(
     rows = rows,
     id = st$id[rows],
