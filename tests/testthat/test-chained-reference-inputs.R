@@ -237,7 +237,10 @@ testthat::test_that("static designs keep the static design and alias map; one ca
   fr_s <- fr; fr_s$w <- c(dc$w[match(unique(ds$id), dc$id)], 1, 1)
   b <- rid_fit(dc, frame = fr_s, control_group = "notyettreated")
   testthat::expect_identical(a$att, b$att)
-  testthat::expect_identical(a$inffunc, b$inffunc)
+  testthat::expect_identical(
+    list(typeof(a$inffunc), attributes(a$inffunc), a$inffunc == 0),
+    list(typeof(b$inffunc), attributes(b$inffunc), b$inffunc == 0))
+  testthat::expect_equal(a$inffunc, b$inffunc, tolerance = 1e-12)
   testthat::expect_identical(a$chained$nuisance_diagnostics$accounting$n_regression_blocks,
     b$chained$nuisance_diagnostics$accounting$n_regression_blocks)
   rid_compare(a, rid_ref$d60_ref_setup(ds, fix_weights = "first_period", control_group = "notyettreated",

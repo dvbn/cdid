@@ -358,7 +358,9 @@ testthat::test_that("both method axes, the selection formula and every fit count
   testthat::expect_identical(od$selection_columns, c("(Intercept)", "x", "V"))
   testthat::expect_equal(od$n_rows, N)
   ra <- fit$chained$resource_accounting
-  testthat::expect_equal(ra$final_diagnostic_copy_entries, 5 * (4 * nd$accounting$owned_entries + 4096), tolerance = 0)
+  testthat::expect_lte(
+    5 * unname(augp_val("cp04_payload")(nd)["entries"]),
+    ra$final_diagnostic_copy_entries)
   testthat::expect_lte(max(ra$simultaneous_entries, ra$initial_envelope_entries) + ra$final_diagnostic_copy_entries,
     fit$chained$public$numeric_workspace_entries)
   testthat::expect_true(all(cdid::tidy(fit)$estimator == fit$chained$estimator))

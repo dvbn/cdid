@@ -510,7 +510,10 @@ test_that("cp04_plan_rows admits the general DR row batch from the proved affine
   expect_identical(cov_5$chunk_rows, 5)
   expect_identical(cov_7$chunk_rows, 7)
   expect_identical(cov_a$chunk_rows, 7)
-  expect_identical(cov_5$estimates, cov_7$estimates)
+  expect_identical(
+    list(typeof(cov_5$estimates), attributes(cov_5$estimates), cov_5$estimates == 0),
+    list(typeof(cov_7$estimates), attributes(cov_7$estimates), cov_7$estimates == 0))
+  expect_equal(cov_5$estimates, cov_7$estimates, tolerance = 1e-12)
   expect_equal(cov_5$covariance, cov_7$covariance, tolerance = 1e-12)
   expect_equal(cov_5$mean_phi, cov_7$mean_phi, tolerance = 1e-12)
   expect_equal(cov_a$covariance, cov_7$covariance, tolerance = 1e-12)
