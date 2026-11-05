@@ -1271,6 +1271,8 @@ augmented_if_envelope <- function(backend, B, links = seq_along(backend$links), 
   if (!details) pre$score_cache <- reconstruction_score_cache_plan(
     backend, B, sets$cids, augmented_backend_X_F(backend), nl,
     funding_entries = 3040 * min(B, backend$control$max_chunk_rows) * nl)
+  if (!details && is.null(backend$reference_ref) && is.null(backend$layout))
+    pre <- reconstruction_ordinary_if_envelope(backend, B, links, pre, width, metadata, selection_pre)
   pre
 }
 
