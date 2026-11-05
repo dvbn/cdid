@@ -1586,17 +1586,24 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
   cached_cells <- if (details) logical(0L) else logical(n_cells)
   if (!details && isTRUE(sets$score_cache$enabled)) cached_cells[sets$score_cache$cids] <- TRUE
   score_witness <- if (details) NULL else vector("list", n_cells)
-  witness_ready <- FALSE; witness_finite <- FALSE
+  witness_ready <- FALSE; witness_finite <- FALSE; complete_cache <- NULL
   eval_adjoint_chunk <- function(adj, structural_cids) {
     active_groups <- if (details) integer(0L) else
       unique(vapply(core_fit$cells[structural_cids], `[[`, integer(1L), "group_id"))
     first_walk <- !details && !witness_ready; walk_finite <- TRUE
+    arm_view <- if (!details && !is.null(complete_cache)) reconstruction_score_cache_view(read_cell_score) else NULL
+    arm_state <- if (!is.null(arm_view)) list(core = core_fit, cells = core_fit$cells, groups = core_fit$groups,
+      intercept = recipe$intercept, cids = sets$cids, N = N, B = B) else NULL
+    use_complete <- !is.null(arm_view) && identical(arm_view, complete_cache$view) &&
+      identical(arm_state, complete_cache$state)
+    visit_cids <- if (use_complete) reconstruction_sparse_adjoint_ids(complete_cache, structural_cids) else NULL
+    if (is.null(visit_cids)) { use_complete <- FALSE; visit_cids <- sets$cids }
     out_vec <- numeric(B)
-    for (cid in sets$cids) {
-      obs_rec <- read_cell_score(cid)
+    for (cid in visit_cids) {
+      obs_rec <- if (use_complete) reconstruction_complete_cache_get(arm_view, cid) else read_cell_score(cid)
       if (is.null(obs_rec)) next
-      cf <- core_fit$cells[[cid]]
-      gf <- core_fit$groups[[cf$group_id]]
+      cf <- if (use_complete) arm_state$cells[[cid]] else core_fit$cells[[cid]]
+      gf <- if (use_complete) arm_state$groups[[cf$group_id]] else core_fit$groups[[cf$group_id]]
       # Only a previously witnessed immutable CACHED record can bypass zero
       # arithmetic. Uncached/changed records keep their original read/order.
       prior <- if (!details && cached_cells[cid]) score_witness[[cid]] else NULL
@@ -1624,7 +1631,16 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
         if (!safe) witness_finite <<- FALSE
       }
     }
-    if (first_walk) { witness_ready <<- TRUE; witness_finite <<- walk_finite }
+    if (first_walk) {
+      witness_ready <<- TRUE; witness_finite <<- walk_finite
+      if (walk_finite) {
+        final_view <- reconstruction_score_cache_view(read_cell_score)
+        final_state <- list(core = core_fit, cells = core_fit$cells, groups = core_fit$groups,
+          intercept = recipe$intercept, cids = sets$cids, N = N, B = B)
+        complete_cache <<- reconstruction_complete_cache_witness(final_view, final_state)
+        if (!is.null(complete_cache)) score_witness <<- NULL
+      }
+    }
     out_vec
   }
 

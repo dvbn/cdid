@@ -102,7 +102,7 @@ reconstruction_cached_cell_reader <- function(read, plan, n_cells) {
   if (!isTRUE(plan$enabled)) return(read)
   position <- integer(n_cells); position[plan$cids] <- seq_along(plan$cids)
   cache <- vector("list", length(plan$cids)); seen <- logical(length(plan$cids))
-  function(cid) {
+  reader <- function(cid) {
     slot <- position[cid]
     if (slot == 0L) return(read(cid))
     if (!seen[slot]) {
@@ -112,6 +112,9 @@ reconstruction_cached_cell_reader <- function(read, plan, n_cells) {
     }
     cache[[slot]]
   }
+  view <- function() list(position = position, seen = seen, cache = cache, read = read)
+  attr(reader, "reconstruction_cache_view") <- view
+  reader
 }
 
 # Both reconstructed routes retain the same local OR and stage1/treatment row

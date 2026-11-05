@@ -25,6 +25,7 @@ v39_env <- function(scalar) {
   }
   if (scalar) {
     e$reconstruction_zero_template <- function(...) NULL
+    e$reconstruction_complete_cache_witness <- function(...) NULL
     e$reconstruction_pack_plain_adjoint <- v39_ns("reconstruction_pack_adjoint")
     e$identical <- function(x, y) {
       if (is.list(x) && all(c("rr", "d_rr", "s_rr") %in% names(x))) FALSE else base::identical(x, y)
