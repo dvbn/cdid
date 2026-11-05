@@ -51,7 +51,7 @@ augmented_abort <- function(message, class = "input", extra = list()) {
 # T_logit = -d log max(q, eps) / d theta in the cell's theta coordinates (zero
 # where the floor binds). Missing outcomes are never read; Z = j off pairs.
 augmented_cell_rows <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows,
-                                need_logderiv = FALSE) {
+                                need_logderiv = FALSE, pair_predictor = predict_pair_selection) {
   n <- length(rows)
   jhat <- if (gf$p > 0L) {
     cf$alpha + as.vector((cf$L * X_F[rows, gf$kept_cols_F, drop = FALSE]) %*% gf$beta)
@@ -68,7 +68,7 @@ augmented_cell_rows <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows,
       q <- ld$pred$prob
       out$T_logit <- ld$T_logit
     } else {
-      q <- predict_pair_selection(sel_fit, rows[obs], cf$q_id)$prob
+      q <- pair_predictor(sel_fit, rows[obs], cf$q_id)$prob
     }
     cp04_finite(q, "fitted observation probabilities on observed pairs", TRUE)
     pi <- 1 / ipw_clip_floor(q)
@@ -1294,7 +1294,8 @@ augmented_if_budget <- function(backend, B, links = seq_along(backend$links), de
 # (merged -R^q loadings on theta rows), OR (direct, rate, j, q forcing over all
 # blocks), PS (unchanged roster treatment rows) and rate (single count).
 augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows, links,
-                                             scale = "frame", details = FALSE, sets) {
+                                             scale = "frame", details = FALSE, sets,
+                                             cell_worker = augmented_cell_rows) {
   B <- length(rows)
   N <- st$N
   G <- length(st$cohorts)
@@ -1349,7 +1350,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
     cf <- cells[[cid]]
     ix <- which(ci == cf$cohort_index)
     out <- if (length(ix)) {
-      ev <- augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, groups[[cf$group_id]], rows[ix], FALSE)
+      ev <- cell_worker(sel_fit, up_map, X_F, pair_reader, cf, groups[[cf$group_id]], rows[ix], FALSE)
       list(ix = ix, Z = ev$Z)
     } else {
       list(ix = integer(0L), Z = numeric(0L))
@@ -1923,6 +1924,18 @@ evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend
     pr
   }
 
+  # Only this ordinary wrapper owns both the sealed reader and its pair
+  # callback. The default cell/core helpers retain standalone validation.
+  op <- NULL
+  on.exit(if (!is.null(op)) op$abort(), add = TRUE)
+  cell_worker <- augmented_cell_rows
+  if (!details && is.null(backend$reference_ref) && is.null(backend$pair_outcomes)) {
+    op <- selection_prediction_operation(backend$selection_backend, source_reader = reader)
+    pair_predictor <- function(sel_fit, rows, pair_cohort_id) op$pair(rows, pair_cohort_id)
+    cell_worker <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv = FALSE)
+      augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv,
+        pair_predictor = pair_predictor)
+  }
   res <- augmented_evaluate_if_chunk_core(
     st = st,
     X_F = X_F,
@@ -1932,7 +1945,8 @@ evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend
     links = as.integer(links),
     scale = scale,
     details = details,
-    sets = pre
+    sets = pre,
+    cell_worker = cell_worker
   )
 
   out <- list(
@@ -1959,6 +1973,7 @@ evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend
   if (unname(cp04_payload(out)["entries"]) > pre$output) {
     augmented_abort("Augmented IF output bound underestimated.", "bound")
   }
+  if (!is.null(op)) op$finish()
   out
 }
 
