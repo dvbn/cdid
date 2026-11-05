@@ -6055,6 +6055,8 @@ run_chained_ipw_pipeline <- function(
     min(ctrl$owner_control$max_retained_entries,ctrl$owner_control$max_matrix_entries),
     "pipeline producer plus GMM consumer plus D5 ledger/basis simultaneous payload")
 
+  replay_peak_entries <- combined_live
+
   # Carry the retained diagnostic reservation into every later simultaneous
   # covariance/auxiliary guard; `combined_live` alone protects only this stage.
   retained_with_diagnostics <- ipw_owner_safe_sum(
@@ -6254,12 +6256,31 @@ run_chained_ipw_pipeline <- function(
   progress("streaming the ", L_used, "-moment covariance from complete unit link influence functions")
   cov_stream_used <- if (!is.null(active_backend)) {
     cov_out <- cp04_stream_covariance(cp04_producer, cp04_used, cp04_retained_with_diagnostics)
-    # D92 covariance-only store: release the store and every reference to it
-    # immediately after the covariance Gram pass, before allocating GMM consumers.
+    # Optional transition: retain the already filled matrix for GMM slices
+    # only after funding that phase without its unused raw producer scratch.
+    # A decline keeps the original covariance release and GMM-only admission.
     if (!is.null(cp04_cov_retained)) {
-      cp04_cov_record <- cp04_retained_if_release(cp04_cov_retained)
+      combined_work <- ipw_owner_safe_sum(c(combined_work, cp04_cov_retained$producer_cell_work),
+        active_backend$control$max_work_ops, "CP04 compact cell producer work")
+      replay_peak_entries <- max(replay_peak_entries, cp04_cov_retained$producer_cell_peak)
+      transition_inv <- cp04_retained_if_phase_inventory("gmm", active_backend, cp04_work, point_preflight,
+        cp04_retained_with_diagnostics, cp04_planner_retained, d5_arrays, L_used, M_all)
+      transferred <- cp04_retained_if_covariance_to_gmm(cp04_cov_retained, active_backend, cp04_used,
+        point_preflight$chunk_rows, retained = transition_inv$retained,
+        work = combined_work, control = active_backend$control)
+      transition_inv <- NULL
+      if (!is.null(transferred)) {
+        cp04_retained <- transferred
+        replay_peak_entries <- max(replay_peak_entries, transferred$gmm_transfer$admission_total)
+        combined_work <- ipw_owner_safe_sum(c(combined_work, transferred$gmm_transfer$work),
+          active_backend$control$max_work_ops, "CP04 covariance-to-GMM retained IF slice work")
+        cp04_phase_eligible <- FALSE
+      } else {
+        cp04_cov_record <- cp04_retained_if_release(cp04_cov_retained)
+        cp04_producer <- NULL
+      }
+      transferred <- NULL
       cp04_cov_retained <- NULL
-      cp04_producer <- NULL
     }
     cov_out
   } else if (!is.null(point_custom)) {
@@ -6465,7 +6486,8 @@ run_chained_ipw_pipeline <- function(
         design_rank = design_used$rank_diagnostics,
         core_targets = core_targets,
         ledger_support = ledger[, intersect(c("cell_id", "g", "time", "available", "support_status", "support_reason"), names(ledger)), drop = FALSE],
-        resource = list(simultaneous_entries = combined_live, retained_with_diagnostics = retained_with_diagnostics,
+        resource = list(simultaneous_entries = combined_live, historical_replay_peak_entries = max(combined_live, replay_peak_entries),
+          retained_with_diagnostics = retained_with_diagnostics,
           downstream_work_ops = combined_work))
     }
   }
@@ -6760,7 +6782,8 @@ run_chained_ipw_pipeline <- function(
           basis_to_loading_column = basis$loading_column, core_target_to_loading_column = core_targets$loading_column)),
       resource_accounting = c(list(initial_envelope_entries=if (is.null(memory_phase)) combined_initial else initial_envelope_estimate,
         memory_phases=memory_phase,
-        simultaneous_entries=combined_live,downstream_work_ops=combined_work,point_producer=point_preflight,
+        simultaneous_entries=combined_live,historical_replay_peak_entries=max(combined_live,replay_peak_entries),
+        downstream_work_ops=combined_work,point_producer=point_preflight,
         complete_raw_capacity=complete_raw_capacity,
         memory_prefix_composition = list(embedded_external_entries = cp04_memory_overlap,
           simultaneous_entries_before_prefix_dedup = ipw_owner_safe_sum(c(combined_live, cp04_memory_overlap)),

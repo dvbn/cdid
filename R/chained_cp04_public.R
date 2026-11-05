@@ -978,7 +978,7 @@ cp04_retained_if_reserve <- function(backend, links, chunk_rows, cov_plan, retai
     lockBinding(nm, store)
   store$id <- dom$id; store$N <- N; store$n_A <- dom$n_A; store$lambda <- dom$lambda
   store$links <- as.integer(links); store$L <- L; store$B <- chunk_rows; store$scale <- "core"
-  store$entries <- entries; store$work <- cache_work; store$admission_total <- total; store$cap <- cap
+  store$entries <- entries; store$work <- cache_work; store$work_total <- work_total; store$admission_total <- total; store$cap <- cap
   store$producer_passes <- 0L; store$slice_passes <- 0L; store$batches <- 0L
   store$metadata_entries <- boundary$entries; store$boundary_work <- boundary$work
   for (nm in setdiff(ls(store, all.names = TRUE), c("state", "producer_passes", "slice_passes", "batches")))
@@ -1171,11 +1171,51 @@ cp04_retained_if_phase_reserve <- function(backend, links, phase = c("covariance
     lockBinding(nm, store)
   store$id <- dom$id; store$N <- N; store$n_A <- dom$n_A; store$lambda <- dom$lambda
   store$links <- as.integer(links); store$L <- L; store$B <- chunk_rows; store$scale <- "core"
-  store$entries <- entries; store$work <- cache_work; store$admission_total <- total; store$cap <- cap
+  store$entries <- entries; store$work <- cache_work; store$work_total <- work_total; store$admission_total <- total; store$cap <- cap
   store$producer_passes <- 0L; store$slice_passes <- 0L; store$batches <- 0L
   store$metadata_entries <- boundary$entries; store$boundary_work <- boundary$work
   for (nm in setdiff(ls(store, all.names = TRUE), c("state", "producer_passes", "slice_passes", "batches")))
     if (!bindingIsLocked(nm, store)) lockBinding(nm, store)
+  store
+}
+
+# Once the covariance producer has succeeded, its raw original-unit matrix
+# can serve the original GMM partition without regenerating any numerical IF.
+# Only the unused raw producer output/scratch is retired in this phase; the
+# caller retains covariance results, GMM consumers, diagnostics and all owners.
+cp04_retained_if_covariance_to_gmm <- function(store, backend, links, chunk_rows, retained, work, control) {
+  if (is.null(store) || !cp04_retained_if_phase_static_augmented(backend)) return(NULL)
+  if (!is.environment(store) || !identical(store$kind, "cp04_retained_if") ||
+      !identical(store$phase, "covariance") || !identical(store$state, "filled") ||
+      !identical(store$producer_passes, 1L) || !identical(store$slice_passes, 1L))
+    cp04_abort("Covariance transfer requires its completed original producer and Gram slice.", "integrity")
+  cp04_retained_if_check(store, backend, links, store$B, "core")
+  control <- validate_ipw_owner_control(control)
+  for (nm in c("retained", "work")) ipw_owner_int_bound(get(nm), nm, min_val = 0)
+  chunk_rows <- ipw_owner_int_bound(chunk_rows, "chunk_rows")
+  if (chunk_rows > store$N || chunk_rows > control$max_chunk_rows)
+    cp04_abort("Invalid covariance-to-GMM slice partition.", "input")
+  B_peak <- max(store$B, chunk_rows)
+  boundary <- cp04_retained_if_boundary_cost(backend, links, B_peak)
+  entries <- ipw_owner_safe_sum(c(1024, max(store$entries,
+    ipw_owner_safe_sum(c(cp04_retained_if_entries(store$N, store$L, B_peak), boundary$entries)))))
+  own <- ipw_owner_safe_sum(c(backend$accounting$owned_entries, backend$accounting$borrowed_entries))
+  # entries includes full raw ownership and four B_peak-by-L slice/copy
+  # buffers. No second N-by-L matrix or raw producer workspace is allocated.
+  total <- ipw_owner_safe_sum(c(retained, own, entries))
+  checks <- ipw_owner_safe_sum(c(16, ipw_owner_safe_product(16, ceiling(store$N / chunk_rows) + 1)))
+  slice_work <- ipw_owner_safe_sum(c(
+    ipw_owner_safe_product(64, ipw_owner_safe_product(store$N, store$L)),
+    ipw_owner_safe_product(checks, boundary$work)))
+  work_total <- ipw_owner_safe_sum(c(work, slice_work))
+  cap <- min(control$max_retained_entries, control$max_matrix_entries)
+  if (total > cap || work_total > control$max_work_ops) return(NULL)
+  if (exists("gmm_transfer", store, inherits = FALSE))
+    cp04_abort("Covariance storage was already considered for GMM transfer.", "integrity")
+  store$gmm_transfer <- list(chunk_rows = chunk_rows, entries = entries,
+    admission_total = total, work = slice_work, metadata_entries = boundary$entries, boundary_work = boundary$work,
+    max_slice_passes = store$slice_passes + 2L)
+  lockBinding("gmm_transfer", store)
   store
 }
 
@@ -1311,7 +1351,10 @@ cp04_retained_if_check <- function(store, backend, links, B, scale) {
       !identical(is.null(backend$pair_outcomes), is.null(store$pair_outcomes_snapshot)) ||
       (!is.null(store$pair_outcomes_snapshot) && !gmm_sexp_aliases(backend$pair_outcomes, store$pair_outcomes_snapshot)))
     cp04_abort("Retained moment IF storage does not describe the backend's sealed custom covariates or outcomes.", "integrity")
-  if (!identical(as.integer(links), store$links) || !identical(scale, store$scale) || !isTRUE(B == store$B))
+  transfer <- store$gmm_transfer
+  partition_ok <- isTRUE(B == store$B) || (!is.null(transfer) &&
+    identical(store$state, "filled") && isTRUE(B == transfer$chunk_rows))
+  if (!identical(as.integer(links), store$links) || !identical(scale, store$scale) || !partition_ok)
     cp04_abort("Retained moment IF storage serves one link block, one scale and one row partition.", "integrity")
   list(id = ids, N = dom$N, n_A = dom$n_A, lambda = dom$lambda)
 }
@@ -1332,7 +1375,8 @@ cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, p
   if (identical(store$state, "reserved")) {
     ipw_owner_safe_sum(c(pre$work_ops_bound, store$work), ctrl$max_work_ops, "CP04 retained moment IF fill work")
     ipw_owner_check_matrix_dims(N, L, ctrl$max_matrix_entries, "CP04 retained moment IF")
-    plan <- chained_full_if_plan(backend, links, B)
+    plan <- chained_full_if_plan(backend, links, B, phase_store = store)
+    on.exit(augmented_adjoint_replay_release(plan), add = TRUE)
     store$state <- "filling"
     phi <- matrix(0, N, L); filled <- 0; cn <- NULL
     for (s in starts) {
@@ -1367,8 +1411,8 @@ cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, p
     return(invisible(NULL))
   }
   if (!identical(store$state, "filled")) cp04_abort("Retained moment IF storage was not completely filled.", "integrity")
-  if (exists("max_slice_passes", store, inherits = FALSE) && !is.null(store$max_slice_passes) &&
-      store$slice_passes >= store$max_slice_passes)
+  slice_limit <- if (is.null(store$gmm_transfer)) store$max_slice_passes else store$gmm_transfer$max_slice_passes
+  if (!is.null(slice_limit) && store$slice_passes >= slice_limit)
     cp04_abort("Retained moment IF storage exceeded its admitted slice passes.", "integrity")
   ipw_owner_safe_sum(c(pre$work_ops_bound, store$work), ctrl$max_work_ops, "CP04 retained moment IF slice work")
   check_slice <- function() {
@@ -1644,7 +1688,12 @@ cp04_retained_if_release <- function(store) {
   if (is.null(store)) return(list(status = "streamed"))
   aux <- store$auxiliary
   phase <- if (exists("phase", store, inherits = FALSE)) store$phase else NULL
-  lifetime <- if (!is.null(phase) && identical(phase, "covariance")) {
+  transfer <- store$gmm_transfer
+  lifetime <- if (!is.null(transfer)) {
+    paste("filled once by the covariance mean pass; the same raw original-unit matrix is sliced for the covariance",
+      "Gram pass and both GMM projection passes at their respective original partitions; released after GMM",
+      "and before target IF transport, auxiliary reporting and final diagnostic copying")
+  } else if (!is.null(phase) && identical(phase, "covariance")) {
     paste("reserved before allocation inside the covariance phase simultaneous envelope; filled by the covariance",
       "mean pass; sliced for the covariance Gram pass at the original covariance partition; released before",
       "allocating GMM consumers")
@@ -1665,11 +1714,17 @@ cp04_retained_if_release <- function(store) {
   rec <- c(
     list(status = if (identical(store$state, "filled")) "retained" else paste0("incomplete:", store$state)),
     if (is.null(phase)) list() else list(phase = phase),
+    if (is.null(transfer)) list() else list(mode = "covariance_to_gmm",
+      covariance_chunk_rows = store$B, gmm_chunk_rows = transfer$chunk_rows),
     list(scale = store$scale, n_rows = store$N, n_links = store$L, chunk_rows = store$B, n_batches = store$batches,
       producer_passes = store$producer_passes, slice_passes = store$slice_passes,
-      reserved_entries = store$entries, admission_total_entries = store$admission_total, cap_entries = store$cap,
-      snapshot_metadata_entries = store$metadata_entries, boundary_check_work_ops = store$boundary_work,
-      work_ops_bound = store$work,
+      reserved_entries = if (is.null(transfer)) store$entries else transfer$entries,
+      admission_total_entries = max(store$admission_total, store$producer_cell_peak, if (is.null(transfer)) 0 else transfer$admission_total),
+      cap_entries = store$cap,
+      snapshot_metadata_entries = if (is.null(transfer)) store$metadata_entries else max(store$metadata_entries, transfer$metadata_entries),
+      boundary_check_work_ops = if (is.null(transfer)) store$boundary_work else max(store$boundary_work, transfer$boundary_work),
+      work_ops_bound = ipw_owner_safe_sum(c(store$work, store$producer_cell_work, if (is.null(transfer)) 0 else transfer$work)),
+      producer_cell_store = store$producer_cell_accounting,
       auxiliary = if (is.null(aux)) list(status = "not_extended") else list(status = "extended",
         columns_requested = aux$columns_requested, columns_served = aux$columns_served,
         columns_streamed = aux$columns_streamed, slice_passes = aux$slice_passes,
@@ -1680,7 +1735,7 @@ cp04_retained_if_release <- function(store) {
   drop <- intersect(c("phi", "raw_ref", "id", "backend_snapshot", "backend_ref", "reader_ref", "frame_ref", "panel_ref",
     "reference_ref", "selection_ref", "design_ref", "reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot",
     "reference_snapshot", "selection_snapshot", "selection_reader_snapshot", "design_snapshot", "layout_snapshot", "layout_state_snapshot",
-    "X_F_snapshot", "pair_outcomes_snapshot", "auxiliary"), ls(store, all.names = TRUE))
+    "X_F_snapshot", "pair_outcomes_snapshot", "auxiliary", "gmm_transfer"), ls(store, all.names = TRUE))
   for (nm in drop) if (bindingIsLocked(nm, store)) unlockBinding(nm, store)
   rm(list = drop, envir = store)
   store$state <- "released"
@@ -1703,6 +1758,7 @@ cp04_replay_links <- function(backend, links, callback, scale = "core", chunk_ro
   }
   # CP08 stage 4: one compact native plan per eligible complete-support replay.
   plan <- chained_full_if_plan(backend, links, B)
+  on.exit(augmented_adjoint_replay_release(plan), add = TRUE)
   for (s in seq.int(1L, N, by = B)) {
     callback(chained_full_if_chunk(backend, seq.int(s, min(N, s + B - 1L)), links, scale, plan))
     if (dom$is_raw) validate_ipw_raw_backend(backend)

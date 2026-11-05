@@ -2,6 +2,7 @@
    Original Gram helpers and V50 first-hit/suffix decisions remain authoritative. */
 #include <R.h>
 #include <Rinternals.h>
+#include <Rversion.h>
 #include <R_ext/Utils.h>
 #include <limits.h>
 #include <math.h>
@@ -55,7 +56,7 @@ static int cr_functions(SEXP f) {
   if(!cr_list(f))return 0; SEXP owner=cr_field(f,".owner"),names=Rf_getAttrib(f,R_NamesSymbol);
   if(TYPEOF(owner)!=ENVSXP)return 0;
   for(R_xlen_t i=0;i<XLENGTH(f);++i) {
-    const char *name=CHAR(STRING_ELT(names,i));if(!strcmp(name,".owner"))continue;
+    const char *name=CHAR(STRING_ELT(names,i));if(!strcmp(name,".owner")||!strcmp(name,".live"))continue;
     SEXP sym=Rf_install(name),actual=Rf_findVarInFrame(owner,sym);
     if(actual!=R_UnboundValue&&R_BindingIsActive(sym,owner))return 0;
     if(actual==R_UnboundValue)actual=Rf_findVarInFrame(R_BaseEnv,sym);
@@ -63,6 +64,135 @@ static int cr_functions(SEXP f) {
     if(actual!=VECTOR_ELT(f,i))return 0;
   }
   return 1;
+}
+
+/* Forced values only: a private/unforced/active binding never runs a callback
+   to obtain permission. Canonical factory/core formals have already been used. */
+static int cr_bound(SEXP env,SEXP key) {
+#if R_VERSION >= R_Version(4, 5, 0)
+  return R_existsVarInFrame(env,key);
+#else
+  /* This optional method uses an active-safe existence API absent in R4.1.
+     Older supported R keeps the unchanged V57/full recognizer path. */
+  (void)env;(void)key;return 0;
+#endif
+}
+static SEXP cr_value(SEXP env,const char *name) {
+  if(TYPEOF(env)!=ENVSXP||OBJECT(env))return R_UnboundValue;
+  SEXP key=Rf_install(name);
+  if(!cr_bound(env,key)||R_BindingIsActive(key,env))return R_UnboundValue;
+  SEXP x=Rf_findVarInFrame(env,key);
+  if(TYPEOF(x)==PROMSXP)x=PRVALUE(x);
+  return TYPEOF(x)==PROMSXP?R_UnboundValue:x;
+}
+static const char *cr_factory_names[]={"read","plan","n_cells","position","cache","seen","reader","view"};
+static const char *cr_live_primitives[]={"typeof","is.object","is.environment","parent.env","environment","sort","ls",
+ "bindingIsActive","get","attr","identical","body","quote","is.null","is.call","length","as.name",
+ "is.integer","is.logical","is.list","attributes","c","!","!=","==","<","||","&&","[","[[","$","attr<-","isTRUE"};
+#define CR_LIVE_PRIMITIVES ((int)(sizeof(cr_live_primitives)/sizeof(cr_live_primitives[0])))
+static const char *cr_live_helpers[]={"reconstruction_score_cache_view","reconstruction_cache_reader_body","reconstruction_sparse_adjoint_ids"};
+static SEXP cr_inherited_value(SEXP owner,const char *name) {
+  return cr_bound(owner,Rf_install(name))?cr_value(owner,name):cr_value(R_BaseEnv,name);
+}
+static int cr_factory_names_ok(SEXP env) {
+  if(TYPEOF(env)!=ENVSXP||OBJECT(env))return 0;
+  SEXP n=PROTECT(R_lsInternal3(env,TRUE,FALSE));
+  int ok=TYPEOF(n)==STRSXP&&XLENGTH(n)==8;
+  if(ok)for(int j=0;j<8;++j){int found=0;for(int k=0;k<8;++k)
+    if(STRING_ELT(n,k)!=NA_STRING&&!strcmp(CHAR(STRING_ELT(n,k)),cr_factory_names[j]))++found;
+    if(found!=1){ok=0;break;}}
+  UNPROTECT(1);return ok;
+}
+static int cr_same(SEXP a,SEXP b){return R_compute_identical(a,b,IDENT_USE_CLOENV);}
+static int cr_source_tag(SEXP tag){return tag==Rf_install("srcref")||tag==Rf_install("srcfile")||tag==Rf_install("wholeSrcref");}
+static int cr_code_attrs(SEXP x,SEXP y,int strip) {
+  SEXP a=ATTRIB(x),b=ATTRIB(y);
+  for(;;){while(strip&&a!=R_NilValue&&cr_source_tag(TAG(a)))a=CDR(a);
+    while(strip&&b!=R_NilValue&&cr_source_tag(TAG(b)))b=CDR(b);
+    if(a==R_NilValue||b==R_NilValue)return a==b;
+    if(TAG(a)!=TAG(b)||!cr_same(CAR(a),CAR(b)))return 0;a=CDR(a);b=CDR(b);}
+}
+/* Exactly the two annotation locations of the existing R normalizer. Other
+   executable nodes, pair tags and all other attributes remain exact. */
+static int cr_reader_code(SEXP x,SEXP y,int outer) {
+  if(TYPEOF(x)!=LANGSXP||TYPEOF(y)!=LANGSXP||!cr_code_attrs(x,y,1))return 0;
+  SEXP a=x,b=y;int count=0;
+  for(;a!=R_NilValue&&b!=R_NilValue;a=CDR(a),b=CDR(b),++count){
+    if(TYPEOF(a)!=LANGSXP&&TYPEOF(a)!=LISTSXP)return 0;
+    if(TYPEOF(b)!=LANGSXP&&TYPEOF(b)!=LISTSXP)return 0;
+    if(count>4||TAG(a)!=TAG(b)||(count&&!cr_code_attrs(a,b,0)))return 0;
+    if(outer&&count==3){SEXP u=CAR(a),v=CAR(b);
+      if(TYPEOF(u)!=LANGSXP||TYPEOF(v)!=LANGSXP||!cr_code_attrs(u,v,0))return 0;
+      SEXP up=u,vp=v;
+      for(int k=0;k<3;++k){if(up==R_NilValue||vp==R_NilValue||TAG(up)!=TAG(vp)||(k&&!cr_code_attrs(up,vp,0)))return 0;
+        if(k==2){if(!cr_reader_code(CAR(up),CAR(vp),0))return 0;}
+        else if(!cr_same(CAR(up),CAR(vp)))return 0;up=CDR(up);vp=CDR(vp);}
+      if(up!=R_NilValue||vp!=R_NilValue)return 0;
+    }else if(!cr_same(CAR(a),CAR(b)))return 0;
+  }
+  return a==R_NilValue&&b==R_NilValue&&count==(outer?5:4);
+}
+/* Detached canonical code copies are capped before allocation. Symbols and
+   source environments stay borrowed; normalized code has no attributes. */
+static int cr_code_cost(SEXP x,int depth,double *cost) {
+  if(depth>64||*cost>640)return 0;
+  if(x==R_NilValue||TYPEOF(x)==SYMSXP)return 1;
+  if(ATTRIB(x)!=R_NilValue)return 0;
+  if(TYPEOF(x)==LANGSXP||TYPEOF(x)==LISTSXP){*cost+=8;
+    return cr_code_cost(CAR(x),depth+1,cost)&&cr_code_cost(CDR(x),depth+1,cost);}
+  if((TYPEOF(x)==INTSXP||TYPEOF(x)==REALSXP||TYPEOF(x)==LGLSXP)&&!ALTREP(x)){
+    *cost+=8+XLENGTH(x);return *cost<=640;}
+  return 0;
+}
+static SEXP cr_live_create(SEXP view,SEXP state,SEXP functions) {
+  SEXP meta=cr_field(functions,".live"),reader=cr_field(view,"reader"),read=cr_field(view,"read");
+  if(!cr_list(meta)||TYPEOF(reader)!=CLOSXP||TYPEOF(read)!=CLOSXP)return R_NilValue;
+  SEXP env=CLOENV(reader),core=CLOENV(read),owner=cr_field(functions,".owner");
+  if(TYPEOF(env)!=ENVSXP||OBJECT(env)||TYPEOF(core)!=ENVSXP||OBJECT(core)||ENCLOS(env)!=owner||ENCLOS(core)!=owner||!cr_factory_names_ok(env))return R_NilValue;
+  SEXP vf=cr_value(env,"view"),witness=cr_value(core,"complete_cache"),rb=cr_field(meta,"reader_body"),vb=cr_field(meta,"view_body"),helpers=cr_field(meta,"functions");
+  double cost=0;
+  if(TYPEOF(vf)!=CLOSXP||!cr_list(witness)||!cr_list(helpers)||XLENGTH(helpers)!=3||
+    !cr_reader_code(BODY_EXPR(reader),rb,1)||!cr_same(BODY_EXPR(vf),vb)||
+    !cr_code_cost(rb,0,&cost)||!cr_code_cost(vb,0,&cost)||cost>640||
+    !cr_same(cr_field(witness,"view"),view)||!cr_same(cr_field(witness,"state"),state))return R_NilValue;
+  for(int j=0;j<3;++j)if(cr_value(owner,cr_live_helpers[j])!=cr_field(helpers,cr_live_helpers[j]))return R_NilValue;
+  SEXP out=PROTECT(Rf_allocVector(VECSXP,12)),values=PROTECT(Rf_allocVector(VECSXP,8)),prims=PROTECT(Rf_allocVector(VECSXP,CR_LIVE_PRIMITIVES));
+  SET_VECTOR_ELT(out,0,env);SET_VECTOR_ELT(out,1,core);SET_VECTOR_ELT(out,2,values);
+  for(int j=0;j<8;++j){SEXP x=cr_value(env,cr_factory_names[j]);if(x==R_UnboundValue){UNPROTECT(3);return R_NilValue;}SET_VECTOR_ELT(values,j,x);}
+  for(int j=0;j<CR_LIVE_PRIMITIVES;++j){SEXP x=cr_inherited_value(owner,cr_live_primitives[j]);
+    if(x==R_UnboundValue){UNPROTECT(3);return R_NilValue;}SET_VECTOR_ELT(prims,j,x);}
+  SET_VECTOR_ELT(out,3,Rf_duplicate(rb));SET_VECTOR_ELT(out,4,Rf_duplicate(vb));SET_VECTOR_ELT(out,5,helpers);
+  SET_VECTOR_ELT(out,6,prims);SET_VECTOR_ELT(out,7,witness);SET_VECTOR_ELT(out,8,BODY_EXPR(read));
+  SET_VECTOR_ELT(out,9,ATTRIB(reader));SET_VECTOR_ELT(out,10,ATTRIB(vf));SET_VECTOR_ELT(out,11,ATTRIB(read));
+  UNPROTECT(3);return out;
+}
+static int cr_live_ok(SEXP live,SEXP reader,SEXP view,SEXP state,SEXP functions) {
+  if(TYPEOF(live)!=VECSXP||XLENGTH(live)!=12||(TYPEOF(reader)!=CLOSXP||OBJECT(reader)))return 0;
+  SEXP env=VECTOR_ELT(live,0),core=VECTOR_ELT(live,1),values=VECTOR_ELT(live,2),owner=cr_field(functions,".owner");
+  if(OBJECT(env)||OBJECT(core)||ENCLOS(env)!=owner||ENCLOS(core)!=owner||!cr_factory_names_ok(env)||
+    reader!=VECTOR_ELT(values,6)||CLOENV(reader)!=env)return 0;
+  for(int j=0;j<8;++j)if(cr_value(env,cr_factory_names[j])!=VECTOR_ELT(values,j))return 0;
+  SEXP read=VECTOR_ELT(values,0),vf=VECTOR_ELT(values,7),helpers=VECTOR_ELT(live,5);
+  if(TYPEOF(read)!=CLOSXP||OBJECT(read)||TYPEOF(vf)!=CLOSXP||OBJECT(vf)||CLOENV(read)!=core||CLOENV(vf)!=env||
+    !cr_reader_code(BODY_EXPR(reader),VECTOR_ELT(live,3),1)||!cr_same(BODY_EXPR(vf),VECTOR_ELT(live,4))||
+    BODY_EXPR(read)!=VECTOR_ELT(live,8)||!cr_same(ATTRIB(reader),VECTOR_ELT(live,9))||
+    !cr_same(ATTRIB(vf),VECTOR_ELT(live,10))||!cr_same(ATTRIB(read),VECTOR_ELT(live,11)))return 0;
+  if(cr_value(core,"read_cell_score")!=reader||cr_value(core,"complete_cache")!=VECTOR_ELT(live,7)||
+    !cr_same(cr_field(VECTOR_ELT(live,7),"view"),view)||!cr_same(cr_field(VECTOR_ELT(live,7),"state"),state))return 0;
+  const char *fields[]={"backend","cells","groups","N","B"};const char *statekeys[]={"core","cells","groups","N","B"};
+  for(int j=0;j<5;++j)if(cr_value(core,fields[j])!=cr_field(state,statekeys[j]))return 0;
+  SEXP recipe=cr_value(core,"recipe"),sets=cr_value(core,"sets");
+  if(recipe!=cr_field(cr_field(state,"core"),"outcome_recipe")||!cr_list(sets)||!cr_same(cr_field(recipe,"intercept"),cr_field(state,"intercept"))||
+    cr_field(sets,"cids")!=cr_field(state,"cids"))return 0;
+  for(int j=0;j<3;++j)if(cr_value(owner,cr_live_helpers[j])!=cr_field(helpers,cr_live_helpers[j]))return 0;
+  SEXP prims=VECTOR_ELT(live,6);
+  for(int j=0;j<CR_LIVE_PRIMITIVES;++j){SEXP x=cr_inherited_value(owner,cr_live_primitives[j]);
+    if(x!=VECTOR_ELT(prims,j))return 0;}
+  SEXP fnames=Rf_getAttrib(functions,R_NamesSymbol);
+  for(R_xlen_t j=0;j<XLENGTH(functions);++j){const char *name=CHAR(STRING_ELT(fnames,j));
+    if(!strcmp(name,".owner")||!strcmp(name,".live"))continue;
+    if(cr_bound(owner,Rf_install(name))&&R_BindingIsActive(Rf_install(name),owner))return 0;}
+  return cr_functions(functions);
 }
 static void cr_release(SEXP ptr) {
   coarse53 *p=(coarse53*)R_ExternalPtrAddr(ptr);if(p){R_Free(p);R_ClearExternalPtr(ptr);R_SetExternalPtrProtected(ptr,R_NilValue);}
@@ -132,8 +262,9 @@ SEXP C_gmm_reconstruction_coarse_create(SEXP view,SEXP state,SEXP centered,SEXP 
      compartments; no new numeric cache. Explicit configured cap unchanged. */
   if(!R_FINITE(peak_entries)||retained+peak_entries>limit||(double)B*peak>R_XLEN_T_MAX)return R_NilValue;
   cdid_pair_operation_arithmetic();
-  SEXP anchors=PROTECT(Rf_allocVector(VECSXP,5));SET_VECTOR_ELT(anchors,0,view);SET_VECTOR_ELT(anchors,1,state);
+  SEXP anchors=PROTECT(Rf_allocVector(VECSXP,6));SET_VECTOR_ELT(anchors,0,view);SET_VECTOR_ELT(anchors,1,state);
   SET_VECTOR_ELT(anchors,2,centered);SET_VECTOR_ELT(anchors,3,functions);SET_VECTOR_ELT(anchors,4,cap);
+  SET_VECTOR_ELT(anchors,5,cr_live_create(view,state,functions));
   SEXP ptr=PROTECT(R_MakeExternalPtr(NULL,Rf_install("cdid_reconstruction_coarse_operation"),anchors));
   R_RegisterCFinalizerEx(ptr,cr_release,TRUE);coarse53 *d=R_Calloc(1,coarse53);d->B=B;d->nc=(int)XLENGTH(cells);
   d->ng=(int)XLENGTH(groups);d->peak=peak;d->Ncount=countN;d->intercept=LOGICAL(intercept)[0];d->total_p=sum_p;d->cap=limit;R_SetExternalPtrAddr(ptr,d);
@@ -144,7 +275,20 @@ SEXP C_gmm_reconstruction_coarse_pullback(SEXP ptr,SEXP view,SEXP state,SEXP lam
                                          SEXP active,SEXP visit,SEXP templates) {
   if(TYPEOF(ptr)!=EXTPTRSXP||R_ExternalPtrTag(ptr)!=Rf_install("cdid_reconstruction_coarse_operation"))return R_NilValue;
   if(view==R_NilValue&&state==R_NilValue&&lambda==R_NilValue&&nu==R_NilValue&&active==R_NilValue&&visit==R_NilValue&&templates==R_NilValue){cr_release(ptr);return R_NilValue;}
-  coarse53 *d=(coarse53*)R_ExternalPtrAddr(ptr);if(!d||!cr_list(view)||!cr_list(state))return R_NilValue;
+  coarse53 *d=(coarse53*)R_ExternalPtrAddr(ptr);if(!d)return R_NilValue;
+  if(TYPEOF(view)==CLOSXP&&state==R_NilValue&&nu==R_NilValue&&active==R_NilValue&&templates==R_NilValue){
+    SEXP oldview=cr_source(ptr,0),oldstate=cr_source(ptr,1),f=cr_source(ptr,3),live=cr_source(ptr,5);
+    if(!cr_plain(visit,INTSXP))return R_NilValue;
+    if(!cr_live_ok(live,view,oldview,oldstate,f))return R_NilValue;
+    SEXP helper=cr_field(VECTOR_ELT(live,5),"reconstruction_sparse_adjoint_ids");
+    SEXP call=PROTECT(Rf_lang3(helper,VECTOR_ELT(live,7),visit));
+    SEXP ids=PROTECT(Rf_eval(call,R_BaseEnv));
+    if(ids==R_NilValue){UNPROTECT(2);return R_NilValue;}
+    if(!cr_live_ok(live,view,oldview,oldstate,f)){UNPROTECT(2);return R_NilValue;}
+    SEXP out=PROTECT(C_gmm_reconstruction_score_pullback(oldview,oldstate,lambda,ids,cr_source(ptr,2),cr_source(ptr,4)));
+    UNPROTECT(3);return out;
+  }
+  if(!cr_list(view)||!cr_list(state))return R_NilValue;
   SEXP oldv=cr_source(ptr,0),olds=cr_source(ptr,1),functions=cr_source(ptr,3),
     cells=cr_field(state,"cells"),groups=cr_field(state,"groups"),N=cr_field(state,"N");
   int currentB=0,currentN=0;SEXP hi=cr_field(state,"intercept"),oldids=cr_field(olds,"cids"),currentids=cr_field(state,"cids");
@@ -155,8 +299,16 @@ SEXP C_gmm_reconstruction_coarse_pullback(SEXP ptr,SEXP view,SEXP state,SEXP lam
   if(!cr_functions(functions)||cells!=cr_field(olds,"cells")||groups!=cr_field(olds,"groups")||
     cr_field(view,"cache")!=cr_field(oldv,"cache")||cr_field(view,"position")!=cr_field(oldv,"position")||
     cr_field(view,"seen")!=cr_field(oldv,"seen")||
-    !R_compute_identical(N,cr_field(olds,"N"),IDENT_USE_CLOENV)||
-    !cr_plain(lambda,REALSXP)||XLENGTH(lambda)!=d->nc||!cr_plain(nu,VECSXP)||XLENGTH(nu)!=d->nc||
+    !R_compute_identical(N,cr_field(olds,"N"),IDENT_USE_CLOENV))return R_NilValue;
+  /* Same admitted chunk/source operation, contraction of an already solved
+     dense or structural compact record; no new loading/solve arithmetic. */
+  if(nu==R_NilValue&&active==R_NilValue&&templates==R_NilValue){
+    if(!cr_ids(visit,d->nc,0))return R_NilValue;
+    SEXP pos=cr_field(oldv,"position");
+    for(R_xlen_t j=0;j<XLENGTH(visit);++j)if(INTEGER(pos)[INTEGER(visit)[j]-1]==0)return R_NilValue;
+    return C_gmm_reconstruction_score_pullback(view,state,lambda,visit,cr_source(ptr,2),cr_source(ptr,4));
+  }
+  if(!cr_plain(lambda,REALSXP)||XLENGTH(lambda)!=d->nc||!cr_plain(nu,VECSXP)||XLENGTH(nu)!=d->nc||
     !cr_ids(active,d->ng,0)||!cr_ids(visit,d->nc,0)||!cr_plain(templates,VECSXP)||XLENGTH(templates)!=d->ng)return R_NilValue;
   SEXP issued_position=cr_field(oldv,"position");
   for(R_xlen_t j=0;j<XLENGTH(visit);++j)if(INTEGER(issued_position)[INTEGER(visit)[j]-1]==0)return R_NilValue;

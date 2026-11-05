@@ -1322,7 +1322,7 @@ augmented_if_budget <- function(backend, B, links = seq_along(backend$links), de
 # blocks), PS (unchanged roster treatment rows) and rate (single count).
 augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows, links,
                                              scale = "frame", details = FALSE, sets,
-                                             cell_worker = augmented_cell_rows, pair_response_reader = NULL) {
+                                             cell_worker = augmented_cell_rows, pair_response_reader = NULL, adjoint_replay = NULL) {
   B <- length(rows)
   N <- st$N
   G <- length(st$cohorts)
@@ -1340,6 +1340,8 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
   w <- st$w[rows]
   A <- as.double(st$a_index[rows] > 0L)
   X_chunk <- X_F[rows, , drop = FALSE]
+  cell_replay <- if (!details) adjoint_replay$cell_replay else NULL
+  if (!is.null(cell_replay) && !cell_replay$matches(rows)) cell_replay <- NULL
 
   # 1. Repeat-rate and cohort-share rows (unchanged pure-imputation rows).
   xi_a <- matrix(0.0, B, G)
@@ -1376,6 +1378,9 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
   cell_Z <- function(cid) {
     if (!is.null(zcache[[cid]])) return(zcache[[cid]])
     cf <- cells[[cid]]
+    if (!is.null(cell_replay)) {
+      out <- cell_replay$Z(cid, rows); zcache[[cid]] <<- out; return(out)
+    }
     ix <- which(ci == cf$cohort_index)
     out <- if (length(ix)) {
       ev <- cell_worker(sel_fit, up_map, X_F, pair_reader, cf, groups[[cf$group_id]], rows[ix], FALSE)
@@ -1389,6 +1394,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
 
   # 4. Imputation scores and the sparse adjoint pullback (pure-imputation algebra).
   read_cell_score <- function(cid) {
+    if (!is.null(cell_replay)) return(cell_replay$score(cid, rows))
     cf <- cells[[cid]]
     gf <- groups[[cf$group_id]]
     ix <- which(ci == cf$cohort_index)
@@ -1498,10 +1504,35 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
     }
     out_vec
   }
-  zero_linear <- vector("list", n_groups)
+  zero_linear <- if (is.null(adjoint_replay$seed)) vector("list", n_groups) else adjoint_replay$seed
   coarse_operation <- NULL; coarse_attempted <- FALSE
   on.exit(if (!is.null(coarse_operation)) coarse_operation$abort(), add = TRUE)
-  eval_imp_linear <- function(lambda_vec, nu_list, structural_cids) {
+  eval_saved_adjoint <- function(adj, structural_cids) {
+    if (!is.null(coarse_operation)) {
+      out <- coarse_operation$contract_current(read_cell_score, adj, structural_cids)
+      if (!is.null(out)) return(out)
+    }
+    if (!is.null(complete_cache)) {
+      arm_view <- reconstruction_score_cache_view(read_cell_score)
+      arm_state <- list(core = backend, cells = cells, groups = groups,
+        intercept = recipe$intercept, cids = sets$cids, N = N, B = B)
+      if (!is.null(arm_view) && identical(arm_view, complete_cache$view) && identical(arm_state, complete_cache$state)) {
+        ids <- reconstruction_sparse_adjoint_ids(complete_cache, structural_cids)
+        if (!coarse_attempted) {
+          coarse_operation <<- reconstruction_coarse_operation(arm_view, arm_state, NULL)
+          coarse_attempted <<- TRUE
+        }
+        if (!is.null(ids) && !is.null(coarse_operation)) {
+          out <- coarse_operation$contract(arm_view, arm_state, adj, ids)
+          if (!is.null(out)) return(out)
+        }
+      }
+    }
+    # In particular, the FIRST beta on EVERY new chunk performs the original
+    # full score traversal and establishes that chunk's own finite witness.
+    eval_adjoint_chunk(adj, structural_cids)
+  }
+  eval_imp_linear <- function(lambda_vec, nu_list, structural_cids, memo_kind = NULL, memo_id = NULL) {
     active_groups <- unique(vapply(cells[structural_cids], `[[`, integer(1L), "group_id"))
     if (!details && !is.null(complete_cache)) {
       arm_view <- reconstruction_score_cache_view(read_cell_score)
@@ -1519,6 +1550,11 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
             active_groups, visit_cids, zero_linear)
           if (!is.null(native)) {
             zero_linear <<- native$templates
+            if (!is.null(memo_kind) && !is.null(adjoint_replay)) {
+              adj <- if (identical(memo_kind, "alpha")) reconstruction_pack_plain_adjoint(
+                native$adjoint$tilde_lambda, native$adjoint$tilde_nu, structural_cids, cells) else native$adjoint
+              adjoint_replay$put(memo_kind, memo_id, adj, zero_linear)
+            }
             return(native$phi)
           }
         }
@@ -1558,7 +1594,14 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
         lambda = tilde_lambda[gf$cell_ids], nu = tilde_nu[[gid]],
         group = gf, cells = cells[gf$cell_ids], N = N)
     }
-    eval_adjoint_chunk(list(tilde_lambda = tilde_lambda, tilde_nu = tilde_nu), structural_cids)
+    adj <- list(tilde_lambda = tilde_lambda, tilde_nu = tilde_nu)
+    out <- eval_adjoint_chunk(adj, structural_cids)
+    if (!is.null(memo_kind) && !is.null(adjoint_replay)) {
+      saved <- if (identical(memo_kind, "alpha")) reconstruction_pack_plain_adjoint(
+        tilde_lambda, tilde_nu, structural_cids, cells) else adj
+      adjoint_replay$put(memo_kind, memo_id, saved, zero_linear)
+    }
+    out
   }
   zero_imp_loadings <- function() lapply(cells, function(cf) numeric(groups[[cf$group_id]]$p))
 
@@ -1633,6 +1676,12 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       # Global shared-slope j forcing collects every contributing block before
       # each scalar pullback (row width p_OR, independent of the cell count).
       if (p_or) for (qq in seq_len(p_or)) {
+        saved <- if (is.null(adjoint_replay)) NULL else adjoint_replay$get("beta", qq)
+        if (!is.null(saved)) {
+          forcing_cids <- unique(unlist(lapply(backend$shared_or$blocks[wanted_bids], `[[`, "control_cell_ids")))
+          rhs_beta_j[, qq] <- eval_saved_adjoint(saved, forcing_cids)
+          next
+        }
         lam <- numeric(n_cells)
         nu <- zero_imp_loadings()
         for (bid in wanted_bids) {
@@ -1644,10 +1693,15 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
           }
         }
         forcing_cids <- unique(unlist(lapply(backend$shared_or$blocks[wanted_bids], `[[`, "control_cell_ids")))
-        rhs_beta_j[, qq] <- eval_imp_linear(lam, nu, forcing_cids)
+        rhs_beta_j[, qq] <- eval_imp_linear(lam, nu, forcing_cids, "beta", qq)
       }
       if (recipe$intercept) for (apos in seq_along(alpha_bids)) {
         bf <- backend$shared_or$blocks[[alpha_bids[apos]]]
+        saved <- if (is.null(adjoint_replay)) NULL else adjoint_replay$get("alpha", alpha_bids[apos])
+        if (!is.null(saved)) {
+          rhs_alpha_j[, apos] <- eval_saved_adjoint(saved, bf$control_cell_ids)
+          next
+        }
         lam <- numeric(n_cells)
         nu <- zero_imp_loadings()
         for (idx_k in seq_along(bf$control_cell_ids)) {
@@ -1655,7 +1709,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
           lam[cid] <- lam[cid] + bf$j_force_alpha_alpha[idx_k]
           nu[[cid]] <- nu[[cid]] + bf$j_force_alpha_beta[[idx_k]]
         }
-        rhs_alpha_j[, apos] <- eval_imp_linear(lam, nu, bf$control_cell_ids)
+        rhs_alpha_j[, apos] <- eval_imp_linear(lam, nu, bf$control_cell_ids, "alpha", alpha_bids[apos])
       }
     }
 
@@ -1725,11 +1779,23 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
 
   # 6. Roster treatment logit rows (unchanged pure-imputation rows; no j/q path).
   trt_if <- NULL
+  # Built-in ordinary replay: retain real model/data keys below. Private
+  # namespace/code mutation authentication belongs to development checks.
+  odds_enabled <- !details && !is.null(adjoint_replay) && trt_recipe$p >= 1L &&
+    identical(adjoint_replay$treatment_ids, sets$tids) &&
+    length(adjoint_replay$treatment_representatives) == length(sets$tids)
   if (length(sets$tids) > 0L) {
     trt_if <- vector("list", length(backend$treatments))
     p_trt <- trt_recipe$p
     trt_cols_F <- trt_recipe$index
     for (tid in sets$tids) {
+      if (odds_enabled) {
+        representative <- adjoint_replay$treatment_representatives[match(tid, sets$tids)]
+        if (representative != tid && !is.null(trt_if[[representative]])) {
+          trt_if[[tid]] <- trt_if[[representative]]
+          next
+        }
+      }
       tf <- backend$treatments[[tid]]
       score_dir <- matrix(0.0, B, p_trt)
       ix <- which(ci %in% tf$all_cohort_indices)
@@ -1746,9 +1812,30 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       xi_g_a <- t(cp04_solve(tf$H_chol, t(score_a)))
       xi_g_tot <- xi_g_dir + xi_g_a
       colnames(xi_g_dir) <- colnames(xi_g_a) <- colnames(xi_g_tot) <- paste0("gamma", seq.int(0L, p_trt - 1L))
-      trt_if[[tid]] <- list(direct = xi_g_dir, a = xi_g_a, gamma = xi_g_tot,
-        score_direct = score_dir, score_a = score_a)
+      trt_if[[tid]] <- if (odds_enabled) list(direct = xi_g_dir, a = xi_g_a, gamma = xi_g_tot) else
+        list(direct = xi_g_dir, a = xi_g_a, gamma = xi_g_tot, score_direct = score_dir, score_a = score_a)
     }
+  }
+
+  # Freed ordinary score fields fund exactly 2*B*nt slots (pt>=1). The
+  # last model's score locals remain charged by previous_treatment as before.
+  odds_cache <- odds_seen <- odds_sources <- odds_tid <- NULL
+  if (odds_enabled && length(sets$tids)) {
+    odds_cache <- matrix(0.0, B, length(sets$tids))
+    odds_seen <- matrix(FALSE, B, length(sets$tids))
+    odds_tid <- match(seq_along(backend$treatments), sets$tids)
+    odds_tid[sets$tids] <- match(adjoint_replay$treatment_representatives, sets$tids)
+    odds_sources <- list(ci = ci, X = X_chunk, columns = trt_recipe$index, treatments = backend$treatments)
+  }
+  odds_slot <- function(tid, cohort, ix, coefficients) {
+    if (is.null(odds_cache) ||
+        !identical(ci, odds_sources$ci) || !identical(X_chunk, odds_sources$X) ||
+        !identical(trt_recipe$index, odds_sources$columns) ||
+        !identical(backend$treatments, odds_sources$treatments) ||
+        !identical(coefficients, odds_sources$treatments[[tid]]$coefficients) ||
+        !identical(ix, base::which(ci == cohort))) return(0L)
+    k <- odds_tid[tid]
+    if (is.na(k)) 0L else k
   }
 
   # 7. Link rows: the six channels of (A9).
@@ -1788,7 +1875,8 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
     psi_denplus <- w_plus + st$mass_F[ci_g] * xi_a[, ci_g]
     direct_T <- w_plus * (Z_g_vec - lf$T_gl) / lf$d_plus
     a_T <- lf$a_coeff_T_g * xi_a[, ci_g]
-    j_T_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_T, lf$target_cell_id)
+    j_T_adj <- if (forward_imp) NULL else if (!is.null(adjoint_replay))
+      eval_saved_adjoint(lf$adjoint_T, lf$target_cell_id) else eval_adjoint_chunk(lf$adjoint_T, lf$target_cell_id)
     j_T <- if (use_imp_forward) {
       lf$lam_T * alpha_if(lf$target_cell_id) +
         (if (length(lf$nu_T)) as.vector(xi_beta_imp[[cf_g$group_id]] %*% lf$nu_T) else 0.0)
@@ -1824,8 +1912,16 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       zk <- cell_Z(cid_k)
       ix_k <- zk$ix
       if (length(ix_k)) {
-        lv_k <- ipw_logit_values(X_chunk[ix_k, trt_recipe$index, drop = FALSE], tf$coefficients)
-        w_minus[ix_k] <- (w[ix_k] * a_k) * lv_k$odds
+        odds_pos <- if (odds_enabled) odds_slot(lf$trt_id, ci_k, ix_k, tf$coefficients) else 0L
+        if (odds_pos && all(odds_seen[ix_k, odds_pos])) {
+          odds_k <- odds_cache[ix_k, odds_pos]
+        } else {
+          # The FIRST evaluation stays at its original position/row shape.
+          lv_k <- ipw_logit_values(X_chunk[ix_k, trt_recipe$index, drop = FALSE], tf$coefficients)
+          odds_k <- lv_k$odds
+          if (odds_pos) { odds_cache[ix_k, odds_pos] <- odds_k; odds_seen[ix_k, odds_pos] <- TRUE }
+        }
+        w_minus[ix_k] <- (w[ix_k] * a_k) * odds_k
         Z_k_vec[ix_k] <- zk$Z
         Z_or_k <- if (p_or > 0L) X_chunk[ix_k, sh$kept_cols_F, drop = FALSE] else matrix(0.0, length(ix_k), 0L)
         m_k_vec[ix_k] <- if (p_or > 0L) {
@@ -1845,7 +1941,8 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       }
     }
     direct_C <- w_minus * (Z_k_vec - lf$C_ol) / lf$d_minus
-    j_C_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_C, lf$control_cell_ids)
+    j_C_adj <- if (forward_imp) NULL else if (!is.null(adjoint_replay))
+      eval_saved_adjoint(lf$adjoint_C, lf$control_cell_ids) else eval_adjoint_chunk(lf$adjoint_C, lf$control_cell_ids)
     j_C <- if (use_imp_forward) j_C_fwd else j_C_adj
     sel_C <- load_theta(lf$sel_C_ids, lf$sel_C)
     trt_C_dir <- as.vector(tif$direct %*% lf$g_C_gamma)
@@ -1949,7 +2046,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
 }
 
 evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend$links),
-                                        scale = "frame", details = FALSE) {
+                                        scale = "frame", details = FALSE, plan = NULL) {
   validate_augmented_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
@@ -1969,7 +2066,9 @@ evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend
   }
 
   if (!is.null(backend$layout)) return(evaluate_augmented_layout_if_chunk(backend, reader, rows, links, scale, details))
-  pre <- augmented_if_budget(backend, length(rows), links, details)
+  pre <- if (details) NULL else augmented_adjoint_replay_preflight(plan, backend, links, length(rows))
+  if (is.null(pre)) pre <- augmented_if_budget(backend, length(rows), links, details)
+  adjoint_replay <- if (details) NULL else augmented_adjoint_replay_access(plan, backend, links, length(rows), pre)
   X_F <- augmented_backend_X_F(backend)
   pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "reconstruction", details)
   on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
@@ -2013,7 +2112,8 @@ evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend
     details = details,
     sets = pre,
     cell_worker = cell_worker,
-    pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair
+    pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair,
+    adjoint_replay = adjoint_replay
   )
 
   out <- list(

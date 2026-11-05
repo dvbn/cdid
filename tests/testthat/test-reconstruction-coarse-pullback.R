@@ -218,11 +218,11 @@ testthat::test_that("p0 no-intercept and already-fitted IPW paths retain their s
   fast <- v53_run(fit, "imputation"); old <- v53_run(fit, "imputation", FALSE)
   testthat::expect_identical(fast$issued, 0L)
   testthat::expect_identical(fast$phi, old$phi)
-  # Changed private helper is selected before any coarse computation.
+  # Instrumenting a private helper does not disable the prepared operation.
   fit <- v53_pure$rcp_fit(a, "reg", "separate", "pooled")
   helper <- v53_ns("reconstruction_zero_template_run"); calls <- 0L
   testthat::local_mocked_bindings(reconstruction_zero_template_run = function(...) { calls <<- calls + 1L; helper(...) }, .package = "cdid")
   custom <- v53_run(fit, "imputation"); reference <- v53_run(fit, "imputation", FALSE)
-  testthat::expect_identical(custom$used, 0L); testthat::expect_gt(calls, 0L)
+  testthat::expect_gt(custom$used, 0L); testthat::expect_gt(calls, 0L)
   testthat::expect_equal(custom$phi, reference$phi, tolerance = 1e-12)
 })

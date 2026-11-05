@@ -1083,8 +1083,25 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
     p_trt <- trt_recipe$p
     trt_cols_F <- trt_recipe$index
 
+    numeric_fields <- c("coefficients", "column_names", "H_chol", "H", "n_risk_F", "a_forcing", "clipping")
     for (tid in seq_len(n_trt)) {
       ts <- cat$treatment_specs[[tid]]
+      # Within this invocation X_F, weights/rates, recipe, N and controls
+      # are fixed. Pair identity never enters this numerical treatment fit.
+      # Reuse only an earlier successful fit, retaining the CURRENT metadata.
+      representative <- 0L
+      if (tid > 1L) for (prior in seq_len(tid - 1L)) {
+        previous <- cat$treatment_specs[[prior]]
+        if (identical(ts$target_cohort_index, previous$target_cohort_index) &&
+            identical(ts$all_cohort_indices, previous$all_cohort_indices)) {
+          representative <- prior
+          break
+        }
+      }
+      if (representative) {
+        trt_fits[[tid]] <- c(ts, trt_fits[[representative]][numeric_fields])
+        next
+      }
       # Collect all F rows in {g} U K in canonical supplied row order
       risk_rows <- sort(unlist(lapply(ts$all_cohort_indices, function(ci) {
         st$cohort_order[seq.int(st$cohort_start[ci], st$cohort_end[ci])]
