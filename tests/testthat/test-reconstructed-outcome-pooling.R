@@ -295,3 +295,126 @@ testthat::test_that("separate reconstructed outcomes sum dated-layout channels b
   core <- rcp_ns("evaluate_imputation_if_chunk")(fit, wanted, c(3L, 1L), scale = "core")
   testthat::expect_equal(core$phi, (sum(a$A) / N) * together$phi, tolerance = 1e-10)
 })
+
+# V35 representation witnesses: no numerical loading is thresholded away.
+testthat::test_that("structural adjoint records preserve zeros, dimensions and overflow propagation", {
+  cells <- lapply(1:100, function(j) list(group_id = as.integer(j)))
+  groups <- lapply(1:100, function(j) list(p = 2L))
+  lam <- numeric(100); nu <- lapply(groups, function(g) numeric(g$p))
+  nu[[7L]] <- c(0, .25)
+  adj <- rcp_ns("reconstruction_pack_adjoint")(lam, nu, 7L, cells)
+  testthat::expect_identical(adj$kind, "compact_reconstruction_adjoint")
+  testthat::expect_identical(adj$cell_ids, 7L); testthat::expect_identical(adj$group_ids, 7L)
+  testthat::expect_identical(adj$tilde_lambda, 0)
+  testthat::expect_identical(rcp_ns("reconstruction_expand_adjoint")(adj, 100L, groups),
+    list(tilde_lambda = lam, tilde_nu = nu))
+  for (j in 1:100) {
+    testthat::expect_identical(rcp_ns("reconstruction_adjoint_lambda")(adj, j), lam[j])
+    testthat::expect_identical(rcp_ns("reconstruction_adjoint_nu")(adj, j, 2L), nu[[j]])
+  }
+  missing <- rcp_ns("reconstruction_adjoint_nu")(adj, 99L, 2L)
+  testthat::expect_length(missing, 2L)
+  testthat::expect_true(is.nan(as.vector(matrix(c(Inf, 1), 1L) %*% missing)))
+  testthat::expect_lte(unname(rcp_ns("cp04_payload")(adj)["entries"]),
+    unname(rcp_ns("cp04_payload")(list(tilde_lambda = lam, tilde_nu = nu))["entries"]))
+  actual_peak <- unname(rcp_ns("cp04_payload")(list(input_lambda = lam, input_nu = nu,
+    solved = list(tilde_lambda = lam, tilde_nu = nu), candidate = adj))["entries"])
+  testthat::expect_lte(actual_peak, rcp_ns("reconstruction_adjoint_construction_scratch")(100L, 100L, 2L, 1L))
+  p0 <- lapply(groups, function(g) list(p = 0L)); nu0 <- lapply(p0, function(g) numeric())
+  zero <- rcp_ns("reconstruction_pack_adjoint")(lam, nu0, c(7L, 8L), cells)
+  testthat::expect_identical(zero$cell_ids, c(7L, 8L))
+  testthat::expect_length(zero$tilde_nu, 2L)
+  tiny <- rcp_ns("reconstruction_pack_adjoint")(0, list(c(0, 0)), 1L, cells[1L])
+  testthat::expect_identical(tiny, list(tilde_lambda = 0, tilde_nu = list(c(0, 0))))
+  for (nc in c(1, 9, 100)) for (p in c(0, 1, 5)) {
+    scratch <- rcp_ns("reconstruction_adjoint_construction_scratch")(nc, nc, p, nc)
+    testthat::expect_lte(scratch, 128 * nc * (p + 2)^2 + 8192)
+  }
+})
+
+rcp35_dense <- function(fit) {
+  out <- fit; out["ref"] <- list(NULL)
+  for (j in seq_along(out$links)) for (arm in c("adjoint_T", "adjoint_C")) {
+    adj <- out$links[[j]][[arm]]
+    if (!is.null(adj)) out$links[[j]][[arm]] <- rcp_ns("reconstruction_expand_adjoint")(adj, length(out$cells), out$groups)
+  }
+  out$accounting$owned_entries <- unname(rcp_ns("cp04_payload")(out)["entries"])
+  out$accounting$retained_bound <- max(out$accounting$retained_bound,
+    out$accounting$borrowed_entries + out$accounting$owned_entries)
+  rcp_ns("ipw_owner_seal")(out, "imputation_backend")
+}
+
+testthat::test_that("stored structural adjoints keep scalar solve order and full-F imputation IFs", {
+  cases <- list(list(method = "reg", imp = "separate", mode = "separate", dated = FALSE, intercept = TRUE, slopes = TRUE),
+    list(method = "ipw", imp = "separate", mode = "separate", dated = FALSE, intercept = TRUE, slopes = TRUE),
+    list(method = "dr", imp = "within_cohort", mode = "pooled", dated = FALSE, intercept = TRUE, slopes = TRUE),
+    list(method = "dr", imp = "across_cohorts", mode = "separate", dated = TRUE, intercept = TRUE, slopes = TRUE),
+    list(method = "dr", imp = "separate", mode = "separate", dated = FALSE, intercept = FALSE, slopes = TRUE),
+    list(method = "dr", imp = "separate", mode = "separate", dated = FALSE, intercept = TRUE, slopes = FALSE))
+  for (spec in cases) {
+    a <- rcp_case(intercept = spec$intercept, slopes = spec$slopes, dated = spec$dated, route_kind = "imputation")
+    if (!spec$dated) {
+      frame <- get("frame_owner", a$reader$frame_ref, inherits = FALSE)
+      extra <- list(c(2, 5, 11), c(5, 11, 23))
+      a$views <- c(a$views, lapply(seq_along(extra), function(j) {
+        z <- extra[[j]]
+        rcp_ns("construct_ipw_link_view")(frame, z[1], z[2], z[3], if (j == 1L) c(23, Inf) else Inf,
+          control = a$control, link_id = paste0("compact-extra-", j), functional_key = paste0("cmpcat:compact-extra-", j))
+      }))
+    }
+    records <- list(); solve_count <- 0L
+    fit_observed <- function() {
+      pack <- rcp_ns("reconstruction_pack_adjoint"); pooled <- rcp_ns("or_pooled_wls_gram_solve"); plain <- rcp_ns("or_wls_gram_solve")
+      count <- function(original, ...) {
+        if (exists("rhs_mat", parent.frame(2L), inherits = FALSE) && exists("tilde_lambda", parent.frame(2L), inherits = FALSE))
+          solve_count <<- solve_count + 1L
+        original(...)
+      }
+      testthat::local_mocked_bindings(reconstruction_pack_adjoint = function(lambda, nu, cids, cells) {
+        value <- pack(lambda, nu, cids, cells)
+        records[[length(records) + 1L]] <<- list(dense = list(tilde_lambda = lambda, tilde_nu = nu),
+          packed = value, cids = sort(unique(as.integer(cids))))
+        value
+      }, or_pooled_wls_gram_solve = function(...) count(pooled, ...),
+      or_wls_gram_solve = function(...) count(plain, ...), .package = "cdid")
+      rcp_fit(a, spec$method, spec$imp, spec$mode)
+    }
+    fit <- fit_observed(); dense <- rcp35_dense(fit)
+    arms <- length(fit$links) * if (spec$method == "reg") 1L else 2L
+    testthat::expect_length(records, arms)
+    testthat::expect_equal(solve_count, arms * sum(vapply(fit$groups, function(g) g$p > 0L, logical(1))))
+    for (r in records) {
+      expanded <- rcp_ns("reconstruction_expand_adjoint")(r$packed, length(fit$cells), fit$groups)
+      testthat::expect_identical(expanded, r$dense)
+      if (!is.null(r$packed$cell_ids)) testthat::expect_identical(r$packed$cell_ids, r$cids)
+    }
+    if (spec$imp == "separate" && spec$slopes) testthat::expect_true(any(vapply(records,
+      function(r) identical(r$packed$kind, "compact_reconstruction_adjoint"), logical(1))))
+    testthat::expect_lte(fit$accounting$owned_entries, dense$accounting$owned_entries)
+    testthat::expect_lte(fit$accounting$owned_entries, fit$accounting$retained_bound)
+    testthat::expect_equal(rcp_point(fit), rcp_reference(a, fit), tolerance = 2e-8)
+    links <- rev(seq_along(fit$links)); N <- nrow(a$Y); actual <- old <- matrix(0, N, length(links))
+    for (first in seq.int(1L, N, by = 11L)) {
+      rows <- rev(seq.int(first, min(N, first + 10L)))
+      # Layout replay intentionally exposes ordinary original-unit rows only.
+      # Keep detailed comparisons on their supported non-layout domain.
+      detail <- is.null(fit$layout)
+      if (!detail && first == 1L) testthat::expect_error(
+        rcp_ns("evaluate_imputation_if_chunk")(fit, rows, links, "frame", TRUE),
+        class = "cdid_imputation_unsupported_error")
+      value <- rcp_ns("evaluate_imputation_if_chunk")(fit, rows, links, "frame", detail)
+      reference <- rcp_ns("evaluate_imputation_if_chunk")(dense, rows, links, "frame", detail)
+      actual[rows, ] <- value$phi; old[rows, ] <- reference$phi
+      testthat::expect_equal(value$phi, reference$phi, tolerance = 1e-10)
+      testthat::expect_equal(rcp_ns("evaluate_imputation_if_chunk")(fit, rows, links)$phi,
+        value$phi, tolerance = 1e-10)
+    }
+    testthat::expect_equal(crossprod(actual), crossprod(old), tolerance = 1e-10)
+    for (i in c(1L, N)) {
+      delta <- rep(-1, N); delta[i] <- N - 1
+      derivative <- (rcp_reference(a, fit, 1 + 1e-6 * delta) - rcp_reference(a, fit, 1 - 1e-6 * delta)) / 2e-6
+      offset <- length(rcp_point(fit)) - length(links)
+      testthat::expect_equal(actual[i, ], derivative[offset + links], tolerance = 1e-5)
+    }
+  }
+})

@@ -320,3 +320,84 @@ testthat::test_that("augmented local bases handle no intercept, intercept-only, 
   core <- rap_ns("evaluate_augmented_if_chunk")(fit, wanted, c(3L, 1L), scale = "core")
   testthat::expect_equal(core$phi, (sum(a$A) / N) * together$phi, tolerance = 1e-10)
 })
+
+# V35 keeps the old pure-core and augmented scalar adjoint checks, then only
+# stores a smaller structural result. No group solve is skipped or batched.
+testthat::test_that("augmented structural adjoints retain all scalar checks and original-F pullbacks", {
+  specs <- list(list(imp = "separate", sel = "separate", model = "pair_logit", mode = "separate", dated = FALSE),
+    list(imp = "within_cohort", sel = "across_cohorts", model = "pair_logit", mode = "pooled", dated = FALSE),
+    list(imp = "across_cohorts", sel = "within_cohort", model = "independent_period_logit", mode = "separate", dated = TRUE))
+  for (spec in specs) {
+    a <- rap_case(dated = spec$dated, extra_reference = spec$dated, route_kind = "augmented")
+    if (!spec$dated) {
+      frame <- get("frame_owner", a$reader$frame_ref, inherits = FALSE)
+      extra <- list(c(2, 5, 11), c(5, 11, 23))
+      a$views <- c(a$views, lapply(seq_along(extra), function(j) {
+        z <- extra[[j]]
+        rap_ns("construct_ipw_link_view")(frame, z[1], z[2], z[3], if (j == 1L) c(23, Inf) else Inf,
+          control = a$control, link_id = paste0("aug-compact-extra-", j), functional_key = paste0("cmpcat:aug-compact-extra-", j))
+      }))
+    }
+    records <- list(); solve_count <- 0L
+    observe <- function() {
+      pack <- rap_ns("reconstruction_pack_adjoint"); pooled <- rap_ns("or_pooled_wls_gram_solve"); plain <- rap_ns("or_wls_gram_solve")
+      count <- function(original, ...) {
+        if (exists("rhs_mat", parent.frame(2L), inherits = FALSE) && exists("tilde_lambda", parent.frame(2L), inherits = FALSE))
+          solve_count <<- solve_count + 1L
+        original(...)
+      }
+      testthat::local_mocked_bindings(reconstruction_pack_adjoint = function(lambda, nu, cids, cells) {
+        value <- pack(lambda, nu, cids, cells)
+        records[[length(records) + 1L]] <<- list(dense = list(tilde_lambda = lambda, tilde_nu = nu),
+          packed = value, cids = sort(unique(as.integer(cids))))
+        value
+      }, or_pooled_wls_gram_solve = function(...) count(pooled, ...),
+      or_wls_gram_solve = function(...) count(plain, ...), .package = "cdid")
+      rap_fit(a, spec$imp, spec$sel, spec$model, spec$mode)
+    }
+    fit <- observe(); L <- length(fit$links)
+    # Releasing dead core$links is after all2L pure-core adjoint checks; the
+    # augmented2L checks still follow in their original model/group order.
+    testthat::expect_length(records, 4L * L)
+    testthat::expect_equal(solve_count, 4 * L * sum(vapply(fit$groups, function(g) g$p > 0L, logical(1))))
+    for (r in records) testthat::expect_identical(
+      rap_ns("reconstruction_expand_adjoint")(r$packed, length(fit$cells), fit$groups), r$dense)
+    if (spec$imp == "separate") testthat::expect_true(any(vapply(records,
+      function(r) identical(r$packed$kind, "compact_reconstruction_adjoint"), logical(1))))
+    dense <- fit; dense["ref"] <- list(NULL)
+    for (j in seq_along(dense$links)) for (arm in c("adjoint_T", "adjoint_C"))
+      dense$links[[j]][[arm]] <- rap_ns("reconstruction_expand_adjoint")(dense$links[[j]][[arm]], length(dense$cells), dense$groups)
+    dense$accounting$owned_entries <- unname(rap_ns("cp04_payload")(dense)["entries"])
+    dense$accounting$retained_bound <- max(dense$accounting$retained_bound,
+      dense$accounting$borrowed_entries + dense$accounting$owned_entries)
+    dense <- rap_ns("ipw_owner_seal")(dense, "augmented_backend")
+    testthat::expect_lte(fit$accounting$owned_entries, dense$accounting$owned_entries)
+    testthat::expect_lte(fit$accounting$owned_entries, fit$accounting$retained_bound)
+    testthat::expect_equal(rap_point(fit), rap_reference(a, fit), tolerance = 2e-8)
+    N <- nrow(a$Y); links <- rev(seq_along(fit$links)); actual <- reference <- matrix(0, N, L)
+    for (first in seq.int(1L, N, by = 11L)) {
+      rows <- rev(seq.int(first, min(N, first + 10L)))
+      # Layout replay intentionally exposes ordinary original-unit rows only.
+      # Keep detailed comparisons on their supported non-layout domain.
+      detail <- is.null(fit$layout)
+      if (!detail && first == 1L) testthat::expect_error(
+        rap_ns("evaluate_augmented_if_chunk")(fit, rows, links, "frame", TRUE),
+        class = "cdid_augmented_unsupported_error")
+      value <- rap_ns("evaluate_augmented_if_chunk")(fit, rows, links, "frame", detail)
+      old <- rap_ns("evaluate_augmented_if_chunk")(dense, rows, links, "frame", detail)
+      testthat::expect_equal(value$phi, old$phi, tolerance = 1e-10)
+      testthat::expect_equal(rap_ns("evaluate_augmented_if_chunk")(fit, rows, links)$phi, value$phi, tolerance = 1e-10)
+      actual[rows, ] <- value$phi; reference[rows, ] <- old$phi
+    }
+    testthat::expect_equal(crossprod(actual), crossprod(reference), tolerance = 1e-10)
+    for (i in c(1L, N)) {
+      delta <- rep(-1, N); delta[i] <- N - 1
+      derivative <- (rap_reference(a, fit, 1 + 1e-6 * delta) - rap_reference(a, fit, 1 - 1e-6 * delta)) / 2e-6
+      offset <- length(rap_point(fit)) - L
+      testthat::expect_equal(actual[i, ], derivative[offset + links], tolerance = 1e-5)
+    }
+    broken <- fit; broken$links[[1L]]$adjoint_T$tilde_lambda[1L] <- 1e20
+    testthat::expect_error(rap_ns("evaluate_augmented_if_chunk")(broken, 1:11, 1:L),
+      class = "cdid_augmented_integrity_error")
+  }
+})

@@ -85,7 +85,7 @@ augmented_cell_rows <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows,
 # not RSS). Groups, treatments and the pure-imputation shared-OR fields reuse
 # imputation_retained_core_bound(); augmented cell, block, global q-forcing and
 # link fields are charged here with the unreduced p as the slope bound.
-augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids) {
+augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids, dense_adjoints = FALSE) {
   E <- function(x) unname(cp04_payload(x)["entries"])
   A <- function(n, nm = NULL) n + 8 + if (is.null(nm)) 0 else 9 + E(nm)
   M <- function(nr, nc, rn = NULL, cn = NULL, dn = FALSE) {
@@ -103,7 +103,7 @@ augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids) {
   nc <- length(cat$cell_specs)
   ng <- length(cat$group_specs)
   dq <- vapply(theta_ids, length, integer(1L))
-  pure <- imputation_retained_core_bound(cat, recipe, trt_recipe)
+  pure <- imputation_retained_core_bound(cat, recipe, trt_recipe, dense_adjoints = dense_adjoints)
 
   cells <- V(vapply(seq_len(nc), function(cid) {
     cs <- cat$cell_specs[[cid]]
@@ -122,7 +122,13 @@ augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids) {
   d_global <- sum(dq[sort(unique(unlist(lapply(cat$or_blocks, `[[`, "control_cell_ids"))))])
   shared <- unname(pure["shared_or"]) + sum(block_q) + A(d_global) + M(p, d_global) + 64
 
-  adjoint <- R(c(tilde_lambda = A(nc), tilde_nu = ng + 8 + ng * A(p)))
+  dense_adjoint <- R(c(tilde_lambda = A(nc), tilde_nu = ng + 8 + ng * A(p)))
+  adjoint <- function(k) {
+    g <- min(k, ng)
+    compact <- R(c(kind = E("compact_reconstruction_adjoint"), cell_ids = A(k),
+      tilde_lambda = A(k), group_ids = A(g), tilde_nu = g + 8 + g * A(p)))
+    if (dense_adjoints) dense_adjoint else min(dense_adjoint, compact)
+  }
   links <- V(vapply(cat$links, function(lk) {
     k <- length(lk$control_cell_ids)
     dg <- dq[lk$target_cell_id]
@@ -137,7 +143,7 @@ augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids) {
       g_C_gamma = A(q, trt_recipe$columns), g_Bo_gamma = A(q, trt_recipe$columns),
       g_dr_gamma = A(q, trt_recipe$columns),
       sel_T_ids = A(dg), sel_T = A(dg), sel_C_ids = A(dc), sel_C = A(dc),
-      adjoint_T = adjoint, adjoint_C = adjoint))
+      adjoint_T = adjoint(1L), adjoint_C = adjoint(k)))
   }, numeric(1L)))
 
   # The pure-imputation convention charges the shared-OR alias field twice.
@@ -478,6 +484,11 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   retained_bound <- unname(cp04_payload(obj)["entries"]) - pair_entries +
     if (separate_or) reconstruction_retained_bound(cat, recipe, augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids), theta_ids) else
       sum(augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids))
+  dense_parts <- augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids, dense_adjoints = TRUE)
+  dense_retained_work <- unname(cp04_payload(obj)["entries"]) - pair_entries +
+    if (separate_or) reconstruction_retained_bound(cat, recipe, dense_parts, theta_ids) else sum(dense_parts)
+  adjoint_peak <- reconstruction_adjoint_construction_scratch(n_cells, n_groups, p_or_raw,
+    max(c(1L, lengths(lapply(cat$links, `[[`, "control_cell_ids")))))
   d_X <- ncol(X_F)
   d_q_max <- max(c(0L, d_q))
   fit_scratch <- max(
@@ -487,6 +498,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
       128 * (p_or_raw + 2) * (d_q_max + 2) * max(1L, n_cells),
     sel_fit$accounting$fit_scratch_bound
   )
+  fit_scratch <- fit_scratch + max(0, adjoint_peak - (128 * (p_or_raw + 2)^2 * max(1L, n_cells) + 8192))
   log_n <- 1 + ceiling(log2(N_scan + 1))
   n_k <- function(ci) st$cohort_end[ci] - st$cohort_start[ci] + 1
   scan_cells <- sum(vapply(cat$cell_specs, function(cs) n_k(cs$cohort_index), numeric(1L)))
@@ -504,7 +516,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   aug_work <- 256 * (2 * scan_cells + 2 * scan_blocks + scan_links) *
     (d_X + ncol(st$Z) + d_q_max + log_n + p_trt + (p_or_raw + 2) * (p_or_raw + d_q_max + 2)) +
     256 * L * (n_groups + 1) * (p_or_raw + 2)^3
-  fit_work <- pure_work + aug_work + 128 * retained_bound
+  fit_work <- pure_work + aug_work + 128 * dense_retained_work
 
   if (separate_or) {
     extra <- reconstruction_fit_extra(cat, recipe, st)
@@ -566,6 +578,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   )
   groups <- core$groups
   treatments <- core$treatments
+  core$links <- NULL # All pure-core link/solve checks ran; augmented links own their adjoints.
 
   # Full-F cohort column maxima for the shared-OR alias verification (same rule
   # as the pure-imputation OR stage).
@@ -854,7 +867,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
 
   # S6. Links: augmented T/C numerators, unchanged normalizers, M^Delta adjoint
   # weights and merged selection loadings over the theta coordinates.
-  solve_adjoint <- function(lambda_vec, nu_list) {
+  solve_adjoint <- function(lambda_vec, nu_list, structural_cids) {
     tilde_lambda <- numeric(n_cells)
     tilde_nu <- vector("list", n_groups)
     for (gid in seq_len(n_groups)) {
@@ -878,7 +891,7 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
         tilde_nu[[gid]] <- numeric(0L)
       }
     }
-    list(tilde_lambda = tilde_lambda, tilde_nu = tilde_nu)
+    reconstruction_pack_adjoint(tilde_lambda, tilde_nu, structural_cids, cells)
   }
   zero_loadings <- function() lapply(cells, function(cf) numeric(groups[[cf$group_id]]$p))
 
@@ -1068,8 +1081,8 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
         sel_T = sel_T,
         sel_C_ids = sel_C_ids,
         sel_C = sel_C,
-        adjoint_T = solve_adjoint(lam_T_vec, nu_T_list),
-        adjoint_C = solve_adjoint(lam_C_vec, nu_C_list)
+        adjoint_T = solve_adjoint(lam_T_vec, nu_T_list, lk$target_cell_id),
+        adjoint_C = solve_adjoint(lam_C_vec, nu_C_list, lk$control_cell_ids)
       )
     )
   }
@@ -1380,8 +1393,8 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       if (is.null(obs_rec)) next
       cf <- cells[[cid]]
       gf <- groups[[cf$group_id]]
-      t_lam <- if (recipe$intercept) adj$tilde_lambda[cid] else 0.0
-      t_nu <- adj$tilde_nu[[cf$group_id]]
+      t_lam <- if (recipe$intercept) reconstruction_adjoint_lambda(adj, cid) else 0.0
+      t_nu <- reconstruction_adjoint_nu(adj, cf$group_id, gf$p)
       val <- rep(t_lam, length(obs_rec$rr))
       if (gf$p > 0L && length(t_nu) > 0L) {
         d_tilde <- if (recipe$intercept) sweep(obs_rec$d_rr, 2L, cf$mean_d, FUN = "-") else obs_rec$d_rr

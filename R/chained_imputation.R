@@ -1360,7 +1360,7 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
   # pulls back to observed-pair scores s_{i,c} * (tilde_lambda_c + tilde_d_{i,c}' tilde_nu_{r(c)})
   # where tilde_nu_r = (S_r^imp)^{-1} sum_{c in C_r} (nu_c - lambda_c * mean_d_c)
   # and tilde_lambda_c = lambda_c / mass_c (if intercept = TRUE, else 0).
-  solve_imp_adjoint <- function(lambda_vec, nu_list) {
+  solve_imp_adjoint <- function(lambda_vec, nu_list, structural_cids) {
     tilde_lambda <- numeric(n_cells)
     tilde_nu <- vector("list", n_groups)
     for (gid in seq_len(n_groups)) {
@@ -1387,7 +1387,7 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
         tilde_nu[[gid]] <- numeric(0L)
       }
     }
-    list(tilde_lambda = tilde_lambda, tilde_nu = tilde_nu)
+    reconstruction_pack_adjoint(tilde_lambda, tilde_nu, structural_cids, cells_fitted)
   }
 
   for (ell in seq_len(L_links)) {
@@ -1397,7 +1397,7 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
     nu_T <- lapply(cells_fitted, function(cf) numeric(group_fits[[cf$group_id]]$p))
     if (recipe$intercept) lam_T[lf$target_cell_id] <- 1.0
     nu_T[[lf$target_cell_id]] <- lf$d_bar_plus_j
-    links_fitted[[ell]]$adjoint_T <- solve_imp_adjoint(lam_T, nu_T)
+    links_fitted[[ell]]$adjoint_T <- solve_imp_adjoint(lam_T, nu_T, lf$target_cell_id)
 
     # 2. Control IPW arm C_ol j_direct weights (if trt_fits present)
     if (!is.null(trt_fits)) {
@@ -1408,7 +1408,7 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
         if (recipe$intercept) lam_C[cid_k] <- lam_C[cid_k] + lf$m_minus_k[idx_k]
         nu_C[[cid_k]] <- nu_C[[cid_k]] + lf$d_bar_minus_j_k[[idx_k]]
       }
-      links_fitted[[ell]]$adjoint_C <- solve_imp_adjoint(lam_C, nu_C)
+      links_fitted[[ell]]$adjoint_C <- solve_imp_adjoint(lam_C, nu_C, lf$control_cell_ids)
     }
   }
 
@@ -1579,8 +1579,8 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
       if (is.null(obs_rec)) next
       cf <- core_fit$cells[[cid]]
       gf <- core_fit$groups[[cf$group_id]]
-      t_lam <- if (recipe$intercept) adj$tilde_lambda[cid] else 0.0
-      t_nu <- adj$tilde_nu[[cf$group_id]]
+      t_lam <- if (recipe$intercept) reconstruction_adjoint_lambda(adj, cid) else 0.0
+      t_nu <- reconstruction_adjoint_nu(adj, cf$group_id, gf$p)
       val <- rep(t_lam, length(obs_rec$rr))
       if (gf$p > 0L && length(t_nu) > 0L) {
         d_tilde <- if (recipe$intercept) {
@@ -2178,7 +2178,7 @@ validate_imputation_backend <- function(backend) {
 # Use the unreduced p as an upper bound for every retained/aliased slope subset.
 # List/vector headers, attributes, names and string bytes follow cp04_payload;
 # matrix charges use dimensions only, without allocating p-by-p placeholders.
-imputation_retained_core_bound <- function(cat, recipe, trt_recipe) {
+imputation_retained_core_bound <- function(cat, recipe, trt_recipe, dense_adjoints = FALSE) {
   E <- function(x) unname(cp04_payload(x)["entries"])
   # A names attribute costs 9 + E(names). A matrix costs its entries + 8,
   # the one-slot attributes list (9), and its two-element dim vector (10).
@@ -2268,9 +2268,13 @@ imputation_retained_core_bound <- function(cat, recipe, trt_recipe) {
       n_risk_F = A(1), a_forcing = M(q, length(ts$all_cohort_indices)),
       clipping = E(ipw_clip_summary(prob = 0.5, controls = FALSE, weights = 1))))
   }, numeric(1))) else 0
-  # Every adjoint retains one cell vector and one slope vector per group,
-  # including the headers of zero-length vectors in intercept-only fits.
-  adjoint <- R(c(tilde_lambda = A(nc), tilde_nu = ng + 8 + ng * A(p)))
+  dense_adjoint <- R(c(tilde_lambda = A(nc), tilde_nu = ng + 8 + ng * A(p)))
+  adjoint <- function(k) {
+    g <- min(k, ng)
+    compact <- R(c(kind = E("compact_reconstruction_adjoint"), cell_ids = A(k),
+      tilde_lambda = A(k), group_ids = A(g), tilde_nu = g + 8 + g * A(p)))
+    if (dense_adjoints) dense_adjoint else min(dense_adjoint, compact)
+  }
   links <- V(vapply(cat$links, function(lk) {
     k <- length(lk$control_cell_ids)
     E(lk) + R(c(mu = A(1), mu_ipw = A(1), mu_or = A(1), mu_reg = A(1), mu_dr = A(1),
@@ -2281,8 +2285,8 @@ imputation_retained_core_bound <- function(cat, recipe, trt_recipe) {
       a_coeff_C_k = A(k), a_coeff_Bo_k = A(k), m_minus_k = A(k),
       d_bar_minus_j_k = k + 8 + k * A(p), denminus_gamma = A(q),
       g_C_gamma = A(q, trt_recipe$columns), g_Bo_gamma = A(q, trt_recipe$columns),
-      g_dr_gamma = A(q, trt_recipe$columns), adjoint_T = adjoint,
-      if (has_trt) c(adjoint_C = adjoint)))
+      g_dr_gamma = A(q, trt_recipe$columns), adjoint_T = adjoint(1L),
+      if (has_trt) c(adjoint_C = adjoint(k))))
   }, numeric(1)))
   # cp04_payload charges logical aliases separately, even if R shares storage.
   c(cells = cells, groups = groups, shared_or = shared,
@@ -2564,15 +2568,22 @@ fit_imputation_backend <- function(reader, link_views, control = ipw_owner_contr
   retained_bound <- unname(cp04_payload(obj)["entries"]) - pair_entries +
     if (separate_or) reconstruction_retained_bound(cat, recipe, imputation_retained_core_bound(cat, recipe, trt_recipe)) else
       sum(imputation_retained_core_bound(cat, recipe, trt_recipe))
+  dense_model_work <- if (separate_or) reconstruction_retained_bound(cat, recipe,
+    imputation_retained_core_bound(cat, recipe, trt_recipe, dense_adjoints = TRUE)) else
+      sum(imputation_retained_core_bound(cat, recipe, trt_recipe, dense_adjoints = TRUE))
+  dense_retained_work <- unname(cp04_payload(obj)["entries"]) - pair_entries + dense_model_work
+  adjoint_peak <- reconstruction_adjoint_construction_scratch(n_cells, n_groups, p_or,
+    max(c(1L, lengths(lapply(cat$links, `[[`, "control_cell_ids")))))
   fit_scratch <- 64 * B_chunk * (p_or + p_trt + G + 8) +
     64 * N_scan * (if (n_trt > 0L) (p_trt + 4) else 2) +
     128 * ((p_or + 2)^2 * max(1L, n_cells) + (p_trt + 2)^2) + 8192
+  fit_scratch <- fit_scratch + max(0, adjoint_peak - (128 * (p_or + 2)^2 * max(1L, n_cells) + 8192))
   log_n <- 1 + ceiling(log2(N_scan + 1))
   fit_work <- 256 * N_scan * (
     (n_cells + n_blocks + 1) * (p_or + 2)^2 * log_n +
       n_trt * (p_trt + 2)^2 * gc$maxit +
       L * (p_or + p_trt + G + 4)
-  ) + 128 * retained_bound
+  ) + 128 * dense_retained_work
 
   if (separate_or) {
     extra <- reconstruction_fit_extra(cat, recipe, st)
