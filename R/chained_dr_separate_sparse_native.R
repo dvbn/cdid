@@ -9,39 +9,65 @@ dr_separate_sparse_inventory <- function(B, ns, nd, nt, nl, metadata) {
   dr_separate_sparse_live(B, ns, nd, nt, nl) + 3 * B * nl + metadata
 }
 
-dr_separate_sparse_plan <- function(backend, links, B, v11) {
-  if (is.null(v11)) return(NULL)
-  validate_dr_baseline_backend(backend)
-  if (!dr_separate(backend) || isTRUE(backend$uses_selection_models) || !is.null(backend$reference_ref) ||
-      !is.null(backend$separate_complete)) return(v11)
+# Prospective admission only: no expanded date/support/model map or fixed
+# adjoint is allocated here. Counts/record copies fit the old dependency map
+# slice and also remain explicitly charged through both constructions.
+dr_separate_sparse_prospective <- function(backend, links, B, pre, counts) {
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   panel <- get("panel_owner", reader$panel_ref, inherits = FALSE); post <- panel$postings
-  pre <- dr_baseline_if_budget(backend, B, links, FALSE)
-  dr_separate_baseline_replay_check(v11, backend, links, B, pre)
   if (isTRUE(st$reference_carrier) || st$N > .Machine$integer.max || !is.double(frame$Z_a) ||
       !is.double(panel$observations$y) || !is.integer(st$a_index) || !is.integer(st$cohort_index) ||
       !is.integer(post$post_a_index) || is.object(post$post_a_index) ||
       !is.integer(post$post_obs_index) || is.object(post$post_obs_index) ||
       !is.integer(post$date_start) || !is.integer(post$date_end) ||
       length(post$post_a_index) < 1L || length(post$post_a_index) > .Machine$integer.max ||
-      length(post$post_a_index) != length(post$post_obs_index)) return(v11)
-  ns <- length(pre$sids); ng <- length(pre$gids); nt <- length(pre$tids); nl <- length(links)
-  pt <- backend$treatment_recipe$p; p <- v11$p; P <- sum(p); M <- sum(v11$support_count)
-  dates <- sort(unique(as.integer(unlist(lapply(backend$support_specs[pre$sids], function(s)
-    c(s$pair$s_calendar_index, s$pair$t_calendar_index)), use.names = FALSE))))
+      length(post$post_a_index) != length(post$post_obs_index)) return(NULL)
+  ns <- counts$ns; ng <- counts$ng; nt <- counts$nt; nl <- counts$nl; pt <- counts$pt
+  P <- sum(counts$p); M <- counts$M
+  nd <- min(length(post$date_start), 2 * ns)
   flat <- 6 * ns + 4 * ng + 3 * P + nt + pt * nt + 4 * nt + M + pt +
-    ns + length(pre$uids) + ng + nt + nl + 3 * length(dates)
+    ns + length(pre$uids) + ng + nt + nl + 3 * nd
   retained <- 4096 + 4 * flat + 16 * (ns + ng + nt + nl)
   peak <- 2048 + 8 * max(c(0, P, M, pt * nt, 4 * nt)) + 16 * (ns + ng + nt + nl)
   metadata <- 8192 + 64 * (ns + ng + nt + nl) + B * frame$id_byte_metadata$max +
     8 * sum(nchar(vapply(backend$links[links], `[[`, character(1), "link_id"), type = "bytes"))
-  reservation <- v11$reservation + retained + peak
-  small <- if (v11$min_B == B) pre else dr_baseline_if_budget(backend, v11$min_B, links, FALSE)
-  if (any(!is.finite(c(flat, reservation))) || max(c(P, M, pt * nt, ng, ns, nt, nl)) >= .Machine$integer.max ||
-      reservation + dr_separate_sparse_inventory(B, ns, length(dates), nt, nl, metadata) > pre$scratch ||
-      reservation + dr_separate_sparse_inventory(v11$min_B, ns, length(dates), nt, nl, metadata) > small$scratch ||
-      64 * flat > small$work / 4) return(v11)
+  # Two prospective count records plus their vector/list construction copies;
+  # the issued dependency maps and original output/scaling reserves survive.
+  count_reservation <- 4 * counts$count_entries
+  reservation <- counts$bound + retained + peak + count_reservation
+  small <- if (counts$min_B == B) pre else dr_baseline_if_budget(backend, counts$min_B, links, FALSE)
+  if (any(!is.finite(c(flat, reservation))) || max(c(P, M, pt * nt, ng, ns, nt, nl, nd)) >= .Machine$integer.max ||
+      reservation + dr_separate_sparse_inventory(B, ns, nd, nt, nl, metadata) > pre$scratch ||
+      reservation + dr_separate_sparse_inventory(counts$min_B, ns, nd, nt, nl, metadata) > small$scratch ||
+      64 * (flat + counts$count_entries) > small$work / 4) return(NULL)
+  list(flat = flat, retained = retained, peak = peak, metadata = metadata,
+    count_reservation = count_reservation, reservation = reservation, nd = nd)
+}
+
+dr_separate_sparse_plan <- function(backend, links, B, v11) {
+  if (is.null(v11)) return(NULL)
+  validate_dr_baseline_backend(backend)
+  if (!dr_separate(backend) || isTRUE(backend$uses_selection_models) || !is.null(backend$reference_ref) ||
+      !is.null(backend$separate_complete)) return(v11)
+  reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
+  panel <- get("panel_owner", reader$panel_ref, inherits = FALSE); post <- panel$postings
+  pre <- dr_baseline_if_budget(backend, B, links, FALSE)
+  dr_separate_baseline_replay_identity(v11, backend, links, B, pre)
+  if (!isTRUE(B == v11$B)) dr_baseline_abort("Sparse separate DR construction changed its issued chunk.", "integrity")
+  counts <- dr_separate_baseline_replay_counts(backend, links, B, pre, st$N)
+  joint <- dr_separate_sparse_prospective(backend, links, B, pre, counts)
+  if (is.null(joint)) {
+    # Only an independently legacy-funded V11 plan may escape as R fallback.
+    if (isTRUE(v11$reservation <= 16 * counts$min_B * length(links))) return(v11)
+    return(NULL)
+  }
+  ns <- counts$ns; ng <- counts$ng; nt <- counts$nt; nl <- counts$nl; pt <- counts$pt
+  p <- counts$p; P <- sum(p); M <- counts$M
+  dates <- sort(unique(as.integer(unlist(lapply(backend$support_specs[pre$sids], function(s)
+    c(s$pair$s_calendar_index, s$pair$t_calendar_index)), use.names = FALSE))))
+  if (length(dates) > joint$nd) dr_baseline_abort("Sparse separate DR date bound underestimated.", "bound")
+  retained <- joint$retained; peak <- joint$peak; metadata <- joint$metadata; reservation <- joint$reservation
   start <- as.integer(cumsum(c(1, utils::head(p, -1L))))
   span <- function(s, n) if (n) seq.int(s, length.out = n) else integer(0)
   data <- list(intercept = as.integer(backend$outcome_recipe$intercept),
@@ -80,20 +106,19 @@ dr_separate_sparse_plan <- function(backend, links, B, v11) {
     sids = pre$sids, uids = pre$uids, gids = pre$gids, tids = pre$tids,
     dates = dates, bounds = bounds, data = data, v11 = v11,
     metadata = metadata, retained_bound = retained + v11$retained_bound,
-    construction_peak = peak + v11$construction_peak, reservation = reservation, entries = 0)
+    construction_peak = peak + v11$construction_peak + joint$count_reservation, reservation = reservation, entries = 0)
   plan$entries <- unname(cp04_payload(plan)["entries"]) + 64
   if (plan$entries > plan$retained_bound) dr_baseline_abort("Sparse separate DR plan bound underestimated.", "bound")
   ipw_owner_seal(plan, "dr_separate_sparse_plan")
 }
 
 dr_separate_sparse_replay_plan <- function(backend, links, B) {
-  v11 <- dr_separate_baseline_replay_plan(backend, links, B)
-  dr_separate_sparse_plan(backend, links, B, v11)
+  dr_separate_baseline_replay_plan(backend, links, B, native = TRUE)
 }
 
 dr_separate_sparse_check <- function(plan, backend, links, B, pre) {
   or_baseline_native_check(plan, backend, links, B, pre, "dr_separate_sparse_plan", dr_baseline_abort)
-  dr_separate_baseline_replay_check(plan$v11, backend, links, B, pre)
+  dr_separate_baseline_replay_identity(plan$v11, backend, links, B, pre)
   if (!identical(plan$uids, pre$uids) || !isTRUE(plan$N == plan$v11$N) || !isTRUE(plan$min_B == plan$v11$min_B))
     dr_baseline_abort("Sparse separate DR replay differs from its issued upstream/row partition.", "integrity")
   ipw_owner_safe_sum(c(plan$reservation, dr_separate_sparse_inventory(B, length(pre$sids), length(plan$dates),

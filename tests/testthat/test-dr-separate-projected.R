@@ -183,10 +183,10 @@ testthat::test_that("frozen separate DR replay operators match V8 and detailed I
       class = "cdid_dr_baseline_integrity_error")
     testthat::expect_error(dsp("chained_full_if_chunk")(fit, rows[-1L], links, "core", plan),
       class = "cdid_dr_baseline_integrity_error")
-    # The one-row tail cannot fund the retained descriptor, so the whole
-    # replay declines without selecting a different row partition.
-    testthat::expect_null(dsp("chained_full_if_plan")(fit, links, 49L))
-    testthat::expect_null(dsp("chained_full_if_plan")(fit, 1L, 1L))
+    # The legacy R descriptor keeps its original small-tail reservation.
+    # Optional joint native funding is tested separately below.
+    testthat::expect_null(dsp("dr_separate_baseline_replay_plan")(fit, links, 49L))
+    testthat::expect_null(dsp("dr_separate_baseline_replay_plan")(fit, 1L, 1L))
   }
   foreign <- dsp_case(chunk_rows = 50L)
   testthat::expect_error(dsp("chained_full_if_chunk")(foreign$fit, rows, links, "core", plan),
@@ -547,4 +547,112 @@ testthat::test_that("projected native DR covers subsets, short tails and exact s
     vapply(fit$links[links], `[[`, character(1), "link_id"))
   testthat::expect_equal(dsp("chained_full_if_chunk")(fit, 1:16, links, "core", declined)$phi,
     expected_declined, tolerance = 1e-10)
+})
+
+# V30 changes only prospective joint admission. V11's R reservation and all
+# existing scalar/detailed/raw references and primitive guards remain above.
+testthat::test_that("joint native admission funds a four-row tail that the legacy operator cannot fund", {
+  a <- dsp_case(chunk_rows = 50L); fit <- a$fit; links <- rev(seq_along(fit$links))
+  B <- 23L; tail <- 4L
+  testthat::expect_null(dsp("dr_separate_baseline_replay_plan")(fit, links, B))
+  plan <- dsp("chained_full_if_plan")(fit, links, B)
+  testthat::expect_identical(plan$kind, "dr_separate_sparse_plan")
+  testthat::expect_equal(plan$B, B); testthat::expect_equal(plan$min_B, tail)
+  testthat::expect_gt(plan$v11$reservation, 16 * tail * length(links))
+  full_pre <- dsp("dr_baseline_if_budget")(fit, B, links, FALSE)
+  tail_pre <- dsp("dr_baseline_if_budget")(fit, tail, links, FALSE)
+  testthat::expect_silent(dsp("dr_separate_sparse_check")(plan, fit, links, B, full_pre))
+  testthat::expect_silent(dsp("dr_separate_sparse_check")(plan, fit, links, tail, tail_pre))
+  # A native-funded operator never becomes an independently admitted R plan.
+  testthat::expect_error(dsp("dr_separate_baseline_replay_check")(plan$v11, fit, links, tail, tail_pre),
+    class = "cdid_dr_baseline_integrity_error")
+  frozen <- list(groups = fit$outcome_groups, regressions = fit$regressions, treatments = fit$treatments,
+    reader_ref = fit$reader_ref)
+  actual <- matrix(0, a$N, length(links)); reference <- actual
+  for (first in seq.int(1L, a$N, by = B)) {
+    rows <- rev(seq.int(first, min(a$N, first + B - 1L)))
+    out <- dsp("chained_full_if_chunk")(fit, rows, links, "frame", plan)
+    scalar <- dsp("chained_full_if_chunk")(fit, rows, links, "frame", NULL)
+    detailed <- dsp_eval(a, rows, links, TRUE, "frame")
+    testthat::expect_equal(out, scalar, tolerance = 1e-10)
+    testthat::expect_equal(out$phi, detailed$phi, tolerance = 1e-10)
+    testthat::expect_identical(dimnames(out$phi), list(NULL, vapply(fit$links[links], `[[`, character(1), "link_id")))
+    actual[rows, ] <- out$phi; reference[rows, ] <- scalar$phi
+  }
+  testthat::expect_equal(crossprod(actual), crossprod(reference), tolerance = 1e-10)
+  numerical <- t(vapply(seq_len(a$N), function(i) {
+    direction <- rep(-1, a$N); direction[i] <- a$N - 1
+    (dsp_raw(a, 1 + 1e-6 * direction) - dsp_raw(a, 1 - 1e-6 * direction)) / 2e-6
+  }, numeric(length(links))))[, links, drop = FALSE]
+  testthat::expect_equal(actual, numerical, tolerance = 2e-6)
+  testthat::expect_equal(actual[49:50, ], numerical[49:50, ], tolerance = 2e-6)
+  testthat::expect_identical(list(groups = fit$outcome_groups, regressions = fit$regressions, treatments = fit$treatments,
+    reader_ref = fit$reader_ref), frozen)
+  testthat::expect_error(dsp("chained_full_if_chunk")(fit, 1:3, links, "frame", plan),
+    class = "cdid_dr_baseline_integrity_error")
+  testthat::expect_error(dsp("chained_full_if_chunk")(fit, 1:23, rev(links), "frame", plan),
+    class = "cdid_dr_baseline_integrity_error")
+  broken <- plan; broken$v11$or_adj[1L] <- broken$v11$or_adj[1L] + .1
+  testthat::expect_error(dsp("chained_full_if_chunk")(fit, 1:23, links, "frame", broken),
+    class = "cdid_dr_baseline_integrity_error")
+})
+
+testthat::test_that("joint prospective full/tail boundaries decline before operators or native maps exist", {
+  a <- dsp_case(chunk_rows = 50L); fit <- a$fit; links <- rev(seq_along(fit$links)); B <- 23L
+  budget <- dsp("dr_baseline_if_budget"); prospective <- dsp("dr_separate_sparse_prospective")
+  full <- budget(fit, B, links, FALSE); tail <- budget(fit, 4L, links, FALSE)
+  counts <- dsp("dr_separate_baseline_replay_counts")(fit, links, B, full, a$N)
+  admitted <- prospective(fit, links, B, full, counts)
+  testthat::expect_true(is.list(admitted))
+  testthat::expect_lte(unname(dsp("cp04_payload")(counts)["entries"]), counts$count_entries)
+  testthat::expect_equal(admitted$count_reservation, 4 * counts$count_entries)
+  inventory <- dsp("dr_separate_sparse_inventory")
+  need <- function(n) admitted$reservation + inventory(n, counts$ns, admitted$nd, counts$nt, counts$nl, admitted$metadata)
+  full_need <- need(B); tail_need <- need(4L)
+  probe <- function(full_delta, tail_delta) {
+    exact <- full; exact$scratch <- full_need + full_delta
+    testthat::local_mocked_bindings(dr_baseline_if_budget = function(backend, B, links, details = FALSE) {
+      out <- budget(backend, B, links, details)
+      if (B == 4L) out$scratch <- tail_need + tail_delta
+      out
+    }, .package = "cdid")
+    prospective(fit, links, B, exact, counts)
+  }
+  testthat::expect_true(is.list(probe(0, 0)))
+  testthat::expect_null(probe(-1, 0))
+  testthat::expect_null(probe(0, -1))
+  # The true full/tail joint-cap failure is exercised through the issued
+  # constructor. Neither fixed adjoints nor native maps may be built first.
+  decline <- function(fail_tail) {
+    testthat::local_mocked_bindings(dr_baseline_if_budget = function(backend, B, links, details = FALSE) {
+      out <- budget(backend, B, links, details)
+      if (fail_tail && B == 4L) out$scratch <- tail_need - 1
+      if (!fail_tail && B == 23L) out$scratch <- full_need - 1
+      out
+    }, or_outcome_block_fit = function(...) stop("Operator allocated before joint decline."),
+    dr_separate_sparse_plan = function(...) stop("Native maps allocated before joint decline."), .package = "cdid")
+    dsp("chained_full_if_plan")(fit, links, 23L)
+  }
+  testthat::expect_null(decline(FALSE)); testthat::expect_null(decline(TRUE))
+  # An eligibility-only posting layout probe borrows the real owners but
+  # substitutes an unsupported posting type locally, without mutating seals.
+  unsupported <- prospective; env <- new.env(parent = environment(unsupported))
+  env$get <- function(x, envir, inherits = TRUE) {
+    value <- base::get(x, envir = envir, inherits = inherits)
+    if (identical(x, "panel_owner")) value$postings$post_a_index <- as.double(value$postings$post_a_index)
+    value
+  }
+  environment(unsupported) <- env
+  testthat::expect_null(unsupported(fit, links, B, full, counts))
+  fallback <- function(chunk) {
+    testthat::local_mocked_bindings(dr_separate_sparse_prospective = unsupported,
+      dr_separate_sparse_plan = function(...) stop("Unsupported native maps were constructed."), .package = "cdid")
+    dsp("chained_full_if_plan")(fit, links, chunk)
+  }
+  testthat::expect_null(fallback(23L))
+  legacy <- fallback(50L)
+  testthat::expect_identical(legacy$kind, "dr_separate_baseline_replay_plan")
+  testthat::expect_silent(dsp("dr_separate_baseline_replay_check")(legacy, fit, links, 50L, budget(fit, 50L, links, FALSE)))
+  testthat::expect_equal(dsp("chained_full_if_chunk")(fit, 1:50, links, "frame", legacy)$phi,
+    dsp_eval(a, 1:50, links)$phi, tolerance = 1e-10)
 })

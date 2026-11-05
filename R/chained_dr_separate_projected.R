@@ -6,24 +6,13 @@ dr_separate_plan_range <- function(start, count) {
   if (count) seq.int(start, length.out = count) else integer(0L)
 }
 
-# Fixed operators of one already issued replay, never row data or fit copies.
-# Count the retained descriptors AND construction peak before allocating them.
-# Half of the old 32*B*nl allowance still covers phi/projected/scaled buffers;
-# all other original reservations remain intact. The smallest issued tail
-# protects the plan's lifetime between chunks as well as each full chunk.
-dr_separate_baseline_replay_plan <- function(backend, links, B) {
-  validate_dr_baseline_backend(backend)
-  if (!dr_separate(backend) || isTRUE(backend$uses_selection_models) ||
-      !is.null(backend$reference_ref) || !is.null(backend$separate_complete)) return(NULL)
-  if (!or_baseline_native_index(links, length(backend$links)) || !gmm_scalar_numeric(B) ||
-      B < 1 || B != floor(B) || B > backend$control$max_chunk_rows)
-    dr_baseline_abort("Invalid separate DR replay link batch or chunk rows.")
-  reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
-  N <- reader$state$N
-  if (B > N) return(NULL)
-  pre <- dr_baseline_if_budget(backend, B, links, FALSE)
-  # Descriptors carry integer identities, never replicated source labels.
-  if (any(vapply(pre[c("sids", "uids", "gids", "tids")], function(x) !is.null(names(x)), logical(1L)))) return(NULL)
+# The original count formulas, before any fixed operators are constructed.
+# Their scalar/vector records fit the dependency-map reservation already
+# issued by dr_separate_if_envelope; native admission also counts them while
+# either construction is live.
+dr_separate_baseline_replay_counts <- function(backend, links, B, pre, N) {
+  count_entries <- 2048 + 32 * (length(links) + length(pre$sids) + length(pre$gids) + length(pre$tids))
+  ipw_owner_safe_sum(count_entries, pre$scratch, "separate DR replay count metadata")
   nl <- length(links); ns <- length(pre$sids); ng <- length(pre$gids); nt <- length(pre$tids)
   pt <- backend$treatment_recipe$p
   p <- unname(vapply(backend$outcome_groups$groups[pre$gids], function(g) length(g$keep), integer(1L)))
@@ -43,7 +32,41 @@ dr_separate_baseline_replay_plan <- function(backend, links, B) {
     2 * max(c(0, R, C, M, I, pt * nt))
   tail <- N %% B; min_B <- if (tail) min(B, tail) else B
   bound <- retained + peak
-  if (!is.finite(bound) || bound > 16 * min_B * nl) return(NULL)
+  list(nl = nl, ns = ns, ng = ng, nt = nt, pt = pt, p = p,
+    control_n = control_n, model_b = model_b, model_n = model_n,
+    R = R, C = C, M = M, I = I, per_block = per_block,
+    retained = retained, peak = peak, min_B = min_B, bound = bound,
+    count_entries = count_entries)
+}
+
+# Fixed operators of one already issued replay, never row data or fit copies.
+# Count the retained descriptors AND construction peak before allocating them.
+# Half of the old 32*B*nl allowance still covers phi/projected/scaled buffers;
+# all other original reservations remain intact. The smallest issued tail
+# protects the plan's lifetime between chunks as well as each full chunk.
+dr_separate_baseline_replay_plan <- function(backend, links, B, native = FALSE) {
+  validate_dr_baseline_backend(backend)
+  if (!identical(native, isTRUE(native))) dr_baseline_abort("Invalid private replay funding mode.")
+  if (!dr_separate(backend) || isTRUE(backend$uses_selection_models) ||
+      !is.null(backend$reference_ref) || !is.null(backend$separate_complete)) return(NULL)
+  if (!or_baseline_native_index(links, length(backend$links)) || !gmm_scalar_numeric(B) ||
+      B < 1 || B != floor(B) || B > backend$control$max_chunk_rows)
+    dr_baseline_abort("Invalid separate DR replay link batch or chunk rows.")
+  reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
+  N <- reader$state$N
+  if (B > N) return(NULL)
+  pre <- dr_baseline_if_budget(backend, B, links, FALSE)
+  # Descriptors carry integer identities, never replicated source labels.
+  if (any(vapply(pre[c("sids", "uids", "gids", "tids")], function(x) !is.null(names(x)), logical(1L)))) return(NULL)
+  counts <- dr_separate_baseline_replay_counts(backend, links, B, pre, N)
+  joint <- if (native) dr_separate_sparse_prospective(backend, links, B, pre, counts) else NULL
+  nl <- counts$nl; ns <- counts$ns; ng <- counts$ng; nt <- counts$nt; pt <- counts$pt
+  p <- counts$p; control_n <- counts$control_n; model_b <- counts$model_b; model_n <- counts$model_n
+  R <- counts$R; C <- counts$C; M <- counts$M; I <- counts$I; per_block <- counts$per_block
+  retained <- counts$retained; peak <- counts$peak; min_B <- counts$min_B; bound <- counts$bound
+  rm(counts)
+  # A failed optional prospective check keeps the exact old R admission.
+  if (is.null(joint) && (!is.finite(bound) || bound > 16 * min_B * nl)) return(NULL)
   starts <- function(n) cumsum(c(1, utils::head(n, -1L)))
   model_order <- order(model_b, seq_along(model_b))
   r_n <- p[model_b]; c_n <- control_n[model_b]
@@ -104,14 +127,31 @@ dr_separate_baseline_replay_plan <- function(backend, links, B) {
     dr_baseline_abort("Replay support descriptors differ from the frozen model supports.", "integrity")
   plan$entries <- unname(cp04_payload(plan)["entries"]) + 64
   if (plan$entries > retained) dr_baseline_abort("Separate DR replay plan bound underestimated.", "bound")
-  ipw_owner_seal(plan, "dr_separate_baseline_replay_plan")
+  plan <- ipw_owner_seal(plan, "dr_separate_baseline_replay_plan")
+  if (is.null(joint)) return(plan)
+  # No native-only operator can escape as an R fallback. All eligibility and
+  # counts were admitted before the operators above; any later underestimate
+  # is an error, never a second producer after construction/execution.
+  out <- dr_separate_sparse_plan(backend, links, B, plan)
+  if (is.null(out) || !identical(out$kind, "dr_separate_sparse_plan"))
+    dr_baseline_abort("The admitted joint separate DR construction changed its inventory.", "bound")
+  out
+}
+
+dr_separate_baseline_replay_identity <- function(plan, backend, links, B, pre) {
+  or_baseline_native_check(plan, backend, links, B, pre,
+    "dr_separate_baseline_replay_plan", dr_baseline_abort)
+  N <- get("cp04_reader", backend$reader_ref, inherits = FALSE)$state$N
+  tail <- N %% plan$B; min_B <- if (tail) min(plan$B, tail) else plan$B
+  if (!identical(plan$uids, pre$uids) || !isTRUE(plan$N == N) || !isTRUE(plan$min_B == min_B) ||
+      !isTRUE(B == plan$B || B == plan$min_B))
+    dr_baseline_abort("The separate DR replay plan differs from its issued row partition or upstream IDs.", "integrity")
+  invisible(plan)
 }
 
 dr_separate_baseline_replay_check <- function(plan, backend, links, B, pre) {
-  or_baseline_native_check(plan, backend, links, B, pre,
-    "dr_separate_baseline_replay_plan", dr_baseline_abort)
-  if (!identical(plan$uids, pre$uids) || !isTRUE(plan$N == get("cp04_reader", backend$reader_ref, inherits = FALSE)$state$N) ||
-      !isTRUE(B == plan$B || B == plan$min_B) || !isTRUE(plan$reservation <= 16 * B * length(links)))
+  dr_separate_baseline_replay_identity(plan, backend, links, B, pre)
+  if (!isTRUE(plan$reservation <= 16 * B * length(links)))
     dr_baseline_abort("The separate DR replay plan differs from its issued row partition or upstream IDs.", "integrity")
   invisible(plan)
 }
