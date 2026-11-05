@@ -64,7 +64,7 @@ reconstruction_stage1_forward_plan <- function(backend, B, gids, X_F, n_links, d
 
 reconstruction_score_cache_plan <- function(backend, B, cids, X_F, n_links, reserved_entries = 0) {
   declined <- list(enabled = FALSE, cids = integer(0L), entries = 0)
-  if (!reconstruction_separate(backend$shared_or) || !length(cids) || !is.null(rownames(X_F)))
+  if (!length(cids) || !is.null(rownames(X_F)))
     return(declined)
   rows <- min(B, backend$control$max_chunk_rows)
   # The unchanged envelope reserves 16*B*(4*nl) = 64*B*nl for row/link
@@ -73,6 +73,9 @@ reconstruction_score_cache_plan <- function(backend, B, cids, X_F, n_links, rese
   # at most three such matrices. Leave 32*B*nl for all of these; detailed
   # per-link records and per-link vectors keep their separate old charges.
   # Cache records, including names/headers, fit entirely in the other half.
+  # Generic IPW/pooled envelopes retain larger row/link terms; the same slice
+  # fits there. Their unchanged global-cell metadata funds the full position
+  # map, selected-slot bookkeeping and planning vectors before any reads.
   # Use the core-subchunk cap even when the envelope's B is layout-expanded.
   funding <- 32 * rows * n_links - reserved_entries
   if (funding <= 1024) return(declined)

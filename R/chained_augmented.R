@@ -1246,7 +1246,10 @@ augmented_if_envelope <- function(backend, B, links = seq_along(backend$links), 
   selection_pre <- selection_if_budget(backend$selection_backend, B, sets$q_ids, details = details)
   scratch <- scratch + selection_pre$output + selection_pre$scratch
   work <- work + selection_pre$work
-  c(sets, list(output = output, scratch = scratch, work = work))
+  pre <- c(sets, list(output = output, scratch = scratch, work = work))
+  if (!details) pre$score_cache <- reconstruction_score_cache_plan(
+    backend, B, sets$cids, augmented_backend_X_F(backend), nl)
+  pre
 }
 
 augmented_if_budget <- function(backend, B, links = seq_along(backend$links), details = FALSE) {

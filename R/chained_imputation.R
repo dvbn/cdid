@@ -2714,7 +2714,7 @@ imputation_if_envelope <- function(backend, B, links = seq_along(backend$links),
       nt * ((p_trt + 2)^2 + p_trt * (G + 4)) +
       G + nl * (nc + 1) * (p_or + p_trt + G + 8)
   ) + 64 * metadata
-  list(
+  pre <- list(
     cids = sets$cids,
     gids = sets$gids,
     bids = sets$bids,
@@ -2723,6 +2723,9 @@ imputation_if_envelope <- function(backend, B, links = seq_along(backend$links),
     scratch = scratch,
     work = work
   )
+  if (!details) pre$score_cache <- reconstruction_score_cache_plan(
+    backend, B, sets$cids, imputation_backend_X_F(backend, reader), nl)
+  pre
 }
 
 imputation_if_budget <- function(backend, B, links = seq_along(backend$links), details = FALSE) {
