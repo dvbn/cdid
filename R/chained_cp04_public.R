@@ -340,13 +340,15 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
     nuisance_views = list(), fitted_views = list())
 }
 
-# The static baseline OR/DR adapter embeds X=max(0,E0-O) in borrowed_entries,
+# The static legacy CP04 and OR/DR adapters embed X=max(0,E0-O) in borrowed_entries,
 # where E0 is this registry's pipeline prefix and O the reader's borrowed owners.
 # Bind that exact lineage once. Standalone CP04 budgets never use this record.
 cp04_registry_memory_accounting <- function(prefix, reader, backend) {
   if (is.null(backend) || !inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline", "cdid_or_corollary1",
-        "cdid_dr_corollary1", "cdid_imputation_backend", "cdid_augmented_backend")) ||
+        "cdid_dr_corollary1", "cdid_imputation_backend", "cdid_augmented_backend", "cdid_cp04_corollary1")) ||
       !is.null(backend$reference_ref)) return(NULL)
+  if (inherits(backend, "cdid_cp04_corollary1") &&
+      (isTRUE(backend$uses_selection_models) || !is.null(backend$layout))) return(NULL)
   if (!inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline")))
     return(cp04_registry_field_memory_accounting(prefix, reader, backend))
   if (inherits(backend, "cdid_or_baseline")) validate_or_baseline_backend(backend) else validate_dr_baseline_backend(backend)

@@ -621,6 +621,7 @@ fit_cp04_corollary1 <- function(reader, link_views, control, glm_control,
     universe = st$universe, transport_justification = st$justification)
   obj <- structure(c(state, list(reader_ref = reader$ref, control = ctrl,
     accounting = list(owned_entries = 0, character_bytes = 0, borrowed_entries = base,
+      retained_external_entries = retained_external_entries,
       retained_bound = retained_bound, fit_scratch_bound = scratch, work_ops_bound = work,
       n_selection_fits = length(ss), n_treatment_fits = length(ts),
       full_F_masks_per_model = 0L, full_F_by_link_IF_retained = FALSE,

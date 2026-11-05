@@ -170,7 +170,7 @@ cp04_public_diagnostic_check <- function(out, b, bound) {
   out
 }
 
-# Exact source decomposition for static reconstruction and conditional OR/DR.
+# Exact source decomposition for static legacy CP04, reconstruction and OR/DR.
 # Reconstruction's base_entries adds pair payload and removes that SAME term
 # from borrowed_entries; reader/design reservations and X remain untouched.
 cp04_registry_field_memory_sources <- function(reader, b) {
@@ -179,8 +179,10 @@ cp04_registry_field_memory_sources <- function(reader, b) {
     if (inherits(b, "cdid_imputation_backend")) validate_imputation_backend(b) else
     if (inherits(b, "cdid_or_corollary1")) validate_or_corollary1_backend(b) else
     if (inherits(b, "cdid_dr_corollary1")) validate_dr_corollary1_backend(b) else
+    if (inherits(b, "cdid_cp04_corollary1")) validate_cp04_backend(b) else
       cp04_abort("Registry field-prefix accounting requires a supported fitted backend.", "integrity")
-  if (!identical(b$reader_ref, reader$ref) || !is.null(b$reference_ref) || !is.null(b$layout))
+  if (!identical(b$reader_ref, reader$ref) || !is.null(b$reference_ref) || !is.null(b$layout) ||
+      (inherits(b, "cdid_cp04_corollary1") && isTRUE(b$uses_selection_models)))
     cp04_abort("Registry field-prefix accounting requires its static reader and backend.", "integrity")
   reconstruction <- inherits(b, c("cdid_imputation_backend", "cdid_augmented_backend"))
   d <- if (is.null(b$design_ref)) NULL else get("imputation_design_owner", b$design_ref, inherits = FALSE)
