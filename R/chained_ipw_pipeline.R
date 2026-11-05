@@ -6107,7 +6107,7 @@ run_chained_ipw_pipeline <- function(
       "CP04 fitting/covariance/GMM/auxiliary cumulative work")
     # CP08 retained moment IF: admitted only after every original charge above,
     # against the complete simultaneous envelope counted once more with the
-    # final diagnostic copy and the auxiliary reporting output envelope, and
+    # final diagnostic copy and any concurrent auxiliary output envelope, and
     # only when neither original row partition would change. Declined, the
     # ordinary stream below runs exactly as before; nothing is allocated here.
     cp04_retained <- cp04_retained_if_reserve(active_backend, cp04_used, point_preflight$chunk_rows, cp04_work,
@@ -6118,7 +6118,8 @@ run_chained_ipw_pipeline <- function(
       live = ipw_owner_safe_sum(c(combined_live, final_diagnostic_copy_entries,
         max(0, ipw_owner_safe_sum(c(cp04_work$peak, active_backend$accounting$owned_entries,
           active_backend$accounting$borrowed_entries)) - point_preflight$producer_workspace_entries),
-        8 * n_total * (length(aux_sel_bp) + nrow(ledger)))),
+        cp04_retained_if_auxiliary_output_entries(active_backend, transfer_requested,
+          n_total, length(aux_sel_bp), nrow(ledger)))),
       work = combined_work, control = active_backend$control)
     if (!is.null(cp04_retained)) combined_work <- ipw_owner_safe_sum(c(combined_work, cp04_retained$work),
       active_backend$control$max_work_ops, "CP04 retained moment IF fill and slice work")

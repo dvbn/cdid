@@ -1465,6 +1465,26 @@ cp04_retained_if_auxiliary_map <- function(store, backend, backend_ids) {
   col
 }
 
+# The existing backend gate for extending a whole-lifetime store through
+# auxiliary reporting. Share it with the earlier store-lifetime reservation:
+# expanding this gate must restore that phase's future-output charge too.
+cp04_retained_if_auxiliary_eligible <- function(backend) {
+  is.list(backend) && inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline", "cdid_ipw_raw_backend")) &&
+    is.null(backend$reference_ref) && !is.null(backend$complete_support)
+}
+
+# Static conditional backends cannot extend their store through auxiliary
+# reporting under the gate above. The unextended store is released after GMM,
+# before target IF transport or auxiliary output allocation, so that future
+# output is not concurrent with it. Every other reservation stays unchanged.
+cp04_retained_if_auxiliary_output_entries <- function(backend, numerical_transfer, N, n_auxiliary, n_ledger) {
+  if (!isTRUE(numerical_transfer) && is.list(backend) &&
+      inherits(backend, c("cdid_cp04_corollary1", "cdid_or_corollary1", "cdid_dr_corollary1")) &&
+      is.null(backend$reference_ref) && is.null(backend$layout) &&
+      !cp04_retained_if_auxiliary_eligible(backend)) return(0)
+  8 * N * (n_auxiliary + n_ledger)
+}
+
 # Admit the auxiliary extension of a RESERVED (unallocated) store or leave it
 # unextended (NULL). `backend_ids` are the requested reporting columns' backend
 # indices in their reporting order; `retained` is the auxiliary replay's
@@ -1481,9 +1501,8 @@ cp04_retained_if_auxiliary_admit <- function(store, backend, backend_ids, retain
   if (!is.environment(store) || !identical(store$kind, "cp04_retained_if") || !identical(store$state, "reserved") ||
       (exists("phase", store, inherits = FALSE) && !is.null(store$phase)) ||
       !is.null(store$auxiliary)) return(NULL)
-  if (!is.list(backend) || !inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline", "cdid_ipw_raw_backend")) ||
-      !identical(store$backend_ref, backend$ref) || !is.null(backend$reference_ref) ||
-      is.null(backend$complete_support)) return(NULL)
+  if (!cp04_retained_if_auxiliary_eligible(backend) ||
+      !identical(store$backend_ref, backend$ref)) return(NULL)
   if (!is.numeric(backend_ids) || is.object(backend_ids) || !is.null(dim(backend_ids)) || !length(backend_ids) ||
       anyNA(backend_ids) || any(backend_ids != floor(backend_ids)) || any(backend_ids < 1) ||
       any(backend_ids > length(backend$links)) || any(backend_ids %in% store$links)) return(NULL)
