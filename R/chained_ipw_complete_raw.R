@@ -33,11 +33,13 @@ ipw_pipeline_complete_raw_capacity <- function(metadata, frame, ctrl, aux,
       fc$max_matrix_entries, pc$max_matrix_entries)
     B <- min(N, own$max_chunk_rows, pc$max_chunk_rows)
     if (N > min(fc$max_observer_units, pc$max_observer_units)) return(list(admitted = FALSE))
-    chars <- ipw_fitted_view_char_bytes(list(colnames(frame$Z_a), as.character(frame$a_cohorts),
-      paste0("link:r", seq_len(M)), metadata$row_mapping$functional_key), fc)$charged_slots
-    # The exact existing raw registry construction-table and mask reservations.
-    tables <- ipw_owner_safe_product(D,
-      20480 + 16 * p^2 + 16 * p * C + 256 * (p + C + 1) + 4 * chars)
+    chars <- ipw_raw_record_char_inventory(metadata, frame, aux, fc,
+      retained = max(retained, ipw_point_view_owner_entries(frame, panel)), envelope = own, work = work)
+    # Keep numeric tables and factor 4; local character roles replace the
+    # all-catalog-strings charge repeated for every D record.
+    tables <- ipw_owner_safe_sum(c(ipw_owner_safe_product(D,
+      20480 + 16 * p^2 + 16 * p * C + 256 * (p + C + 1)),
+      ipw_owner_safe_product(4, chars$total_record_slots), chars$metadata_entries))
     op_rows <- as.double(tabulate(match(metadata$catalog$rows$operator_id,
       unique(metadata$catalog$rows$operator_id))))
     masks <- 16 * (M + 1) + length(metadata$catalog$spec$cohorts)
@@ -71,7 +73,8 @@ ipw_pipeline_complete_raw_capacity <- function(metadata, frame, ctrl, aux,
     snapshot <- unname(cp04_payload(list(owner_snapshot = list(frame = NULL, panel = NULL)))["entries"])
     persistent <- ipw_owner_safe_sum(c(retained, tables, masks, splits, cert,
       descriptor$retained_entries, snapshot))
-    construction <- ipw_owner_safe_sum(c(persistent, descriptor$scratch_entries, leaf))
+    construction <- max(ipw_owner_safe_sum(c(persistent, descriptor$scratch_entries, leaf)),
+      ipw_owner_safe_sum(c(max(retained, ipw_point_view_owner_entries(frame, panel)), chars$scratch_entries)))
     # The returned backend/diagnostics are a subset of the construction tables.
     # Retain that entire conservative inventory here, then compose every
     # prospective consumer explicitly, including GMM, D5 and auxiliary output.
@@ -110,12 +113,13 @@ ipw_pipeline_complete_raw_capacity <- function(metadata, frame, ctrl, aux,
     stream <- 128 * N * (1 + ceiling(log2(C + 1))) +
       128 * ceiling(N / B) * (1 + ceiling(log2(N + 1)))
     scans <- 16 * (D + T * (T - 1) / 2 + Q * U) * stream
-    extra_work <- scans + U * fp$work_ops_bound + D * pp$work_ops_bound + cert_work +
+    extra_work <- 2 * chars$work_ops_bound + scans + U * fp$work_ops_bound + D * pp$work_ops_bound + cert_work +
       descriptor$work_ops_bound + gp$covariance_strategy_work_ops +
       8 * ceiling(N / B) * env$work + 64 * N * (L^2 + J_bound^2 + 1)
     ipw_owner_safe_sum(c(work, extra_work), own$max_work_ops, "optional complete raw-IPW whole-path work")
     list(admitted = TRUE, peak_entries = max(construction, peak),
       persistent_entries = persistent, construction_entries = construction,
-      consumer_entries = consumers, retained_links_upper = L, mandatory_work_upper = work + extra_work)
+      consumer_entries = consumers, retained_links_upper = L, mandatory_work_upper = work + extra_work,
+      character_inventory = chars, construction_table_entries_bound = tables)
   }, cdid_ipw_owner_bound_error = capacity_decline, cdid_gmm_bound_error = capacity_decline)
 }

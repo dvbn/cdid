@@ -928,19 +928,23 @@ build_ipw_raw_backend_registry <- function(
   Q_bound <- if (is.null(aux_spec)) 0L else length(aux_spec$descriptors)
   D_bound <- as.double(M) + Q_bound
   C_bound <- as.double(length(f_owner$a_cohorts))
-  char_bound <- ipw_fitted_view_char_bytes(
-    list(colnames(f_owner$Z_a), as.character(f_owner$a_cohorts),
-         paste0("link:r", seq_len(M)), metadata_obj$row_mapping$functional_key), fit_ctrl)$charged_slots
-  table_entries_bound <- ipw_owner_safe_product(D_bound,
-    20480 + 16 * p * p + 16 * p * C_bound + 256 * (p + C_bound + 1) + 4 * char_bound,
-    label = "raw-IPW support/model/link and diagnostic tables")
   construction_base <- max(retained_pipeline_entries, ipw_point_view_owner_entries(f_owner, p_owner))
+  character_inventory <- ipw_raw_record_char_inventory(metadata_obj, f_owner, aux_spec, fit_ctrl,
+    retained = construction_base, envelope = own_ctrl, work = external_work_ops)
+  table_entries_bound <- ipw_owner_safe_sum(c(ipw_owner_safe_product(D_bound,
+    20480 + 16 * p * p + 16 * p * C_bound + 256 * (p + C_bound + 1)),
+    ipw_owner_safe_product(4, character_inventory$total_record_slots), character_inventory$metadata_entries),
+    label = "raw-IPW support/model/link and diagnostic tables")
   construction_retained <- ipw_owner_safe_sum(c(construction_base, table_entries_bound, owner_snapshot_entries),
     min(own_ctrl$max_retained_entries, own_ctrl$max_matrix_entries),
     "raw-IPW construction owners, pipeline and compact tables")
-  numerical_work <- 0
+  # Fund both possible inventory calls (optional guard and this constructor).
+  # Standalone/incomplete callers keep the same conservative work allowance.
+  numerical_work <- ipw_owner_safe_product(2, character_inventory$work_ops_bound)
+  ipw_owner_safe_sum(c(external_work_ops, numerical_work), own_ctrl$max_work_ops,
+    "raw-IPW prefix and character inventory work")
   retained_failure_entries <- 0
-  construction_peak <- construction_retained
+  construction_peak <- max(construction_retained, construction_base + character_inventory$scratch_entries)
   C_all <- length(metadata_obj$catalog$spec$cohorts)
   op_rows <- as.double(tabulate(match(cat_rows$operator_id, unique(cat_rows$operator_id))))
   split_bound <- sum(op_rows * (op_rows - 1) / 2)
@@ -1846,7 +1850,7 @@ build_ipw_raw_backend_registry <- function(
   })
   owned_entries <- unname(cp04_payload(list(
     pairs_compact, support_specs, supports, treatment_specs, treatments, backend_links
-  ))["entries"]) + 256 + owner_snapshot_entries
+  ))["entries"]) + 256 + owner_snapshot_entries + character_inventory$metadata_entries
   borrowed_entries <- ipw_point_view_owner_entries(f_owner, p_owner)
   work_charged <- ipw_owner_safe_sum(c(scan_work, descriptor_charge$work_ops_bound, numerical_work))
   composed_work <- ipw_owner_safe_sum(
@@ -1896,6 +1900,7 @@ build_ipw_raw_backend_registry <- function(
         owner_snapshot_entries = owner_snapshot_entries,
         construction_peak_entries = construction_peak,
         construction_table_entries_bound = table_entries_bound,
+        construction_character_inventory = character_inventory,
         simultaneous_scratch_bound = construction_peak - construction_retained,
         work_ops_bound = composed_work,
         full_n_masks_retained = FALSE,

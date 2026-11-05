@@ -1338,3 +1338,106 @@ test_that("coarse raw observers decline unsupported indices and preserve count f
   expect_identical(reg[["C_gmm_ipw_raw_observer_collect"]]$numParameters, 10L)
   expect_identical(address, getNativeSymbolInfo("C_gmm_ipw_raw_observer_collect", PACKAGE = dll)$address)
 })
+
+# V29: independent byte/cardinality witnesses for local raw record metadata.
+test_that("raw character inventory charges local Unicode/auxiliary roles and scales linearly in D", {
+  ctrl <- make_d93_test_pipeline_control()
+  long_key <- paste0("catalog:", paste(rep("\u03bb\u6f22", 700L), collapse = ""))
+  own_id <- paste0("own:", paste(rep("\u00e9", 180L), collapse = ""))
+  keys <- c(rep("same-key", 36L), long_key)
+  meta <- list(catalog = list(rows = data.frame(operator_id = rep(1:6, length.out = length(keys)))),
+    row_mapping = list(functional_key = keys, link_id = own_id, nuisance_id = "borrowed:nuisance"))
+  Z <- matrix(0, 1L, 2L, dimnames = list(NULL, c("(Intercept)", paste0("x_", own_id))))
+  frame <- list(Z_a = Z, a_cohorts = c(2, 3, 4, Inf))
+  aux <- list(descriptors = list(
+    list(g = 2, K = c(3, 4, Inf), link_id = paste0("aux:", own_id)),
+    list(g = 3, K = c(4, Inf), nuisance_id = paste0("aux-only:", own_id), functional_key = "custom:aux")))
+  inv <- ipw_raw_record_char_inventory(meta, frame, aux, ctrl$fitted_control)
+  bytes <- function(x) sum(nchar(x, type = "bytes"))
+  common <- bytes(colnames(Z)) + bytes(c("g", "k_1", "k_2", "k_3")) + bytes(as.character(frame$a_cohorts))
+  scalar_ids <- c(own_id, "borrowed:nuisance", vapply(aux$descriptors, function(d) {
+    x <- c(d$link_id, d$nuisance_id, d$functional_key); if (length(x)) x[which.max(nchar(x, type = "bytes"))] else ""
+  }, character(1)))
+  id_max <- max(128, nchar(scalar_ids, type = "bytes"))
+  # Each actual reporting key includes every K value, not only its auxiliary j.
+  aux_key_upper <- vapply(aux$descriptors, function(d) {
+    bytes("reporting_operator:") + bytes(as.character(d$g)) + bytes(as.character(d$K)) + max(1, length(d$K))
+  }, numeric(1))
+  key_max <- max(nchar(keys, type = "bytes"), aux_key_upper, nchar(scalar_ids[-1L], type = "bytes"))
+  expected_bytes <- 128 * common + 16 * id_max + 16 * key_max
+  expect_equal(inv$records, length(keys) + length(aux$descriptors))
+  expect_equal(inv$common_name_bytes, common)
+  expect_equal(inv$max_id_bytes, id_max)
+  expect_equal(inv$max_key_bytes, key_max)
+  expect_equal(inv$per_record_source_bytes, expected_bytes)
+  expect_equal(inv$per_record_slots, ceiling(expected_bytes / 2) + 32)
+  expect_equal(inv$total_record_slots, inv$records * (ceiling(expected_bytes / 2) + 32))
+  expect_gt(bytes(long_key), nchar(long_key, type = "chars"))
+  for (d in aux$descriptors) {
+    actual_key <- paste0("reporting_operator:", gsub(" ", "", paste(d$g, paste(d$K, collapse = ","), sep = ":")))
+    expect_lte(bytes(actual_key), inv$max_key_bytes)
+  }
+  expect_lte(unname(cp04_payload(list(guard = inv, construction = inv))["entries"]), inv$metadata_entries)
+  larger <- meta
+  larger$catalog$rows <- rbind(meta$catalog$rows, meta$catalog$rows)
+  larger$row_mapping$functional_key <- rep(keys, 2L)
+  twice <- ipw_raw_record_char_inventory(larger, frame, aux, ctrl$fitted_control)
+  expect_identical(twice$per_record_source_bytes, inv$per_record_source_bytes)
+  expect_equal(twice$total_record_slots, (2 * length(keys) + length(aux$descriptors)) * inv$per_record_slots)
+  # A source mutation dropping the longest key must fail the same byte truth.
+  wrong <- meta; wrong$row_mapping$functional_key <- rep("same-key", length(keys))
+  omitted <- ipw_raw_record_char_inventory(wrong, frame, aux, ctrl$fitted_control)
+  expect_lt(omitted$per_record_source_bytes, expected_bytes)
+  cap <- ctrl$owner_control
+  cap$max_matrix_entries <- 4096 + 64 * (ncol(Z) + 4 + length(aux$descriptors) + 1) - 1
+  expect_error(ipw_raw_record_char_inventory(meta, frame, aux, ctrl$fitted_control, envelope = cap),
+    class = "cdid_ipw_owner_bound_error")
+})
+
+test_that("complete NYT guard and constructed raw records share the funded local character inventory", {
+  sim <- make_d93_compact_ipw_test_panel(n_units = 64L, times = 1:5,
+    cohorts = c(2, 3, 4, Inf), missing_mode = "complete", unequal_weights = TRUE)
+  covariate <- paste0("x_", paste(rep("\u03bb\u00e9", 24L), collapse = ""))
+  sim$data[[covariate]] <- sim$data$x1
+  args <- list(data = sim$data, idname = "id", tname = "time", yname = "y", gname = "g",
+    control = make_d93_test_pipeline_control(), xformla = stats::reformulate(covariate), weightsname = "w",
+    control_group = "notyettreated", base_period = "varying", pt_assumption = "all", pt_start = 1,
+    weighting = "optimal", reduce_structural_redundancy = TRUE,
+    run_numerical_transfer = FALSE, cband = FALSE, bstrap = FALSE)
+  actual <- do.call(run_chained_ipw_pipeline, args)
+  legacy <- do.call(run_legacy_scalar_ipw_pipeline, args)
+  reg <- actual$nuisance_registry; b <- reg$raw_ipw
+  witness <- actual$resource_accounting$complete_raw_capacity
+  expect_identical(witness$admitted, TRUE)
+  expect_s3_class(b, "cdid_ipw_raw_backend")
+  inv <- b$accounting$construction_character_inventory
+  expect_identical(witness$character_inventory, inv)
+  expect_identical(witness$construction_table_entries_bound, b$accounting$construction_table_entries_bound)
+  compact_entries <- unname(cp04_payload(list(b$pairs, b$support_specs, b$supports,
+    b$treatment_specs, b$treatments, b$links))["entries"])
+  expect_equal(b$accounting$owned_entries, compact_entries + 256 +
+    b$accounting$owner_snapshot_entries + inv$metadata_entries)
+  expect_equal(inv$catalog_records, nrow(actual$metadata$catalog$rows))
+  expect_gt(inv$auxiliary_records, 0)
+  expect_equal(inv$records, inv$catalog_records + inv$auxiliary_records)
+  expect_lte(b$accounting$construction_peak_entries, witness$construction_entries)
+  expect_lte(actual$resource_accounting$simultaneous_entries, witness$peak_entries)
+  # Count every actual retained record, including aliases and auxiliary-only
+  # fitted/nuisance records, rather than estimating physical string sharing.
+  records <- list(reg$nuisance_views, reg$link_views, reg$fitted_views, reg$point_links_all,
+    reg$raw_aux_nuisance_views, reg$raw_aux_fitted_views, reg$raw_aux_points,
+    b$pairs, b$support_specs, b$supports, b$treatment_specs, b$treatments, b$links)
+  payload <- cp04_payload(records)
+  expect_lte(unname(payload["entries"]), witness$construction_table_entries_bound)
+  # Static field/disclosure strings remain funded by the unchanged fixed
+  # allowance; dynamic own/name/key byte roles are extra and counted fourfold.
+  expect_lte(unname(payload["char_bytes"]), 2 * 20480 * inv$records + 4 * inv$records * inv$per_record_source_bytes)
+  expect_equal(actual$reporting$estimates, legacy$reporting$estimates, tolerance = 1e-12)
+  expect_equal(actual$reporting$if_full, legacy$reporting$if_full, tolerance = 1e-12)
+  expect_equal(actual$reporting$vcov, legacy$reporting$vcov, tolerance = 1e-12)
+  expect_equal(actual$reporting$se, legacy$reporting$se, tolerance = 1e-12)
+  expect_identical(actual$auxiliary_reporting$descriptor_status, legacy$auxiliary_reporting$descriptor_status)
+  expect_identical(actual$covariance_handling$handler_used, legacy$covariance_handling$handler_used)
+  expect_identical(actual$covariance_handling$handler_invoked, legacy$covariance_handling$handler_invoked)
+  expect_equal(actual$covariance_handling$lambda, legacy$covariance_handling$lambda, tolerance = 1e-12)
+})
