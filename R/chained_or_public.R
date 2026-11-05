@@ -214,6 +214,8 @@ chained_full_if_budget <- function(backend, B, links) {
 # CP08 stage 4: the compact native plan of an eligible complete-support OR/DR
 # replay, built once per replay from the validated sealed backend (else NULL).
 chained_full_if_plan <- function(backend, links, B) {
+  if (inherits(backend, "cdid_dr_corollary1") && dr_separate(backend) && isTRUE(backend$uses_selection_models))
+    return(dr_conditional_replay_preparation(backend, links, B))
   if (inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline")) &&
       identical(backend$outcome_pooling, "separate") && !is.null(backend$separate_complete))
     return(separate_complete_native_plan(backend, links, B))
@@ -240,7 +242,7 @@ chained_full_if_chunk <- function(backend, rows, links, scale, plan = NULL) {
   if (inherits(backend, "cdid_augmented_backend")) return(evaluate_augmented_if_chunk(backend, rows, links, scale))
   if (inherits(backend, "cdid_imputation_backend")) return(evaluate_imputation_if_chunk(backend, rows, links, scale))
   if (inherits(backend, "cdid_dr_baseline")) return(evaluate_dr_baseline_if_chunk(backend, rows, links, scale, plan = plan))
-  if (inherits(backend, "cdid_dr_corollary1")) return(evaluate_dr_corollary1_if_chunk(backend, rows, links, scale))
+  if (inherits(backend, "cdid_dr_corollary1")) return(evaluate_dr_corollary1_if_chunk(backend, rows, links, scale, plan = plan))
   if (inherits(backend, "cdid_or_baseline")) return(evaluate_or_baseline_if_chunk(backend, rows, links, scale, plan = plan))
   if (inherits(backend, "cdid_or_corollary1")) return(evaluate_or_corollary1_if_chunk(backend, rows, links, scale))
   evaluate_cp04_if_chunk(backend, rows, links, scale)

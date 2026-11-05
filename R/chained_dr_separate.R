@@ -79,7 +79,9 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
       !valid(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
       !is.character(scale) || length(scale) != 1L || is.na(scale) || !scale %in% c("frame", "core"))
     dr_route_abort(route, "Invalid explicit IF row/link batch, scale or details flag.")
-  pre <- dr_separate_if_envelope(backend, length(rows), links, details)
+  preparation <- if (!details && isTRUE(backend$uses_selection_models) && !is.null(plan)) plan else NULL
+  pre <- if (is.null(preparation)) dr_separate_if_envelope(backend, length(rows), links, details) else
+    dr_conditional_replay_check(preparation, backend, links, length(rows))
   cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
     pre$scratch, c(backend$accounting$work_ops_bound, pre$work), pre$output, "separate DR IF chunk")
   if (!details && !isTRUE(backend$uses_selection_models) && !is.null(backend$separate_complete))
@@ -97,7 +99,7 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   op <- if (conditional) selection_prediction_operation(backend$selection_backend,
     source_reader = reader, source_reference = ref) else NULL
   on.exit(if (!is.null(op)) op$abort(), add = TRUE)
-  up_res <- if (conditional) op$upstream(backend$up_map, rows, pre$uids, details) else NULL
+  up_res <- if (conditional) op$upstream(backend$up_map, rows, pre$uids, details, preparation = preparation) else NULL
   up <- if (conditional) up_res$up else matrix(0, B, length(pre$sids))
   hits <- vector("list", length(pre$sids))
   for (j in seq_along(pre$sids)) {
@@ -128,13 +130,18 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   # The pure OR core needs its own target residual mean, not the DR link mean.
   # This invocation-local shallow record is never resealed or retained.
   requested <- backend$links[links]
-  link_blocks <- vapply(requested, `[[`, integer(1), "regression")
-  link_models <- vapply(requested, `[[`, integer(1), "model")
-  by_block <- split(seq_along(links), factor(link_blocks, levels = pre$gids))
-  by_model <- split(seq_along(links), factor(link_models, levels = pre$tids))
-  names(by_model) <- as.character(pre$tids)
-  treatment_blocks <- vapply(backend$treatment_specs[pre$tids], `[[`, integer(1), "regression")
-  models_by_block <- split(pre$tids, factor(treatment_blocks, levels = pre$gids))
+  if (is.null(preparation)) {
+    link_blocks <- vapply(requested, `[[`, integer(1), "regression")
+    link_models <- vapply(requested, `[[`, integer(1), "model")
+    by_block <- split(seq_along(links), factor(link_blocks, levels = pre$gids))
+    by_model <- split(seq_along(links), factor(link_models, levels = pre$tids))
+    names(by_model) <- as.character(pre$tids)
+    treatment_blocks <- vapply(backend$treatment_specs[pre$tids], `[[`, integer(1), "regression")
+    models_by_block <- split(pre$tids, factor(treatment_blocks, levels = pre$gids))
+  } else {
+    by_block <- preparation$by_block; by_model <- preparation$by_model
+    models_by_block <- preparation$models_by_block
+  }
   or_model <- backend
   or_model$links <- lapply(requested, function(l) { l$mu <- l$mu_or; l })
   link_names <- vapply(requested, `[[`, character(1), "link_id")
@@ -165,14 +172,16 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
     tids <- models_by_block[[kb]]
     for (tid in tids) {
       spec <- backend$treatment_specs[[tid]]; f <- backend$treatments[[tid]]
-      us <- up[, match(if (conditional) f$upstream_ids else spec$support_ids,
-        if (conditional) pre$uids else pre$sids), drop = FALSE]
+      up_positions <- if (is.null(preparation)) match(if (conditional) f$upstream_ids else spec$support_ids,
+        if (conditional) pre$uids else pre$sids) else preparation$model_up[[tid]]
+      us <- up[, up_positions, drop = FALSE]
       pt <- backend$treatment_recipe$p
       score <- matrix(0, B, pt); direct <- direct_ipw <- matrix(0, B, 4L)
       direct[, 3L] <- direct_ipw[, 3L] <- -f$means["dp"]
       direct[, 4L] <- direct_ipw[, 4L] <- -f$means["dm"]
       for (k in seq_along(spec$support_ids)) {
-        sid <- spec$support_ids[k]; h <- hits[[match(sid, pre$sids)]]; rr <- h$obs
+        sid <- spec$support_ids[k]
+        h <- hits[[if (is.null(preparation)) match(sid, pre$sids) else preparation$support_pos[sid]]]; rr <- h$obs
         if (!length(rr)) next
         X <- if (is.null(ref)) frame$Z_a[st$a_index[rows[rr]], backend$treatment_recipe$index, drop = FALSE] else
           chained_reference_x(ref, spec$reference, rows[rr])[, backend$treatment_recipe$index, drop = FALSE]

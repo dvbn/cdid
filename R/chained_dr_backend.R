@@ -2683,8 +2683,8 @@ dr_corollary1_if_budget <- function(backend, B, links, details = FALSE) {
   pre
 }
 
-evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE) {
-  if (dr_separate(backend)) return(evaluate_dr_separate_if_chunk(backend, rows, links, scale, details))
+evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE, plan = NULL) {
+  if (dr_separate(backend)) return(evaluate_dr_separate_if_chunk(backend, rows, links, scale, details, plan = plan))
   validate_dr_corollary1_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state

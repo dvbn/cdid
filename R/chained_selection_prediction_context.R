@@ -216,8 +216,10 @@ selection_prediction_operation <- function(backend, expected_sources = NULL,
     log_deriv <- cbind(rep.int(1 / a_pc, n_r), T_logit)
     list(pred = pred, T_logit = T_logit, log_deriv = log_deriv)
   }
-  upstream <- function(up_map, rows, uids, details = FALSE) {
+  upstream <- function(up_map, rows, uids, details = FALSE, preparation = NULL) {
     guard()
+    prepared <- if (is.null(preparation)) NULL else
+      dr_conditional_replay_upstream_index(preparation, sel_fit, up_map, uids, details)
     ref <- reference
     B <- length(rows)
     ci <- st$cohort_index[rows]
@@ -228,7 +230,7 @@ selection_prediction_operation <- function(backend, expected_sources = NULL,
     w_of <- function(r, ix) if (is.null(ref)) w[ix] else chained_reference_weight(ref, r, rows[ix])
 
     up <- matrix(0, B, length(uids))
-    for (j in which(uids <= up_map$n_a)) {
+    for (j in if (is.null(prepared)) which(uids <= up_map$n_a) else prepared$rate_positions) {
       k <- up_map$cohorts_a[uids[j]]
       r <- up_map$rates_ref[uids[j]]
       ix <- which(ci == k & U_rows)
@@ -241,9 +243,9 @@ selection_prediction_operation <- function(backend, expected_sources = NULL,
 
     active_blocks <- if (details) {
       seq_along(sel_fit$blocks)
-    } else {
+    } else if (is.null(prepared)) {
       which(vapply(up_map$theta_coords, function(tc) any(tc %in% uids), logical(1)))
-    }
+    } else prepared$active_blocks
 
     d_s <- sel_fit$design_spec$d_s
     # Selection covariates are defined only on the declared fitting universe.
@@ -252,21 +254,22 @@ selection_prediction_operation <- function(backend, expected_sources = NULL,
     Z_slope <- if (is.null(ref) && d_s > 0L) st$Z[rows[U_rows], sel_fit$design_spec$slope_cols, drop = FALSE] else
       matrix(0, sum(U_rows), d_s)
     block_ifs <- vector("list", length(sel_fit$blocks))
-    active_cells <- integer(0)
+    active_cells <- if (is.null(prepared)) integer(0) else prepared$active_cells
     u_pos <- cumsum(U_rows)
 
     for (m in active_blocks) {
       bl <- sel_fit$blocks[[m]]
       cids <- bl$cell_ids
       B_m <- bl$B_m
-      active_cells <- c(active_cells, cids)
+      if (is.null(prepared)) active_cells <- c(active_cells, cids)
       cell_scores <- matrix(0, B, B_m)
       # A D60 block lives inside one recipe: its slope rows are that recipe's
       # selection design on the block cohorts' U rows (zero scores elsewhere).
       Zb <- Z_slope
       if (!is.null(ref) && d_s > 0L) {
         rb <- sel_fit$block_specs[[m]]$reference
-        on <- which(U_rows & ci %in% vapply(sel_fit$cells[cids], `[[`, integer(1), "cohort"))
+        cohort_ids <- if (is.null(prepared)) vapply(sel_fit$cells[cids], `[[`, integer(1), "cohort") else prepared$cohorts[[m]]
+        on <- which(U_rows & ci %in% cohort_ids)
         if (length(on)) Zb[u_pos[on], ] <- chained_reference_s(ref, rb, rows[on])[, sel_fit$design_spec$slope_cols, drop = FALSE]
       }
       for (b in seq_len(B_m)) {
@@ -293,9 +296,10 @@ selection_prediction_operation <- function(backend, expected_sources = NULL,
       }
       block_ifs[[m]] <- bif
       tc <- up_map$theta_coords[[m]]
-      keep_tc <- which(tc %in% uids)
+      keep_tc <- if (is.null(prepared)) which(tc %in% uids) else prepared$keep[[m]]
       if (length(keep_tc)) {
-        up[, match(tc[keep_tc], uids)] <- bif$xi_theta[, keep_tc, drop = FALSE]
+        destination <- if (is.null(prepared)) match(tc[keep_tc], uids) else prepared$destination[[m]]
+        up[, destination] <- bif$xi_theta[, keep_tc, drop = FALSE]
       }
     }
 
