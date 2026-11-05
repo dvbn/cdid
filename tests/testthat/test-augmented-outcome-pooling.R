@@ -321,8 +321,8 @@ testthat::test_that("augmented local bases handle no intercept, intercept-only, 
   testthat::expect_equal(core$phi, (sum(a$A) / N) * together$phi, tolerance = 1e-10)
 })
 
-# V35 keeps the old pure-core and augmented scalar adjoint checks, then only
-# stores a smaller structural result. No group solve is skipped or batched.
+# V35 stores the scalar adjoint result compactly. V39 reuses only successful
+# inactive zero results; active and first-inactive checks remain scalar.
 testthat::test_that("augmented structural adjoints retain all scalar checks and original-F pullbacks", {
   specs <- list(list(imp = "separate", sel = "separate", model = "pair_logit", mode = "separate", dated = FALSE),
     list(imp = "within_cohort", sel = "across_cohorts", model = "pair_logit", mode = "pooled", dated = FALSE),
@@ -340,13 +340,13 @@ testthat::test_that("augmented structural adjoints retain all scalar checks and 
     }
     records <- list(); solve_count <- 0L
     observe <- function() {
-      pack <- rap_ns("reconstruction_pack_adjoint"); pooled <- rap_ns("or_pooled_wls_gram_solve"); plain <- rap_ns("or_wls_gram_solve")
+      pack <- rap_ns("reconstruction_pack_plain_adjoint"); pooled <- rap_ns("or_pooled_wls_gram_solve"); plain <- rap_ns("or_wls_gram_solve")
       count <- function(original, ...) {
         if (exists("rhs_mat", parent.frame(2L), inherits = FALSE) && exists("tilde_lambda", parent.frame(2L), inherits = FALSE))
           solve_count <<- solve_count + 1L
         original(...)
       }
-      testthat::local_mocked_bindings(reconstruction_pack_adjoint = function(lambda, nu, cids, cells) {
+      testthat::local_mocked_bindings(reconstruction_pack_plain_adjoint = function(lambda, nu, cids, cells) {
         value <- pack(lambda, nu, cids, cells)
         records[[length(records) + 1L]] <<- list(dense = list(tilde_lambda = lambda, tilde_nu = nu),
           packed = value, cids = sort(unique(as.integer(cids))))
@@ -356,10 +356,22 @@ testthat::test_that("augmented structural adjoints retain all scalar checks and 
       rap_fit(a, spec$imp, spec$sel, spec$model, spec$mode)
     }
     fit <- observe(); L <- length(fit$links)
-    # Releasing dead core$links is after all2L pure-core adjoint checks; the
-    # augmented2L checks still follow in their original model/group order.
+    # Both2L pure-core and2L augmented arms retain their original order;
+    # their lazy inactive templates are independently reset.
     testthat::expect_length(records, 4L * L)
-    testthat::expect_equal(solve_count, 4 * L * sum(vapply(fit$groups, function(g) g$p > 0L, logical(1))))
+    # V39 repeats every active solve and the first actual inactive solve.
+    # The augmented pure-core and augmented passes own independent templates.
+    expected_solves <- 0L; zero_seen <- logical(length(fit$groups))
+    for (idx in seq_along(records)) {
+      if (idx == 2L * L + 1L) zero_seen[] <- FALSE
+      active <- unique(vapply(fit$cells[records[[idx]]$cids], `[[`, integer(1L), "group_id"))
+      for (gid in seq_along(fit$groups)) {
+        if (fit$groups[[gid]]$p > 0L && (gid %in% active || !zero_seen[gid]))
+          expected_solves <- expected_solves + 1L
+        if (!gid %in% active) zero_seen[gid] <- TRUE
+      }
+    }
+    testthat::expect_equal(solve_count, expected_solves)
     for (r in records) testthat::expect_identical(
       rap_ns("reconstruction_expand_adjoint")(r$packed, length(fit$cells), fit$groups), r$dense)
     if (spec$imp == "separate") testthat::expect_true(any(vapply(records,

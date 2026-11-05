@@ -85,7 +85,7 @@ augmented_cell_rows <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows,
 # not RSS). Groups, treatments and the pure-imputation shared-OR fields reuse
 # imputation_retained_core_bound(); augmented cell, block, global q-forcing and
 # link fields are charged here with the unreduced p as the slope bound.
-augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids, dense_adjoints = FALSE) {
+augmented_retained_core_bounds <- function(cat, recipe, trt_recipe, theta_ids) {
   E <- function(x) unname(cp04_payload(x)["entries"])
   A <- function(n, nm = NULL) n + 8 + if (is.null(nm)) 0 else 9 + E(nm)
   M <- function(nr, nc, rn = NULL, cn = NULL, dn = FALSE) {
@@ -103,7 +103,7 @@ augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids, de
   nc <- length(cat$cell_specs)
   ng <- length(cat$group_specs)
   dq <- vapply(theta_ids, length, integer(1L))
-  pure <- imputation_retained_core_bound(cat, recipe, trt_recipe, dense_adjoints = dense_adjoints)
+  pure <- imputation_retained_core_bounds(cat, recipe, trt_recipe)$compact
 
   cells <- V(vapply(seq_len(nc), function(cid) {
     cs <- cat$cell_specs[[cid]]
@@ -127,13 +127,13 @@ augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids, de
     g <- min(k, ng)
     compact <- R(c(kind = E("compact_reconstruction_adjoint"), cell_ids = A(k),
       tilde_lambda = A(k), group_ids = A(g), tilde_nu = g + 8 + g * A(p)))
-    if (dense_adjoints) dense_adjoint else min(dense_adjoint, compact)
+    min(dense_adjoint, compact)
   }
-  links <- V(vapply(cat$links, function(lk) {
+  links <- vapply(cat$links, function(lk) {
     k <- length(lk$control_cell_ids)
     dg <- dq[lk$target_cell_id]
     dc <- sum(dq[lk$control_cell_ids])
-    E(lk) + R(c(mu = A(1), mu_dr = A(1),
+    compact_link <- E(lk) + R(c(mu = A(1), mu_dr = A(1),
       d_plus = A(1), num_T = A(1), T_gl = A(1), num_Bg = A(1), B_gl = A(1),
       d_minus = A(1), num_C = A(1), C_ol = A(1), num_Bo = A(1), B_ol = A(1),
       d_bar_plus_or = A(p, z), d_bar_minus_or = A(p, z), d_bar_diff_or = A(p, z),
@@ -144,11 +144,19 @@ augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids, de
       g_dr_gamma = A(q, trt_recipe$columns),
       sel_T_ids = A(dg), sel_T = A(dg), sel_C_ids = A(dc), sel_C = A(dc),
       adjoint_T = adjoint(1L), adjoint_C = adjoint(k)))
-  }, numeric(1L)))
+    c(compact = compact_link, dense = compact_link + 2 * dense_adjoint - adjoint(1L) - adjoint(k))
+  }, numeric(2))
 
   # The pure-imputation convention charges the shared-OR alias field twice.
-  c(cells = cells, groups = unname(pure["groups"]), shared_or = shared, shared = shared,
-    treatments = unname(pure["treatments"]), links = links)
+  common <- c(cells = cells, groups = unname(pure["groups"]), shared_or = shared, shared = shared,
+    treatments = unname(pure["treatments"]))
+  list(compact = c(common, links = V(links[1L, ])),
+    dense = c(common, links = V(links[2L, ])))
+}
+
+augmented_retained_core_bound <- function(cat, recipe, trt_recipe, theta_ids, dense_adjoints = FALSE) {
+  x <- augmented_retained_core_bounds(cat, recipe, trt_recipe, theta_ids)
+  if (dense_adjoints) x$dense else x$compact
 }
 
 augmented_or_local <- function(sh, bid) {
@@ -481,12 +489,14 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   # original-unit normalization count in every estimating equation.
   N_scan <- if (is.null(lay)) N else lay$N_layout
   B_chunk <- min(N_scan, ctrl$max_chunk_rows)
-  retained_bound <- unname(cp04_payload(obj)["entries"]) - pair_entries +
-    if (separate_or) reconstruction_retained_bound(cat, recipe, augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids), theta_ids) else
-      sum(augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids))
-  dense_parts <- augmented_retained_core_bound(cat, recipe, trt_recipe, theta_ids, dense_adjoints = TRUE)
-  dense_retained_work <- unname(cp04_payload(obj)["entries"]) - pair_entries +
-    if (separate_or) reconstruction_retained_bound(cat, recipe, dense_parts, theta_ids) else sum(dense_parts)
+  skeleton_entries <- unname(cp04_payload(obj)["entries"]) - pair_entries
+  retained_parts <- augmented_retained_core_bounds(cat, recipe, trt_recipe, theta_ids)
+  model_bound <- if (separate_or) reconstruction_retained_bound(cat, recipe,
+    retained_parts$compact, theta_ids) else sum(retained_parts$compact)
+  retained_bound <- skeleton_entries + model_bound
+  # Separate replacement touches only shared/shared_or, not the link delta.
+  dense_retained_work <- skeleton_entries + model_bound +
+    unname(retained_parts$dense["links"] - retained_parts$compact["links"])
   adjoint_peak <- reconstruction_adjoint_construction_scratch(n_cells, n_groups, p_or_raw,
     max(c(1L, lengths(lapply(cat$links, `[[`, "control_cell_ids")))))
   d_X <- ncol(X_F)
@@ -867,11 +877,19 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
 
   # S6. Links: augmented T/C numerators, unchanged normalizers, M^Delta adjoint
   # weights and merged selection loadings over the theta coordinates.
+  zero_adjoints <- vector("list", n_groups)
   solve_adjoint <- function(lambda_vec, nu_list, structural_cids) {
+    active_groups <- unique(vapply(cells[structural_cids], `[[`, integer(1L), "group_id"))
     tilde_lambda <- numeric(n_cells)
     tilde_nu <- vector("list", n_groups)
     for (gid in seq_len(n_groups)) {
       gf <- groups[[gid]]
+      cached <- reconstruction_zero_template(zero_adjoints, gid, gid %in% active_groups, gf, cells, N)
+      if (!is.null(cached)) {
+        tilde_lambda[gf$cell_ids] <- cached$lambda
+        tilde_nu[[gid]] <- cached$nu
+        next
+      }
       rhs_r <- numeric(gf$p)
       for (cid in gf$cell_ids) {
         cf <- cells[[cid]]
@@ -890,8 +908,11 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
       } else {
         tilde_nu[[gid]] <- numeric(0L)
       }
+      if (!gid %in% active_groups) zero_adjoints[[gid]] <<- list(
+        lambda = tilde_lambda[gf$cell_ids], nu = tilde_nu[[gid]],
+        group = gf, cells = cells[gf$cell_ids], N = N)
     }
-    reconstruction_pack_adjoint(tilde_lambda, tilde_nu, structural_cids, cells)
+    reconstruction_pack_plain_adjoint(tilde_lambda, tilde_nu, structural_cids, cells)
   }
   zero_loadings <- function() lapply(cells, function(cf) numeric(groups[[cf$group_id]]$p))
 
@@ -1248,7 +1269,8 @@ augmented_if_envelope <- function(backend, B, links = seq_along(backend$links), 
   work <- work + selection_pre$work
   pre <- c(sets, list(output = output, scratch = scratch, work = work))
   if (!details) pre$score_cache <- reconstruction_score_cache_plan(
-    backend, B, sets$cids, augmented_backend_X_F(backend), nl)
+    backend, B, sets$cids, augmented_backend_X_F(backend), nl,
+    funding_entries = 3040 * min(B, backend$control$max_chunk_rows) * nl)
   pre
 }
 
@@ -1389,13 +1411,26 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
     if (gf$p > 0L) out <- out - as.vector(xi_beta_imp[[cf$group_id]] %*% cf$mean_d)
     out
   }
-  eval_adjoint_chunk <- function(adj) {
+  cached_cells <- if (details) logical(0L) else logical(n_cells)
+  if (!details && isTRUE(sets$score_cache$enabled)) cached_cells[sets$score_cache$cids] <- TRUE
+  score_witness <- if (details) NULL else vector("list", n_cells)
+  witness_ready <- FALSE; witness_finite <- FALSE
+  eval_adjoint_chunk <- function(adj, structural_cids) {
+    active_groups <- if (details) integer(0L) else
+      unique(vapply(cells[structural_cids], `[[`, integer(1L), "group_id"))
+    first_walk <- !details && !witness_ready; walk_finite <- TRUE
     out_vec <- numeric(B)
     for (cid in sets$cids) {
       obs_rec <- read_cell_score(cid)
       if (is.null(obs_rec)) next
       cf <- cells[[cid]]
       gf <- groups[[cf$group_id]]
+      # Only a previously witnessed immutable CACHED record can bypass zero
+      # arithmetic. Uncached/changed records keep their original read/order.
+      prior <- if (!details && cached_cells[cid]) score_witness[[cid]] else NULL
+      if (!details && witness_ready && witness_finite && !is.null(prior) &&
+          !cid %in% structural_cids && !cf$group_id %in% active_groups &&
+          identical(obs_rec, prior$record) && identical(cf$mean_d, prior$mean_d)) next
       t_lam <- if (recipe$intercept) reconstruction_adjoint_lambda(adj, cid) else 0.0
       t_nu <- reconstruction_adjoint_nu(adj, cf$group_id, gf$p)
       val <- rep(t_lam, length(obs_rec$rr))
@@ -1404,14 +1439,31 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
         val <- val + as.vector(d_tilde %*% t_nu)
       }
       out_vec[obs_rec$rr] <- out_vec[obs_rec$rr] + obs_rec$s_rr * val
+      if (!details && (first_walk || witness_finite)) {
+        safe <- all(is.finite(obs_rec$s_rr)) && (!gf$p ||
+          (length(t_nu) == gf$p && all(is.finite(d_tilde))))
+        walk_finite <- walk_finite && safe
+        if (first_walk && safe && cached_cells[cid]) score_witness[cid] <<- list(
+          list(record = obs_rec, mean_d = cf$mean_d))
+        if (!safe) witness_finite <<- FALSE
+      }
     }
+    if (first_walk) { witness_ready <<- TRUE; witness_finite <<- walk_finite }
     out_vec
   }
-  eval_imp_linear <- function(lambda_vec, nu_list) {
+  zero_linear <- vector("list", n_groups)
+  eval_imp_linear <- function(lambda_vec, nu_list, structural_cids) {
+    active_groups <- unique(vapply(cells[structural_cids], `[[`, integer(1L), "group_id"))
     tilde_lambda <- numeric(n_cells)
     tilde_nu <- vector("list", n_groups)
     for (gid in seq_len(n_groups)) {
       gf <- groups[[gid]]
+      cached <- reconstruction_zero_template(zero_linear, gid, gid %in% active_groups, gf, cells, N)
+      if (!is.null(cached)) {
+        tilde_lambda[gf$cell_ids] <- cached$lambda
+        tilde_nu[[gid]] <- cached$nu
+        next
+      }
       rhs <- numeric(gf$p)
       for (cid in gf$cell_ids) {
         cf <- cells[[cid]]
@@ -1422,8 +1474,11 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       tilde_nu[[gid]] <- if (!gf$p) numeric(0L) else as.double(
         if (recipe$intercept) or_pooled_wls_gram_solve(gf$fit, rhs, normalizer = N)
         else or_wls_gram_solve(gf$fit, rhs, normalizer = N))
+      if (!gid %in% active_groups) zero_linear[[gid]] <<- list(
+        lambda = tilde_lambda[gf$cell_ids], nu = tilde_nu[[gid]],
+        group = gf, cells = cells[gf$cell_ids], N = N)
     }
-    eval_adjoint_chunk(list(tilde_lambda = tilde_lambda, tilde_nu = tilde_nu))
+    eval_adjoint_chunk(list(tilde_lambda = tilde_lambda, tilde_nu = tilde_nu), structural_cids)
   }
   zero_imp_loadings <- function() lapply(cells, function(cf) numeric(groups[[cf$group_id]]$p))
 
@@ -1508,7 +1563,8 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
             nu[[cid]] <- nu[[cid]] + bf$j_force_beta_beta[[idx_k]][qq, ]
           }
         }
-        rhs_beta_j[, qq] <- eval_imp_linear(lam, nu)
+        forcing_cids <- unique(unlist(lapply(backend$shared_or$blocks[wanted_bids], `[[`, "control_cell_ids")))
+        rhs_beta_j[, qq] <- eval_imp_linear(lam, nu, forcing_cids)
       }
       if (recipe$intercept) for (apos in seq_along(alpha_bids)) {
         bf <- backend$shared_or$blocks[[alpha_bids[apos]]]
@@ -1519,7 +1575,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
           lam[cid] <- lam[cid] + bf$j_force_alpha_alpha[idx_k]
           nu[[cid]] <- nu[[cid]] + bf$j_force_alpha_beta[[idx_k]]
         }
-        rhs_alpha_j[, apos] <- eval_imp_linear(lam, nu)
+        rhs_alpha_j[, apos] <- eval_imp_linear(lam, nu, bf$control_cell_ids)
       }
     }
 
@@ -1652,7 +1708,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
     psi_denplus <- w_plus + st$mass_F[ci_g] * xi_a[, ci_g]
     direct_T <- w_plus * (Z_g_vec - lf$T_gl) / lf$d_plus
     a_T <- lf$a_coeff_T_g * xi_a[, ci_g]
-    j_T_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_T)
+    j_T_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_T, lf$target_cell_id)
     j_T <- if (use_imp_forward) {
       lf$lam_T * alpha_if(lf$target_cell_id) +
         (if (length(lf$nu_T)) as.vector(xi_beta_imp[[cf_g$group_id]] %*% lf$nu_T) else 0.0)
@@ -1709,7 +1765,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       }
     }
     direct_C <- w_minus * (Z_k_vec - lf$C_ol) / lf$d_minus
-    j_C_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_C)
+    j_C_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_C, lf$control_cell_ids)
     j_C <- if (use_imp_forward) j_C_fwd else j_C_adj
     sel_C <- load_theta(lf$sel_C_ids, lf$sel_C)
     trt_C_dir <- as.vector(tif$direct %*% lf$g_C_gamma)

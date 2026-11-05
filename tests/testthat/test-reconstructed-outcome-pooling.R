@@ -364,13 +364,13 @@ testthat::test_that("stored structural adjoints keep scalar solve order and full
     }
     records <- list(); solve_count <- 0L
     fit_observed <- function() {
-      pack <- rcp_ns("reconstruction_pack_adjoint"); pooled <- rcp_ns("or_pooled_wls_gram_solve"); plain <- rcp_ns("or_wls_gram_solve")
+      pack <- rcp_ns("reconstruction_pack_plain_adjoint"); pooled <- rcp_ns("or_pooled_wls_gram_solve"); plain <- rcp_ns("or_wls_gram_solve")
       count <- function(original, ...) {
         if (exists("rhs_mat", parent.frame(2L), inherits = FALSE) && exists("tilde_lambda", parent.frame(2L), inherits = FALSE))
           solve_count <<- solve_count + 1L
         original(...)
       }
-      testthat::local_mocked_bindings(reconstruction_pack_adjoint = function(lambda, nu, cids, cells) {
+      testthat::local_mocked_bindings(reconstruction_pack_plain_adjoint = function(lambda, nu, cids, cells) {
         value <- pack(lambda, nu, cids, cells)
         records[[length(records) + 1L]] <<- list(dense = list(tilde_lambda = lambda, tilde_nu = nu),
           packed = value, cids = sort(unique(as.integer(cids))))
@@ -382,7 +382,18 @@ testthat::test_that("stored structural adjoints keep scalar solve order and full
     fit <- fit_observed(); dense <- rcp35_dense(fit)
     arms <- length(fit$links) * if (spec$method == "reg") 1L else 2L
     testthat::expect_length(records, arms)
-    testthat::expect_equal(solve_count, arms * sum(vapply(fit$groups, function(g) g$p > 0L, logical(1))))
+    # V39 repeats every active solve and the first actual inactive solve.
+    # The augmented pure-core and augmented passes own independent templates.
+    expected_solves <- 0L; zero_seen <- logical(length(fit$groups))
+    for (idx in seq_along(records)) {
+      active <- unique(vapply(fit$cells[records[[idx]]$cids], `[[`, integer(1L), "group_id"))
+      for (gid in seq_along(fit$groups)) {
+        if (fit$groups[[gid]]$p > 0L && (gid %in% active || !zero_seen[gid]))
+          expected_solves <- expected_solves + 1L
+        if (!gid %in% active) zero_seen[gid] <- TRUE
+      }
+    }
+    testthat::expect_equal(solve_count, expected_solves)
     for (r in records) {
       expanded <- rcp_ns("reconstruction_expand_adjoint")(r$packed, length(fit$cells), fit$groups)
       testthat::expect_identical(expanded, r$dense)

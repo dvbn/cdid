@@ -253,7 +253,8 @@ testthat::test_that("generic ordinary IPW and pooled scores reuse records withou
     testthat::expect_true(pre$score_cache$enabled)
     testthat::expect_null(pre$stage1_forward)
     testthat::expect_true(all(pre$score_cache$cids %in% pre$cids))
-    testthat::expect_lte(pre$score_cache$entries, 32 * 32L * 3L)
+    cache_slice <- if (kind == "augmented") 3040 else 2016
+    testthat::expect_lte(pre$score_cache$entries, cache_slice * 32L * 3L)
     detailed_pre <- budget(fit, 32L, 1:3, TRUE)
     testthat::expect_null(detailed_pre$score_cache)
     testthat::expect_null(detailed_pre$stage1_forward)
@@ -286,12 +287,14 @@ testthat::test_that("generic ordinary IPW and pooled scores reuse records withou
       unname(actual[32:1, c(3L, 1L), drop = FALSE]), tolerance = 1e-10)
     testthat::expect_identical(dimnames(reordered$output$phi), list(NULL,
       vapply(fit$links[c(3L, 1L)], `[[`, character(1L), "link_id")))
-    # An unfunded one-row tail takes exactly the old scalar reader, retaining
-    # every original call and failure guard instead of changing the partition.
+    # V39 can fund the one-row tail from the larger generic slab. Numeric
+    # output, Gram work and partition remain equal to the old raw reader.
     tiny <- rsc36_run(fit, kind, 48L, 1:3, TRUE)
     tiny_raw <- rsc36_run(fit, kind, 48L, 1:3, FALSE)
-    testthat::expect_false(tiny$plans[[1L]]$enabled)
-    testthat::expect_identical(tiny, tiny_raw)
+    testthat::expect_lte(tiny$plans[[1L]]$entries, cache_slice * 3L)
+    testthat::expect_equal(tiny$output, tiny_raw$output, tolerance = 1e-12)
+    testthat::expect_identical(tiny$grams, tiny_raw$grams)
+    testthat::expect_true(all(tiny$calls <= tiny_raw$calls))
     old_plan <- function() {
       testthat::local_mocked_bindings(reconstruction_score_cache_plan = function(...) {
         list(enabled = FALSE, cids = integer(0L), entries = 0)

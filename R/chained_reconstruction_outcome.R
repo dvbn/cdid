@@ -62,7 +62,7 @@ reconstruction_stage1_forward_plan <- function(backend, B, gids, X_F, n_links, d
   list(enabled = TRUE, gids = gids, entries = entries)
 }
 
-reconstruction_score_cache_plan <- function(backend, B, cids, X_F, n_links, reserved_entries = 0) {
+reconstruction_score_cache_plan <- function(backend, B, cids, X_F, n_links, reserved_entries = 0, funding_entries = NULL) {
   declined <- list(enabled = FALSE, cids = integer(0L), entries = 0)
   if (!length(cids) || !is.null(rownames(X_F)))
     return(declined)
@@ -77,7 +77,10 @@ reconstruction_score_cache_plan <- function(backend, B, cids, X_F, n_links, rese
   # fits there. Their unchanged global-cell metadata funds the full position
   # map, selected-slot bookkeeping and planning vectors before any reads.
   # Use the core-subchunk cap even when the envelope's B is layout-expanded.
-  funding <- 32 * rows * n_links - reserved_entries
+  # Generic callers fund their larger, unchanged 64*B*32nl or64*B*48nl
+  # row/link slabs, leaving32*B*nl for all old phi/psi/layout buffers. Separate
+  # callers keep their original32*B*nl cache allowance and forward sharing.
+  funding <- (if (is.null(funding_entries)) 32 * rows * n_links else funding_entries) - reserved_entries
   if (funding <= 1024) return(declined)
   p <- vapply(backend$cells[cids], function(cf) backend$groups[[cf$group_id]]$p, integer(1))
   column_bytes <- vapply(backend$cells[cids], function(cf)

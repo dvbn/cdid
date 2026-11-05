@@ -1360,11 +1360,19 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
   # pulls back to observed-pair scores s_{i,c} * (tilde_lambda_c + tilde_d_{i,c}' tilde_nu_{r(c)})
   # where tilde_nu_r = (S_r^imp)^{-1} sum_{c in C_r} (nu_c - lambda_c * mean_d_c)
   # and tilde_lambda_c = lambda_c / mass_c (if intercept = TRUE, else 0).
+  zero_adjoints <- vector("list", n_groups)
   solve_imp_adjoint <- function(lambda_vec, nu_list, structural_cids) {
+    active_groups <- unique(vapply(cells_fitted[structural_cids], `[[`, integer(1L), "group_id"))
     tilde_lambda <- numeric(n_cells)
     tilde_nu <- vector("list", n_groups)
     for (gid in seq_len(n_groups)) {
       gf <- group_fits[[gid]]
+      cached <- reconstruction_zero_template(zero_adjoints, gid, gid %in% active_groups, gf, cells_fitted, N)
+      if (!is.null(cached)) {
+        tilde_lambda[gf$cell_ids] <- cached$lambda
+        tilde_nu[[gid]] <- cached$nu
+        next
+      }
       cids <- gf$cell_ids
       rhs_r <- numeric(gf$p)
       for (cid in cids) {
@@ -1386,8 +1394,11 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
       } else {
         tilde_nu[[gid]] <- numeric(0L)
       }
+      if (!gid %in% active_groups) zero_adjoints[[gid]] <<- list(
+        lambda = tilde_lambda[gf$cell_ids], nu = tilde_nu[[gid]],
+        group = gf, cells = cells_fitted[gf$cell_ids], N = N)
     }
-    reconstruction_pack_adjoint(tilde_lambda, tilde_nu, structural_cids, cells_fitted)
+    reconstruction_pack_plain_adjoint(tilde_lambda, tilde_nu, structural_cids, cells_fitted)
   }
 
   for (ell in seq_len(L_links)) {
@@ -1572,13 +1583,26 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
   }
 
   # Sparse adjoint pullback evaluator on the chunk
-  eval_adjoint_chunk <- function(adj) {
+  cached_cells <- if (details) logical(0L) else logical(n_cells)
+  if (!details && isTRUE(sets$score_cache$enabled)) cached_cells[sets$score_cache$cids] <- TRUE
+  score_witness <- if (details) NULL else vector("list", n_cells)
+  witness_ready <- FALSE; witness_finite <- FALSE
+  eval_adjoint_chunk <- function(adj, structural_cids) {
+    active_groups <- if (details) integer(0L) else
+      unique(vapply(core_fit$cells[structural_cids], `[[`, integer(1L), "group_id"))
+    first_walk <- !details && !witness_ready; walk_finite <- TRUE
     out_vec <- numeric(B)
     for (cid in sets$cids) {
       obs_rec <- read_cell_score(cid)
       if (is.null(obs_rec)) next
       cf <- core_fit$cells[[cid]]
       gf <- core_fit$groups[[cf$group_id]]
+      # Only a previously witnessed immutable CACHED record can bypass zero
+      # arithmetic. Uncached/changed records keep their original read/order.
+      prior <- if (!details && cached_cells[cid]) score_witness[[cid]] else NULL
+      if (!details && witness_ready && witness_finite && !is.null(prior) &&
+          !cid %in% structural_cids && !cf$group_id %in% active_groups &&
+          identical(obs_rec, prior$record) && identical(cf$mean_d, prior$mean_d)) next
       t_lam <- if (recipe$intercept) reconstruction_adjoint_lambda(adj, cid) else 0.0
       t_nu <- reconstruction_adjoint_nu(adj, cf$group_id, gf$p)
       val <- rep(t_lam, length(obs_rec$rr))
@@ -1591,18 +1615,35 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
         val <- val + as.vector(d_tilde %*% t_nu)
       }
       out_vec[obs_rec$rr] <- out_vec[obs_rec$rr] + obs_rec$s_rr * val
+      if (!details && (first_walk || witness_finite)) {
+        safe <- all(is.finite(obs_rec$s_rr)) && (!gf$p ||
+          (length(t_nu) == gf$p && all(is.finite(d_tilde))))
+        walk_finite <- walk_finite && safe
+        if (first_walk && safe && cached_cells[cid]) score_witness[cid] <<- list(
+          list(record = obs_rec, mean_d = cf$mean_d))
+        if (!safe) witness_finite <<- FALSE
+      }
     }
+    if (first_walk) { witness_ready <<- TRUE; witness_finite <<- walk_finite }
     out_vec
   }
 
   # Pull back one downstream scalar loading without retaining any row-by-cell
   # or row-by-group parameter IF arrays. This uses the same coupled Gram factors
   # and normalized inverse-transpose identity as the precomputed link adjoints.
-  eval_imp_linear <- function(lambda_vec, nu_list) {
+  zero_linear <- vector("list", n_groups)
+  eval_imp_linear <- function(lambda_vec, nu_list, structural_cids) {
+    active_groups <- unique(vapply(core_fit$cells[structural_cids], `[[`, integer(1L), "group_id"))
     tilde_lambda <- numeric(n_cells)
     tilde_nu <- vector("list", n_groups)
     for (gid in seq_len(n_groups)) {
       gf <- core_fit$groups[[gid]]
+      cached <- reconstruction_zero_template(zero_linear, gid, gid %in% active_groups, gf, core_fit$cells, N)
+      if (!is.null(cached)) {
+        tilde_lambda[gf$cell_ids] <- cached$lambda
+        tilde_nu[[gid]] <- cached$nu
+        next
+      }
       rhs <- numeric(gf$p)
       for (cid in gf$cell_ids) {
         cf <- core_fit$cells[[cid]]
@@ -1613,8 +1654,11 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
       tilde_nu[[gid]] <- if (!gf$p) numeric(0L) else as.double(
         if (recipe$intercept) or_pooled_wls_gram_solve(gf$fit, rhs, normalizer = N)
         else or_wls_gram_solve(gf$fit, rhs, normalizer = N))
+      if (!gid %in% active_groups) zero_linear[[gid]] <<- list(
+        lambda = tilde_lambda[gf$cell_ids], nu = tilde_nu[[gid]],
+        group = gf, cells = core_fit$cells[gf$cell_ids], N = N)
     }
-    eval_adjoint_chunk(list(tilde_lambda = tilde_lambda, tilde_nu = tilde_nu))
+    eval_adjoint_chunk(list(tilde_lambda = tilde_lambda, tilde_nu = tilde_nu), structural_cids)
   }
   zero_imp_loadings <- function() {
     lapply(core_fit$cells, function(cf) numeric(core_fit$groups[[cf$group_id]]$p))
@@ -1724,7 +1768,8 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
             nu[[cid]] <- nu[[cid]] + bf$j_force_beta_beta[[idx_k]][q, ]
           }
         }
-        rhs_beta_j[, q] <- eval_imp_linear(lam, nu)
+        forcing_cids <- unique(unlist(lapply(core_fit$shared_or$blocks[wanted_bids], `[[`, "control_cell_ids")))
+        rhs_beta_j[, q] <- eval_imp_linear(lam, nu, forcing_cids)
       }
       if (recipe$intercept) for (apos in seq_along(alpha_bids)) {
         bf <- core_fit$shared_or$blocks[[alpha_bids[apos]]]
@@ -1735,7 +1780,7 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
           lam[cid] <- lam[cid] + bf$j_force_alpha_alpha[idx_k]
           nu[[cid]] <- nu[[cid]] + bf$j_force_alpha_beta[[idx_k]]
         }
-        rhs_alpha_j[, apos] <- eval_imp_linear(lam, nu)
+        rhs_alpha_j[, apos] <- eval_imp_linear(lam, nu, bf$control_cell_ids)
       }
     }
 
@@ -1885,7 +1930,7 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
 
     direct_T <- w_plus * (j_g_vec - lf$T_gl) / lf$d_plus
     a_T <- lf$a_coeff_T_g * xi_a[, ci_g]
-    j_T_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_T)
+    j_T_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_T, lf$target_cell_id)
     j_T <- if (use_imp_forward) (if (recipe$intercept) alpha_if(lf$target_cell_id) else 0.0) +
       (if (gf_g$p > 0L) as.vector(xi_beta_imp[[cf_g$group_id]] %*% lf$d_bar_plus_j) else 0.0) else j_T_adj
     psi_T <- direct_T + a_T + j_T
@@ -1988,7 +2033,7 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
 
       direct_C <- w_minus * (j_k_vec - lf$C_ol) / lf$d_minus
       a_C <- a_C_vec
-      j_C_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_C)
+      j_C_adj <- if (forward_imp) NULL else eval_adjoint_chunk(lf$adjoint_C, lf$control_cell_ids)
       j_C <- if (use_imp_forward) j_C_vec else j_C_adj
       trt_C_dir <- as.vector(tif$direct %*% lf$g_C_gamma)
       trt_C_a <- as.vector(tif$a %*% lf$g_C_gamma)
@@ -2178,7 +2223,7 @@ validate_imputation_backend <- function(backend) {
 # Use the unreduced p as an upper bound for every retained/aliased slope subset.
 # List/vector headers, attributes, names and string bytes follow cp04_payload;
 # matrix charges use dimensions only, without allocating p-by-p placeholders.
-imputation_retained_core_bound <- function(cat, recipe, trt_recipe, dense_adjoints = FALSE) {
+imputation_retained_core_bounds <- function(cat, recipe, trt_recipe) {
   E <- function(x) unname(cp04_payload(x)["entries"])
   # A names attribute costs 9 + E(names). A matrix costs its entries + 8,
   # the one-slot attributes list (9), and its two-element dim vector (10).
@@ -2273,11 +2318,11 @@ imputation_retained_core_bound <- function(cat, recipe, trt_recipe, dense_adjoin
     g <- min(k, ng)
     compact <- R(c(kind = E("compact_reconstruction_adjoint"), cell_ids = A(k),
       tilde_lambda = A(k), group_ids = A(g), tilde_nu = g + 8 + g * A(p)))
-    if (dense_adjoints) dense_adjoint else min(dense_adjoint, compact)
+    min(dense_adjoint, compact)
   }
-  links <- V(vapply(cat$links, function(lk) {
+  links <- vapply(cat$links, function(lk) {
     k <- length(lk$control_cell_ids)
-    E(lk) + R(c(mu = A(1), mu_ipw = A(1), mu_or = A(1), mu_reg = A(1), mu_dr = A(1),
+    compact_link <- E(lk) + R(c(mu = A(1), mu_ipw = A(1), mu_or = A(1), mu_reg = A(1), mu_dr = A(1),
       d_plus = A(1), num_T = A(1), T_gl = A(1), num_Bg = A(1), B_gl = A(1),
       d_minus = A(1), num_C = A(1), C_ol = A(1), num_Bo = A(1), B_ol = A(1),
       d_bar_plus_j = A(p, z), d_bar_plus_or = A(p, z), d_bar_minus_or = A(p, z),
@@ -2287,11 +2332,20 @@ imputation_retained_core_bound <- function(cat, recipe, trt_recipe, dense_adjoin
       g_C_gamma = A(q, trt_recipe$columns), g_Bo_gamma = A(q, trt_recipe$columns),
       g_dr_gamma = A(q, trt_recipe$columns), adjoint_T = adjoint(1L),
       if (has_trt) c(adjoint_C = adjoint(k))))
-  }, numeric(1)))
-  # cp04_payload charges logical aliases separately, even if R shares storage.
-  c(cells = cells, groups = groups, shared_or = shared,
+    c(compact = compact_link, dense = compact_link + dense_adjoint - adjoint(1L) +
+      if (has_trt) dense_adjoint - adjoint(k) else 0)
+  }, numeric(2))
+  # Common metadata/factors are traversed once; only adjoint fields differ.
+  common <- c(cells = cells, groups = groups, shared_or = shared,
     shared = if (has_or) shared else E(list(p = 0L, keep = integer(), beta = numeric())),
-    treatments = treatments, links = links)
+    treatments = treatments)
+  list(compact = c(common, links = V(links[1L, ])),
+    dense = c(common, links = V(links[2L, ])))
+}
+
+imputation_retained_core_bound <- function(cat, recipe, trt_recipe, dense_adjoints = FALSE) {
+  x <- imputation_retained_core_bounds(cat, recipe, trt_recipe)
+  if (dense_adjoints) x$dense else x$compact
 }
 
 fit_imputation_backend <- function(reader, link_views, control = ipw_owner_control(),
@@ -2565,13 +2619,14 @@ fit_imputation_backend <- function(reader, link_views, control = ipw_owner_contr
   # Scans run over the layout rows on the D60 recipe-cohort layout.
   N_scan <- if (is.null(lay)) st$N else lay$N_layout
   B_chunk <- min(N_scan, ctrl$max_chunk_rows)
-  retained_bound <- unname(cp04_payload(obj)["entries"]) - pair_entries +
-    if (separate_or) reconstruction_retained_bound(cat, recipe, imputation_retained_core_bound(cat, recipe, trt_recipe)) else
-      sum(imputation_retained_core_bound(cat, recipe, trt_recipe))
-  dense_model_work <- if (separate_or) reconstruction_retained_bound(cat, recipe,
-    imputation_retained_core_bound(cat, recipe, trt_recipe, dense_adjoints = TRUE)) else
-      sum(imputation_retained_core_bound(cat, recipe, trt_recipe, dense_adjoints = TRUE))
-  dense_retained_work <- unname(cp04_payload(obj)["entries"]) - pair_entries + dense_model_work
+  skeleton_entries <- unname(cp04_payload(obj)["entries"]) - pair_entries
+  retained_parts <- imputation_retained_core_bounds(cat, recipe, trt_recipe)
+  model_bound <- if (separate_or) reconstruction_retained_bound(cat, recipe,
+    retained_parts$compact) else sum(retained_parts$compact)
+  retained_bound <- skeleton_entries + model_bound
+  # Separate replacement touches only shared/shared_or, not the link delta.
+  dense_retained_work <- skeleton_entries + model_bound +
+    unname(retained_parts$dense["links"] - retained_parts$compact["links"])
   adjoint_peak <- reconstruction_adjoint_construction_scratch(n_cells, n_groups, p_or,
     max(c(1L, lengths(lapply(cat$links, `[[`, "control_cell_ids")))))
   fit_scratch <- 64 * B_chunk * (p_or + p_trt + G + 8) +
@@ -2724,7 +2779,8 @@ imputation_if_envelope <- function(backend, B, links = seq_along(backend$links),
     work = work
   )
   if (!details) pre$score_cache <- reconstruction_score_cache_plan(
-    backend, B, sets$cids, imputation_backend_X_F(backend, reader), nl)
+    backend, B, sets$cids, imputation_backend_X_F(backend, reader), nl,
+    funding_entries = 2016 * min(B, backend$control$max_chunk_rows) * nl)
   pre
 }
 
