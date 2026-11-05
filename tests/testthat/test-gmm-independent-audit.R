@@ -212,6 +212,7 @@ test_that('Native C backend registration, symbol forcing, arithmetic probes and 
     'C_gmm_cp08_sparse_pair_rows' = 6L,
     'C_gmm_cp08_dr_treatment_batch' = 19L,
     'C_gmm_cp08_payload' = 3L,
+    'C_gmm_cp04_diagnostic_fields' = 3L,
     'C_gmm_separate_complete_if' = 12L,
     'C_gmm_or_sparse_if' = 11L,
     'C_gmm_dr_sparse_prepare' = 11L,

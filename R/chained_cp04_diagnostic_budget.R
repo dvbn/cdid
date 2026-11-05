@@ -1,3 +1,43 @@
+# Batch only ordinary selected fields. Each record rechecks the live DLL and
+# the helpers used by the unchanged scalar loop. A declined record can invoke
+# arbitrary methods on that loop, so no permission is retained across records.
+cp04_diagnostic_field_defaults <- list(payload = cp04_payload, kernel = cp04_payload_native_kernel)
+cp04_diagnostic_field_native_cache <- new.env(parent = emptyenv())
+
+cp04_diagnostic_field_native_kernel <- function() {
+  syms <- gmm_require_native_dll()
+  owner <- environment(sys.function())
+  cache <- get0("cp04_diagnostic_field_native_cache", envir = owner, mode = "environment", inherits = FALSE)
+  hit <- if (is.environment(cache)) get0("C_gmm_cp04_diagnostic_fields", envir = cache, inherits = FALSE) else NULL
+  if (is.list(hit) && identical(hit$owner, owner) &&
+      isTRUE(.Call(syms$C_gmm_sexp_aliases, hit$syms, syms))) return(hit$address)
+  dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
+  si <- tryCatch(base::getNativeSymbolInfo("C_gmm_cp04_diagnostic_fields", PACKAGE = dlls[["cdid"]]),
+    error = function(e) NULL)
+  if (is.null(si) || !inherits(si, "NativeSymbolInfo") || is.null(si$address) ||
+      !identical(as.integer(si$numParameters), 3L))
+    cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_cp04_diagnostic_fields`.",
+      c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
+  if (is.environment(cache)) assign("C_gmm_cp04_diagnostic_fields",
+    list(owner = owner, syms = syms, address = si$address), envir = cache)
+  si$address
+}
+
+cp04_diagnostic_field_native <- function(x, nms, call_env) {
+  # These checks never invoke custom [[ or length methods. Unsupported key
+  # types and classed containers keep their original loop before DLL admission.
+  if (!is.character(nms) || is.object(nms) ||
+      typeof(x) != "list" || is.object(x)) return(NULL)
+  defaults <- cp04_diagnostic_field_defaults
+  if (!identical(get("cp04_payload", call_env, inherits = TRUE), defaults$payload) ||
+      !identical(get("cp04_payload_native_kernel", call_env, inherits = TRUE), defaults$kernel) ||
+      !identical(get("[[", call_env, inherits = TRUE), base::`[[`) ||
+      !identical(get("+", call_env, inherits = TRUE), base::`+`) ||
+      !identical(get("[", call_env, inherits = TRUE), base::`[`) ||
+      !identical(get("unname", call_env, inherits = TRUE), base::unname)) return(NULL)
+  .Call(cp04_diagnostic_field_native_kernel(), x, nms, call_env)
+}
+
 # Static modeled-selection/reconstruction diagnostics only. Baseline and dated
 # reference-layout callers keep their established public diagnostic contract.
 cp04_field_diagnostics <- function(b) {
@@ -20,7 +60,10 @@ cp04_public_diagnostic_plan <- function(b, selection_route = NULL, common_design
   reader <- get("cp04_reader", b$reader_ref, inherits = FALSE)
   cp04_registry_field_memory_sources(reader, b)
   E <- function(x) unname(cp04_payload(x)["entries"])
+  field_E <- E
   fields <- function(x, nms) {
+    batch <- if (identical(E, field_E)) cp04_diagnostic_field_native(x, nms, environment()) else NULL
+    if (!is.null(batch)) return(batch)
     z <- 0
     for (nm in nms) z <- z + E(x[[nm]])
     z

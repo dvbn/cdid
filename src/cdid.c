@@ -601,6 +601,7 @@ SEXP C_gmm_if_unit_batch(
     SEXP weighted_sum_sexp, SEXP raw_sum_sexp, SEXP psi_mean_sexp, SEXP S_sexp,
     SEXP max_entries_sexp);
 SEXP C_gmm_cp08_payload(SEXP x_sexp, SEXP scan_attrs_sexp, SEXP call_env_sexp);
+SEXP C_gmm_cp04_diagnostic_fields(SEXP x_sexp, SEXP names_sexp, SEXP call_env_sexp);
 void R_init_cdid(DllInfo *dll);
 
 SEXP C_gmm_native_status(void) {
@@ -4580,6 +4581,132 @@ SEXP C_gmm_cp08_payload(SEXP x_sexp, SEXP scan_attrs_sexp, SEXP call_env_sexp) {
   return out_sexp;
 }
 
+/* Diagnostic field batching is only a borrowed read of ordinary metadata.
+   Unsupported records return NULL before the arithmetic gate or payload walk.
+   In particular no OBJECT length method, ALTREP accessor, or custom [[ runs
+   during admission. Environments and NULL are skipped by the original walk.
+   Metadata depth/node bounds keep admission small and stack-bounded; vector
+   lengths and string bytes are uncapped. Each admitted field uses the old
+   walker and its original overflow refusal. An aggregate outside the exact
+   integer range returns NULL to the old R addition loop without a new error. */
+typedef struct {
+  unsigned int nodes;
+  unsigned int depth;
+  int ok;
+  SEXP owner;
+} cp04_diag_metadata_t;
+
+static int cp04_diag_metadata(SEXP x, cp04_diag_metadata_t *state);
+
+static SEXP cp04_diag_metadata_attr(SEXP tag, SEXP value, void *data) {
+  cp04_diag_metadata_t *state = (cp04_diag_metadata_t *) data;
+  if (!state->ok) return R_NilValue;
+  /* These two getAttrib() transformations stay on the original general walk.
+     All other admitted plain vector/list attributes expose the raw value. */
+  if (tag == R_RowNamesSymbol) {
+    state->ok = 0;
+    return R_NilValue;
+  }
+  if (tag == R_NamesSymbol) {
+    SEXP dim = cp08_payload_attrib_node(state->owner, R_DimSymbol);
+    SEXP dn = cp08_payload_attrib_node(state->owner, R_DimNamesSymbol);
+    if (TYPEOF(dim) == INTSXP && !ALTREP(dim) && XLENGTH(dim) == 1 &&
+        TYPEOF(dn) == VECSXP && !ALTREP(dn) && XLENGTH(dn) >= 1) {
+      state->ok = 0;
+      return R_NilValue;
+    }
+  }
+  if (!cp04_diag_metadata(value, state)) {
+    state->ok = 0;
+    return R_NilValue;
+  }
+  return NULL;
+}
+
+static int cp04_diag_metadata(SEXP x, cp04_diag_metadata_t *state) {
+  if (x == R_NilValue || TYPEOF(x) == ENVSXP) return 1;
+  if (OBJECT(x) || IS_S4_OBJECT(x) || ALTREP(x) || state->depth >= 32U ||
+      state->nodes >= 65536U) return 0;
+  state->nodes += 1U;
+  int type = TYPEOF(x);
+  if (type != VECSXP && type != LGLSXP && type != INTSXP && type != REALSXP &&
+      type != CPLXSXP && type != RAWSXP && type != STRSXP) return 0;
+  R_xlen_t n = XLENGTH(x);
+  state->depth += 1U;
+  if (type == VECSXP) {
+    for (R_xlen_t i = 0; i < n; ++i) {
+      if (!cp04_diag_metadata(VECTOR_ELT(x, i), state)) {
+        state->depth -= 1U;
+        return 0;
+      }
+    }
+  }
+  if (cp08_payload_has_raw_attrib(x)) {
+    /* One virtual attribute-list node; its raw pairlist is never projected. */
+    if (state->nodes >= 65536U) {
+      state->depth -= 1U;
+      return 0;
+    }
+    state->nodes += 1U;
+    SEXP previous = state->owner;
+    state->owner = x;
+    cp08_payload_each_attrib(x, cp04_diag_metadata_attr, state);
+    state->owner = previous;
+  }
+  state->depth -= 1U;
+  return state->ok;
+}
+
+static int cp04_diag_ascii_names(SEXP names, R_xlen_t limit, int nonempty) {
+  if (TYPEOF(names) != STRSXP || OBJECT(names) || IS_S4_OBJECT(names) ||
+      ALTREP(names) || cp08_payload_has_raw_attrib(names) || (limit >= 0 && XLENGTH(names) > limit)) return 0;
+  for (R_xlen_t i = 0; i < XLENGTH(names); ++i) {
+    SEXP s = STRING_ELT(names, i);
+    if (s == NA_STRING || (nonempty && LENGTH(s) == 0)) return 0;
+    const unsigned char *p = (const unsigned char *) CHAR(s);
+    for (int j = 0; j < LENGTH(s); ++j) if (p[j] == 0 || p[j] > 127) return 0;
+  }
+  return 1;
+}
+
+SEXP C_gmm_cp04_diagnostic_fields(SEXP x_sexp, SEXP names_sexp, SEXP call_env_sexp) {
+  /* Fixed borrowed field slots fit the existing diagnostic header reservation.
+     First exact match, including duplicate names, is base [[ character lookup. */
+  if (TYPEOF(x_sexp) != VECSXP || OBJECT(x_sexp) || IS_S4_OBJECT(x_sexp) || ALTREP(x_sexp) ||
+      TYPEOF(call_env_sexp) != ENVSXP || !cp04_diag_ascii_names(names_sexp, 128, 1) ||
+      XLENGTH(names_sexp) == 0) return R_NilValue;
+  SEXP record_names = cp08_payload_attrib_node(x_sexp, R_NamesSymbol);
+  if (record_names != R_NilValue &&
+      (!cp04_diag_ascii_names(record_names, -1, 0) || XLENGTH(record_names) != XLENGTH(x_sexp)))
+    return R_NilValue;
+  SEXP fields[128];
+  R_xlen_t nf = XLENGTH(names_sexp);
+  cp04_diag_metadata_t state = {0U, 0U, 1, R_NilValue};
+  for (R_xlen_t i = 0; i < nf; ++i) {
+    fields[i] = R_NilValue;
+    if (record_names != R_NilValue) {
+      const char *key = CHAR(STRING_ELT(names_sexp, i));
+      for (R_xlen_t j = 0; j < XLENGTH(record_names); ++j) {
+        if (strcmp(CHAR(STRING_ELT(record_names, j)), key) == 0) {
+          fields[i] = VECTOR_ELT(x_sexp, j);
+          break;
+        }
+      }
+    }
+    if (!cp04_diag_metadata(fields[i], &state)) return R_NilValue;
+  }
+  R_CheckUserInterrupt();
+  gmm_require_valid_arithmetic(0);
+  volatile double sum = 0.0;
+  for (R_xlen_t i = 0; i < nf; ++i) {
+    cp08_payload_acc_t acc = {0ULL, 0ULL, 0ULL, call_env_sexp, R_NilValue};
+    cp08_payload_walk(fields[i], 1, &acc);
+    sum = sum + (double) acc.entries;
+    if (sum > (double) GMM_MAX_EXACT_INT) return R_NilValue;
+  }
+  return Rf_ScalarReal(sum);
+}
+
 /* Separate complete ordinary IF. Fixed operators come from the sealed issued
    replay plan, never a pooled outcome fit. All input payload is borrowed and
    read-only. Raw right-minus-left endpoints precede regression arithmetic. */
@@ -5741,6 +5868,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"C_gmm_cp08_dr_treatment_batch", (DL_FUNC) &C_gmm_cp08_dr_treatment_batch, 19},
   {"C_gmm_if_unit_batch", (DL_FUNC) &C_gmm_if_unit_batch, 10},
   {"C_gmm_cp08_payload", (DL_FUNC) &C_gmm_cp08_payload, 3},
+  {"C_gmm_cp04_diagnostic_fields", (DL_FUNC) &C_gmm_cp04_diagnostic_fields, 3},
   {NULL, NULL, 0}
 };
 
