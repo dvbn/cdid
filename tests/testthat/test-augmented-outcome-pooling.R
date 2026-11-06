@@ -258,11 +258,12 @@ rap_collect <- function(fit) {
   out
 }
 
-rap_fit <- function(a, imp = "separate", sel = "separate", model = "pair_logit", mode = "separate") {
+rap_fit <- function(a, imp = "separate", sel = "separate", model = "pair_logit", mode = "separate", est_method = "dr") {
   rap_ns("fit_augmented_backend")(reader = a$reader, link_views = a$views, control = a$control,
     glm_control = rap_gc, rank_tol = 1e-10, outcome_recipe = a$recipe,
-    treatment_columns = c("(Intercept)", "treatment_v"), imputation_pooling = imp,
-    selection_model = model, selection_pooling = sel, X_frame = if (is.null(a$reference)) a$X_full else NULL,
+    treatment_columns = c("(Intercept)", "treatment_v"), est_method = est_method,
+    imputation_pooling = imp, selection_model = model, selection_pooling = sel,
+    X_frame = if (is.null(a$reference)) a$X_full else NULL,
     reference = a$reference, outcome_pooling = mode)
 }
 
@@ -411,5 +412,90 @@ testthat::test_that("augmented structural adjoints retain all scalar checks and 
     broken <- fit; broken$links[[1L]]$adjoint_T$tilde_lambda[1L] <- 1e20
     testthat::expect_error(rap_ns("evaluate_augmented_if_chunk")(broken, 1:11, 1:L),
       class = "cdid_augmented_integrity_error")
+  }
+})
+
+testthat::test_that("augmented OR (separate and pooled) and IPW match raw-equation reference on points, numerical IFs, intercepts and dated layouts", {
+  specs <- list(
+    list(est = "reg", imp = "separate", sel = "separate", model = "pair_logit", mode = "separate"),
+    list(est = "reg", imp = "within_cohort", sel = "across_cohorts", model = "pair_logit", mode = "separate"),
+    list(est = "reg", imp = "across_cohorts", sel = "within_cohort", model = "independent_period_logit", mode = "separate"),
+    list(est = "reg", imp = "within_cohort", sel = "across_cohorts", model = "pair_logit", mode = "pooled"),
+    list(est = "ipw", imp = "separate", sel = "separate", model = "pair_logit", mode = "separate"),
+    list(est = "ipw", imp = "across_cohorts", sel = "within_cohort", model = "independent_period_logit", mode = "pooled")
+  )
+  for (spec in specs) {
+    a <- rap_case()
+    fit <- rap_fit(a, spec$imp, spec$sel, spec$model, spec$mode, est_method = spec$est)
+    fit_dr <- rap_fit(a, spec$imp, spec$sel, spec$model, spec$mode, est_method = "dr")
+    testthat::expect_identical(fit$cells, fit_dr$cells)
+    testthat::expect_identical(fit$groups, fit_dr$groups)
+    testthat::expect_identical(fit$selection_backend$coefficients, fit_dr$selection_backend$coefficients)
+    if (spec$est == "reg") {
+      testthat::expect_null(fit$treatments)
+      testthat::expect_identical(fit$treatment_recipe$p, 0L)
+      testthat::expect_identical(fit$shared_or$blocks, fit_dr$shared_or$blocks)
+    } else {
+      testthat::expect_null(fit$shared_or)
+      testthat::expect_identical(fit$outcome_pooling, "inactive")
+      testthat::expect_identical(fit$treatments, fit_dr$treatments)
+    }
+    testthat::expect_equal(rap_point(fit), rap_reference(a, fit), tolerance = 2e-8)
+    actual <- rap_collect(fit); N <- nrow(actual); h <- 1e-6
+    numerical <- t(vapply(seq_len(N), function(i) {
+      delta <- -rep(1, N); delta[i] <- N - 1
+      (rap_reference(a, fit, 1 + h * delta) - rap_reference(a, fit, 1 - h * delta)) / (2 * h)
+    }, numeric(ncol(actual))))
+    testthat::expect_equal(unname(actual), numerical, tolerance = 1e-5)
+    testthat::expect_lt(max(abs(colMeans(actual))), 1e-8)
+    testthat::expect_gt(max(abs(actual[!a$A, , drop = FALSE])), 1e-4)
+    whole <- rap_ns("evaluate_augmented_if_chunk")(fit, 1:11, 1:3, details = TRUE)
+    sub <- rap_ns("evaluate_augmented_if_chunk")(fit, c(10L, 1L, 3L), c(3L, 1L))
+    testthat::expect_equal(sub$phi, whole$phi[c(10L, 1L, 3L), c(3L, 1L), drop = FALSE], tolerance = 1e-10)
+  }
+
+  # No-intercept and intercept-only OR bases (separate and pooled) and IPW:
+  # for intercept-only OR, the local block intercept IF is retained in all channels.
+  for (est in c("reg", "ipw")) {
+    for (spec in list(c(FALSE, TRUE), c(TRUE, FALSE))) {
+      a <- rap_case(intercept = spec[1L], slopes = spec[2L])
+      fit <- rap_fit(a, mode = "separate", est_method = est)
+      testthat::expect_equal(rap_point(fit), rap_reference(a, fit), tolerance = 2e-8)
+      actual <- rap_collect(fit); N <- nrow(actual); h <- 1e-6
+      for (i in c(1L, 10L, 24L, 82L)) {
+        delta <- -rep(1, N); delta[i] <- N - 1
+        numerical <- (rap_reference(a, fit, 1 + h * delta) - rap_reference(a, fit, 1 - h * delta)) / (2 * h)
+        testthat::expect_equal(unname(actual[i, ]), numerical, tolerance = 1e-5)
+      }
+      if (est == "reg" && spec[1L] && !spec[2L]) {
+        ev <- rap_ns("evaluate_augmented_if_chunk")(fit, 1:11, 1:3, details = TRUE)
+        for (j in 1:3) {
+          cm <- ev$details$links[[j]]$components
+          # These first rows belong to the first treated cohort, outside each
+          # control fit. With separate nuisance fits, their counterfactual-root
+          # scores vanish. The raw-equation IF checks above include control rows.
+          testthat::expect_lt(max(abs(cm[, c("OR_direct", "OR_imputation", "OR_selection")])), 1e-12)
+        }
+      }
+    }
+  }
+
+  # Dated reference layouts for est_method = "reg" (separate and pooled) and "ipw".
+  a_dated <- rap_case(dated = TRUE, route_kind = "augmented")
+  for (cfg in list(list(est = "reg", mode = "separate"), list(est = "reg", mode = "pooled"), list(est = "ipw", mode = "pooled"))) {
+    fit <- rap_fit(a_dated, imp = "within_cohort", sel = "across_cohorts", mode = cfg$mode, est_method = cfg$est)
+    testthat::expect_equal(rap_point(fit), rap_reference(a_dated, fit), tolerance = 2e-8)
+    N <- nrow(a_dated$Y); h <- 1e-6; wanted <- c(1L, 10L, 24L, 82L)
+    actual <- matrix(NA_real_, length(wanted), 3L)
+    for (j in seq_along(wanted)) {
+      i <- wanted[j]; actual[j, ] <- rap_ns("evaluate_augmented_if_chunk")(fit, i, 1:3)$phi
+      delta <- -rep(1, N); delta[i] <- N - 1
+      numerical <- tail((rap_reference(a_dated, fit, 1 + h * delta) - rap_reference(a_dated, fit, 1 - h * delta)) / (2 * h), 3L)
+      testthat::expect_equal(unname(actual[j, ]), numerical, tolerance = 1e-5)
+    }
+    together <- rap_ns("evaluate_augmented_if_chunk")(fit, wanted, c(3L, 1L))
+    testthat::expect_equal(unname(together$phi), actual[, c(3L, 1L), drop = FALSE], tolerance = 1e-10)
+    core <- rap_ns("evaluate_augmented_if_chunk")(fit, wanted, c(3L, 1L), scale = "core")
+    testthat::expect_equal(core$phi, (sum(a_dated$A) / N) * together$phi, tolerance = 1e-10)
   }
 })

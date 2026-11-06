@@ -64,8 +64,8 @@ aug_collect <- function(fit, chunk_rows = 11L, link_batch_size = 2L, scale = "fr
   N <- st$N
   L <- length(fit$links)
   out <- list(phi = matrix(NA_real_, N, L), link = vector("list", L), nuis = list(), batches = 0L)
-  fields <- c("denplus", "numT", "T", "numBg", "Bg", "denminus", "numC", "C", "numBo", "Bo", "dr",
-    "j_T_forward", "j_T_adjoint", "j_C_forward", "j_C_adjoint")
+  fields <- c("denplus", "numT", "T", "numBg", "Bg", "denminus", "numC", "C", "numBo", "Bo",
+    "dr", "ipw", "or", "reg", "j_T_forward", "j_T_adjoint", "j_C_forward", "j_C_adjoint")
   for (l in seq_len(L)) {
     out$link[[l]] <- c(lapply(stats::setNames(fields, fields), function(f) rep(NA_real_, N)),
       list(components = matrix(NA_real_, N, 10L), reference_components = matrix(NA_real_, N, 4L)))
@@ -86,7 +86,9 @@ aug_collect <- function(fit, chunk_rows = 11L, link_batch_size = 2L, scale = "fr
       for (j in seq_along(b$links)) {
         ld <- d$links[[j]]
         l <- b$links[j]
-        for (f in fields) out$link[[l]][[f]][b$rows] <<- ld[[f]]
+        for (f in intersect(fields, names(ld))) {
+          if (!is.null(ld[[f]])) out$link[[l]][[f]][b$rows] <<- ld[[f]]
+        }
         out$link[[l]]$components[b$rows, ] <<- ld$components
         colnames(out$link[[l]]$components) <<- colnames(ld$components)
         out$link[[l]]$reference_components[b$rows, ] <<- ld$reference_components
@@ -100,7 +102,7 @@ aug_collect <- function(fit, chunk_rows = 11L, link_batch_size = 2L, scale = "fr
       th <- d$selection_theta
       colnames(th) <- as.character(d$selection_theta_ids)
       put("selection_theta", b$rows, th)
-      put("or_theta", b$rows, d$or_if$theta)
+      if (!is.null(d$or_if)) put("or_theta", b$rows, d$or_if$theta)
       for (tid in seq_along(d$trt_if)) put(paste0("gamma.", tid), b$rows, d$trt_if[[tid]]$gamma)
       put("lambda", b$rows, matrix(d$lambda, ncol = 1L))
     },
@@ -170,11 +172,11 @@ aug_imputation_coordinate <- function(fit, name) {
 }
 
 aug_state <- new.env(parent = emptyenv())
-aug_get <- function(fid) {
-  key <- paste0("fit:", fid)
+aug_get <- function(fid, est_method = "dr") {
+  key <- paste0("fit:", fid, ":", est_method)
   if (is.null(aug_state[[key]])) {
     fx <- aug_load(fid, max_chunk_rows = 11L)
-    fit <- aug_fit(fx)
+    fit <- aug_fit(fx, est_method = est_method)
     aug_state[[key]] <- list(fx = fx, fit = fit, col = aug_collect(fit, chunk_rows = 9L, link_batch_size = 2L))
   }
   aug_state[[key]]
@@ -565,9 +567,17 @@ testthat::test_that("legitimate refusals: no outcome design from the selection r
   # reader$state$Z is the observation-probability design and never the outcome design.
   e <- testthat::expect_error(aug_fit(fx, X_frame = NULL), class = "cdid_augmented_identity_error")
   testthat::expect_match(conditionMessage(e), "reader$state$Z", fixed = TRUE)
-  for (m in c("ipw", "reg")) testthat::expect_error(aug_fit(fx, est_method = m), class = "cdid_augmented_method_error")
+  testthat::expect_error(aug_fit(fx, est_method = "twfe"), class = "cdid_augmented_method_error")
   testthat::expect_error(aug_fit(fx, selection_model = "probit"), class = "cdid_cp04_unsupported_error")
   testthat::expect_error(aug_fit(fx, imputation_pooling = "pooled"), class = "cdid_imputation_pooling_error")
+  # OR fits no treatment models, so aliased treatment columns are ignored for est_method = "reg".
+  alias_fx <- aug_load("pair_retained_alias")
+  fit_reg_alias <- aug_fit(alias_fx, est_method = "reg", treatment_columns = colnames(alias_fx$X_frame))
+  base_reg <- aug_get("pair_sep_jsep", "reg")
+  testthat::expect_null(fit_reg_alias$treatments)
+  testthat::expect_identical(fit_reg_alias$treatment_recipe$p, 0L)
+  testthat::expect_lt(aug_mx(vapply(fit_reg_alias$links, `[[`, numeric(1L), "mu") -
+    vapply(base_reg$fit$links, `[[`, numeric(1L), "mu")), 1e-12)
   # A non-F fitting roster is refused (U = A with an explicit justification).
   A_rows <- fx$reader$state$a_index > 0L
   reader_A <- aug_ns("construct_cp04_frame_reader")(fx$frame, fx$ids, fx$reader$state$Z, fx$g, fx$w, fx$control,
@@ -577,6 +587,220 @@ testthat::test_that("legitimate refusals: no outcome design from the selection r
   bad <- fx$pair_outcomes
   bad[[1L]][which(is.na(bad[[1L]]))[1L]] <- 0
   testthat::expect_error(aug_fit(fx, pair_outcomes = bad), class = "cdid_augmented_support_error")
+})
+
+testthat::test_that("augmented IPW and OR match all nine fixtures on points, unit IFs, off-A rows and unused nuisance absence", {
+  testthat::skip_if_not(aug_has_installed_cdid(), "Installed cdid namespace required.")
+  off_A_ipw_effect <- 0
+  off_A_reg_effect <- 0
+  or_intercept_effect <- c(OR_direct = 0, OR_rate = 0, OR_imputation = 0, OR_selection = 0)
+  for (fid in aug_specs$fixture_id) {
+    obj_dr <- aug_get(fid, "dr")
+    obj_ipw <- aug_get(fid, "ipw")
+    obj_reg <- aug_get(fid, "reg")
+    fx <- obj_dr$fx
+    ex <- fx$expectations
+    fit_ipw <- obj_ipw$fit
+    fit_reg <- obj_reg$fit
+    col_ipw <- obj_ipw$col
+    col_reg <- obj_reg$col
+
+    aug_ns("validate_augmented_backend")(fit_ipw)
+    aug_ns("validate_augmented_backend")(fit_reg)
+    testthat::expect_identical(c(fit_ipw$selection_est_method, fit_ipw$est_method, fit_ipw$dr_method), c("dr", "ipw", "ipw"))
+    testthat::expect_identical(c(fit_reg$selection_est_method, fit_reg$est_method, fit_reg$dr_method), c("dr", "reg", "reg"))
+    testthat::expect_identical(fit_ipw$outcome_pooling, "inactive")
+    testthat::expect_identical(fit_reg$outcome_pooling, "pooled")
+
+    # Unused nuisance families are never fitted or retained.
+    testthat::expect_null(fit_ipw$shared_or)
+    testthat::expect_null(fit_ipw$shared)
+    testthat::expect_length(fit_ipw$or_blocks, 0L)
+    testthat::expect_identical(fit_ipw$accounting$n_or_fits, 0L)
+    testthat::expect_identical(fit_ipw$accounting$n_or_blocks, 0L)
+    testthat::expect_identical(fit_ipw$accounting$n_or_local_intercepts, 0L)
+    testthat::expect_identical(fit_ipw$accounting$n_or_shared_slopes, 0L)
+    testthat::expect_identical(fit_ipw$accounting$augmentation_passes, 2L)
+    testthat::expect_length(fit_ipw$treatments, 4L)
+    testthat::expect_null(col_ipw$nuis$or_theta)
+
+    testthat::expect_null(fit_reg$treatments)
+    testthat::expect_length(fit_reg$treatment_specs, 0L)
+    testthat::expect_identical(fit_reg$treatment_recipe$p, 0L)
+    testthat::expect_identical(fit_reg$accounting$n_treatment_models, 0L)
+    testthat::expect_identical(fit_reg$accounting$n_treatment_fits, 0L)
+    testthat::expect_identical(fit_reg$accounting$n_treatment_columns, 0L)
+    testthat::expect_identical(fit_reg$accounting$augmentation_passes, 2L)
+    testthat::expect_length(fit_reg$shared_or$blocks, 3L)
+
+    # Retained Stage 1 imputation and observation logits agree across all three methods.
+    for (nm in grep("^imputation\\.", ex$coordinates, value = TRUE)) {
+      testthat::expect_lt(abs(aug_imputation_coordinate(fit_ipw, nm)$value - ex$value(nm)), aug_tol_point)
+      testthat::expect_lt(abs(aug_imputation_coordinate(fit_reg, nm)$value - ex$value(nm)), aug_tol_point)
+    }
+    for (nm in grep("^selection\\.", ex$coordinates, value = TRUE)) {
+      testthat::expect_lt(abs(aug_selection_coordinate(fit_ipw, fx, nm)$value - ex$value(nm)), aug_tol_point)
+      testthat::expect_lt(abs(aug_selection_coordinate(fit_reg, fx, nm)$value - ex$value(nm)), aug_tol_point)
+    }
+    or_names <- grep("^OR\\.theta", ex$coordinates, value = TRUE)
+    testthat::expect_lt(aug_mx(fit_reg$shared_or$theta - ex$value(or_names)), aug_tol_point)
+    for (nm in or_names) {
+      testthat::expect_lt(aug_mx(col_reg$nuis$or_theta[, nm] - ex$if_row(nm)), aug_tol_if)
+    }
+    for (l in 1:4) {
+      gam <- fit_ipw$treatments[[fit_ipw$links[[l]]$trt_id]]$coefficients
+      testthat::expect_lt(aug_mx(gam - ex$value(paste0("treatment.l", l, ".gamma", seq_along(gam) - 1L))), aug_tol_point)
+    }
+
+    for (l in 1:4) {
+      lf_ipw <- fit_ipw$links[[l]]
+      lf_reg <- fit_reg$links[[l]]
+      lf_dr <- obj_dr$fit$links[[l]]
+      lk_ipw <- col_ipw$link[[l]]
+      lk_reg <- col_reg$link[[l]]
+      lk_dr <- obj_dr$col$link[[l]]
+
+      ref_T <- ex$value(paste0("T.l", l))
+      ref_C <- ex$value(paste0("C.l", l))
+      ref_Bg <- ex$value(paste0("Bg.l", l))
+      ref_Bo <- ex$value(paste0("Bo.l", l))
+      ref_ipw <- ref_T - ref_C
+      ref_reg <- ref_T - ref_Bg
+
+      testthat::expect_lt(abs(lf_ipw$mu - ref_ipw), aug_tol_point)
+      testthat::expect_lt(abs(lf_ipw$mu_ipw - ref_ipw), aug_tol_point)
+      testthat::expect_true(is.na(lf_ipw$B_gl) && is.na(lf_ipw$B_ol))
+      testthat::expect_null(lf_ipw$d_bar_plus_or)
+      testthat::expect_equal(aug_ns("chained_full_link_estimate")(fit_ipw, l), lf_ipw$mu)
+
+      testthat::expect_lt(abs(lf_reg$mu - ref_reg), aug_tol_point)
+      testthat::expect_lt(abs(lf_reg$mu_or - ref_reg), aug_tol_point)
+      testthat::expect_lt(abs(lf_reg$mu_reg - ref_reg), aug_tol_point)
+      testthat::expect_true(is.na(lf_reg$C_ol) && is.na(lf_reg$B_ol) && is.na(lf_reg$d_minus))
+      testthat::expect_null(lf_reg$adjoint_C)
+      testthat::expect_equal(aug_ns("chained_full_link_estimate")(fit_reg, l), lf_reg$mu)
+
+      # Algebraic identity across the three estimators: DR = OR - (C - Bo) = IPW - (Bg - Bo).
+      testthat::expect_lt(abs(lf_dr$mu - (lf_reg$mu - (lf_ipw$C_ol - lf_dr$B_ol))), 1e-13)
+      testthat::expect_lt(abs(lf_dr$mu - (lf_ipw$mu - (lf_reg$B_gl - lf_dr$B_ol))), 1e-13)
+
+      # Complete original-unit IF rows match T - C and T - Bg from the frozen reference.
+      if_T <- ex$if_row(paste0("T.l", l))
+      if_C <- ex$if_row(paste0("C.l", l))
+      if_Bg <- ex$if_row(paste0("Bg.l", l))
+      if_Bo <- ex$if_row(paste0("Bo.l", l))
+      if_ipw_ref <- if_T - if_C
+      if_reg_ref <- if_T - if_Bg
+
+      testthat::expect_lt(aug_mx(col_ipw$phi[, l] - if_ipw_ref), aug_tol_if)
+      testthat::expect_lt(aug_mx(lk_ipw$ipw - col_ipw$phi[, l]), 1e-14)
+      testthat::expect_lt(aug_mx(rowSums(lk_ipw$components) - col_ipw$phi[, l]), 1e-13)
+      testthat::expect_equal(aug_mx(lk_ipw$components[, c("OR_direct", "OR_rate", "OR_imputation", "OR_selection")]), 0)
+      testthat::expect_lt(aug_mx(lk_ipw$j_T_forward - lk_ipw$j_T_adjoint), 1e-12)
+      testthat::expect_lt(aug_mx(lk_ipw$j_C_forward - lk_ipw$j_C_adjoint), 1e-12)
+
+      testthat::expect_lt(aug_mx(col_reg$phi[, l] - if_reg_ref), aug_tol_if)
+      testthat::expect_lt(aug_mx(lk_reg$or - col_reg$phi[, l]), 1e-14)
+      testthat::expect_lt(aug_mx(lk_reg$reg - col_reg$phi[, l]), 1e-14)
+      testthat::expect_lt(aug_mx(rowSums(lk_reg$components) - col_reg$phi[, l]), 1e-13)
+      testthat::expect_equal(aug_mx(lk_reg$components[, c("treatment_direct", "treatment_rate")]), 0)
+      testthat::expect_lt(aug_mx(lk_reg$j_T_forward - lk_reg$j_T_adjoint), 1e-12)
+
+      # Exact original-unit IF decomposition across DR, IPW and OR.
+      testthat::expect_lt(aug_mx(obj_dr$col$phi[, l] - (col_reg$phi[, l] - (lk_dr$C - lk_dr$Bo))), 1e-13)
+      testthat::expect_lt(aug_mx(obj_dr$col$phi[, l] - (col_ipw$phi[, l] - (lk_dr$Bg - lk_dr$Bo))), 1e-13)
+
+      # Centering of degree-zero IF rows.
+      testthat::expect_lt(abs(mean(col_ipw$phi[, l])), 1e-12)
+      testthat::expect_lt(abs(mean(col_reg$phi[, l])), 1e-12)
+    }
+
+    # Off-A rows (zero/single-outcome units) are retained and match reference differences.
+    off_A <- fx$A == 0
+    exp_off_ipw <- vapply(1:4, function(l) (ex$if_row(paste0("T.l", l)) - ex$if_row(paste0("C.l", l)))[off_A],
+      numeric(sum(off_A)))
+    exp_off_reg <- vapply(1:4, function(l) (ex$if_row(paste0("T.l", l)) - ex$if_row(paste0("Bg.l", l)))[off_A],
+      numeric(sum(off_A)))
+    testthat::expect_lt(aug_mx(col_ipw$phi[off_A, ] - exp_off_ipw), aug_tol_if)
+    testthat::expect_lt(aug_mx(col_reg$phi[off_A, ] - exp_off_reg), aug_tol_if)
+    off_A_ipw_effect <- max(off_A_ipw_effect, aug_mx(exp_off_ipw))
+    off_A_reg_effect <- max(off_A_reg_effect, aug_mx(exp_off_reg))
+
+    # On pair_intercept_only (p_or == 0, local intercepts only), DR cancels the local
+    # block intercept so OR_* == 0, whereas est_method = "reg" retains -xi_{alpha,b}.
+    # Constant q and the imputation intercept score make MD_one and Rq_one zero:
+    # the OR_imputation/OR_selection channels vanish in this fixture.
+    if (identical(fid, "pair_intercept_only")) {
+      testthat::expect_identical(fit_reg$shared_or$p, 0L)
+      for (l in 1:4) {
+        bid <- fit_reg$links[[l]]$or_block_id
+        cm_dr <- obj_dr$col$link[[l]]$components
+        cm_reg <- col_reg$link[[l]]$components
+        testthat::expect_equal(aug_mx(cm_dr[, c("OR_direct", "OR_rate", "OR_imputation", "OR_selection")]), 0)
+        alpha_col <- paste0("OR.theta", bid - 1L)
+        testthat::expect_lt(aug_mx(rowSums(cm_reg[, c("OR_direct", "OR_rate", "OR_imputation", "OR_selection")]) +
+          ex$if_row(alpha_col)), aug_tol_if)
+        for (ch_nm in names(or_intercept_effect)) {
+          or_intercept_effect[[ch_nm]] <- max(or_intercept_effect[[ch_nm]], aug_mx(cm_reg[, ch_nm]))
+        }
+      }
+    }
+  }
+  testthat::expect_gt(off_A_ipw_effect, 1e-6)
+  testthat::expect_gt(off_A_reg_effect, 1e-6)
+  for (ch_nm in c("OR_direct", "OR_rate")) testthat::expect_gt(or_intercept_effect[[ch_nm]], 1e-5)
+  for (ch_nm in c("OR_imputation", "OR_selection")) testthat::expect_lt(or_intercept_effect[[ch_nm]], aug_tol_if)
+})
+
+testthat::test_that("augmented IPW and OR fast replay, chunk/row-order invariance, covariance and envelopes hold", {
+  testthat::skip_if_not(aug_has_installed_cdid(), "Installed cdid namespace required.")
+  for (m in c("ipw", "reg")) {
+    for (fid in c("date_sep_jwithin", "pair_V_across_jwithin", "pair_intercept_only")) {
+      obj <- aug_get(fid, m)
+      fit <- obj$fit
+      fx <- obj$fx
+      a <- aug_collect(fit, chunk_rows = 5L, link_batch_size = 1L, details = FALSE)
+      b <- aug_collect(fit, chunk_rows = 11L, link_batch_size = 4L, details = FALSE)
+      core <- aug_collect(fit, chunk_rows = 7L, link_batch_size = 3L, scale = "core", details = FALSE)
+      testthat::expect_lt(aug_mx(a$phi - obj$col$phi), 1e-12)
+      testthat::expect_lt(aug_mx(b$phi - obj$col$phi), 1e-12)
+      testthat::expect_lt(aug_mx(core$phi - (24 / 36) * obj$col$phi), 1e-15)
+
+      # Diagnostics confirm inactive blocks/treatments are never evaluated in replay.
+      ev1 <- aug_ns("evaluate_augmented_if_chunk")(fit, rows = 1:7, links = 1:2, details = FALSE)
+      if (m == "ipw") {
+        testthat::expect_identical(ev1$diagnostics$n_or_block_evaluations, 0L)
+        testthat::expect_gt(ev1$diagnostics$n_treatment_score_evaluations, 0L)
+      } else {
+        testthat::expect_gt(ev1$diagnostics$n_or_block_evaluations, 0L)
+        testthat::expect_identical(ev1$diagnostics$n_treatment_score_evaluations, 0L)
+      }
+
+      # Row-order invariance and streaming covariance agreement.
+      perm <- c(seq.int(36L, 2L, -2L), seq.int(35L, 1L, -2L))
+      fx_p <- aug_load(fid, order = perm, max_chunk_rows = 7L)
+      fit_p <- aug_fit(fx_p, est_method = m)
+      col_p <- aug_collect(fit_p, chunk_rows = 7L, link_batch_size = 2L, details = FALSE)
+      testthat::expect_lt(aug_mx(vapply(fit_p$links, `[[`, numeric(1L), "mu") -
+        vapply(fit$links, `[[`, numeric(1L), "mu")), 1e-12)
+      testthat::expect_lt(aug_mx(col_p$phi[match(fx$ids, fx_p$ids), ] - obj$col$phi), 1e-11)
+
+      V_stream <- aug_ns("stream_augmented_covariance")(fit)$V
+      V_direct <- crossprod(obj$col$phi) / fx$N^2
+      testthat::expect_lt(aug_mx(V_stream - V_direct), 1e-14)
+
+      # Retained payload and affine IF envelope bounds.
+      acc <- fit$accounting
+      testthat::expect_lte(acc$owned_entries + acc$borrowed_entries, acc$retained_bound)
+      testthat::expect_equal(acc$owned_entries, unname(aug_ns("cp04_payload")(fit)["entries"]))
+      env <- aug_ns("augmented_if_envelope")
+      e1 <- env(fit, 1, seq_along(fit$links))
+      e2 <- env(fit, 2, seq_along(fit$links))
+      e3 <- env(fit, 3, seq_along(fit$links))
+      testthat::expect_equal(e3$output - e2$output, e2$output - e1$output)
+      testthat::expect_equal(e3$scratch - e2$scratch, e2$scratch - e1$scratch)
+    }
+  }
 })
 
 testthat::test_that("retained payload, IF envelopes and the absence of dense N x cells arrays", {
