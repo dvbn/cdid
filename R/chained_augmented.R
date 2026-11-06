@@ -1811,10 +1811,11 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       if (p_or) rhs_beta_dir <- sweep(rhs_beta_dir, 2L, bf$score_mean_beta)
     }
     if (!use_imp_forward) {
+      memo_or <- !separate_or && !is.null(adjoint_replay)
       # Global shared-slope j forcing collects every contributing block before
       # each scalar pullback (row width p_OR, independent of the cell count).
       if (p_or) for (qq in seq_len(p_or)) {
-        saved <- if (is.null(adjoint_replay)) NULL else adjoint_replay$get("beta", qq)
+        saved <- if (!memo_or) NULL else adjoint_replay$get("beta", qq)
         if (!is.null(saved)) {
           forcing_cids <- unique(unlist(lapply(backend$shared_or$blocks[wanted_bids], `[[`, "control_cell_ids")))
           rhs_beta_j[, qq] <- eval_saved_adjoint(saved, forcing_cids)
@@ -1831,11 +1832,11 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
           }
         }
         forcing_cids <- unique(unlist(lapply(backend$shared_or$blocks[wanted_bids], `[[`, "control_cell_ids")))
-        rhs_beta_j[, qq] <- eval_imp_linear(lam, nu, forcing_cids, "beta", qq)
+        rhs_beta_j[, qq] <- eval_imp_linear(lam, nu, forcing_cids, if (memo_or) "beta" else NULL, if (memo_or) qq else NULL)
       }
       if (recipe$intercept) for (apos in seq_along(alpha_bids)) {
         bf <- backend$shared_or$blocks[[alpha_bids[apos]]]
-        saved <- if (is.null(adjoint_replay)) NULL else adjoint_replay$get("alpha", alpha_bids[apos])
+        saved <- if (!memo_or) NULL else adjoint_replay$get("alpha", alpha_bids[apos])
         if (!is.null(saved)) {
           rhs_alpha_j[, apos] <- eval_saved_adjoint(saved, bf$control_cell_ids)
           next
@@ -1847,7 +1848,7 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
           lam[cid] <- lam[cid] + bf$j_force_alpha_alpha[idx_k]
           nu[[cid]] <- nu[[cid]] + bf$j_force_alpha_beta[[idx_k]]
         }
-        rhs_alpha_j[, apos] <- eval_imp_linear(lam, nu, bf$control_cell_ids, "alpha", alpha_bids[apos])
+        rhs_alpha_j[, apos] <- eval_imp_linear(lam, nu, bf$control_cell_ids, if (memo_or) "alpha" else NULL, if (memo_or) alpha_bids[apos] else NULL)
       }
     }
 

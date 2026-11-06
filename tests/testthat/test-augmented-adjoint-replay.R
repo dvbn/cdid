@@ -213,10 +213,14 @@ testthat::test_that("adjoint replay keeps partition/source refusals and original
 
 testthat::test_that("ordinary adjoint memo eligibility leaves details and other models unchanged", {
   a <- v57_aug$rap_case()
-  for (spec in list(c("within_cohort", "pooled"), c("separate", "separate"))) {
-    fit <- v57_aug$rap_fit(a, imp = spec[1L], mode = spec[2L])
-    testthat::expect_null(v57_ns("chained_full_if_plan")(fit, 1:3, fit$control$max_chunk_rows))
-  }
+  fit <- v57_aug$rap_fit(a, imp = "within_cohort", mode = "pooled")
+  testthat::expect_null(v57_ns("chained_full_if_plan")(fit, 1:3, fit$control$max_chunk_rows))
+  sep_fit <- v57_aug$rap_fit(a, imp = "separate", mode = "separate")
+  sep_plan <- v57_ns("chained_full_if_plan")(sep_fit, 1:3, sep_fit$control$max_chunk_rows)
+  testthat::expect_type(sep_plan, "list")
+  testthat::expect_identical(sep_plan$q, 0L)
+  testthat::expect_identical(length(sep_plan$store$entries), 0L)
+  v57_ns("augmented_adjoint_replay_release")(sep_plan)
   a <- v57_wide_case(); fit <- v57_aug$rap_fit(a, imp = "separate", mode = "pooled")
   links <- rev(seq_along(fit$links))
   plan <- v57_ns("chained_full_if_plan")(fit, links, fit$control$max_chunk_rows)

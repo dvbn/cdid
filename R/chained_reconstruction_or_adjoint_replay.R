@@ -2,8 +2,8 @@
 # pullbacks. Scores, centered designs and IF rows never enter this plan.
 augmented_adjoint_replay_plan <- function(backend, links, B, phase_store = NULL) {
   validate_augmented_backend(backend)
-  if (!identical(backend$outcome_pooling, "pooled") ||
-      !identical(backend$imputation_pooling, "separate") ||
+  if (!backend$outcome_pooling %in% c("pooled", "separate", "inactive") ||
+      !backend$imputation_pooling %in% c("separate", "within_cohort", "across_cohorts") ||
       !is.null(backend$layout) || !is.null(backend$reference_ref) ||
       !is.null(backend$pair_outcomes)) return(NULL)
   if (!or_baseline_native_index(links, length(backend$links)) || !gmm_scalar_numeric(B) ||
@@ -12,45 +12,67 @@ augmented_adjoint_replay_plan <- function(backend, links, B, phase_store = NULL)
   pre <- augmented_if_budget(backend, B, links, FALSE)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   N <- reader$state$N
-  if (B > N || !length(pre$bids)) return(NULL)
-  # Fund only the actual V44 inventory, not an assumed legacy compartment.
-  # Both affine endpoints also cover every issued full/tail row count.
-  sp <- selection_if_budget(backend$selection_backend, B, pre$q_ids, details = FALSE)
-  inv <- reconstruction_ordinary_inventory(backend, B, links, pre, sp)
-  if (!identical(pre$scratch, inv$scratch)) return(NULL)
-  rm(sp, inv)
-  if (B != 1L) {
-    one <- augmented_if_budget(backend, 1L, links, FALSE)
-    sp <- selection_if_budget(backend$selection_backend, 1L, one$q_ids, details = FALSE)
-    inv <- reconstruction_ordinary_inventory(backend, 1L, links, one, sp)
-    if (!identical(one$scratch, inv$scratch)) return(NULL)
-    rm(one, sp, inv)
+  separate_or <- reconstruction_separate(backend$shared_or)
+  has_pooled_or <- identical(backend$outcome_pooling, "pooled") && !is.null(backend$shared_or)
+  if (B > N || (!identical(backend$outcome_pooling, "inactive") && !length(pre$bids))) return(NULL)
+  if (separate_or) {
+    sep <- reconstruction_if_envelope(backend, B, links, FALSE, augmented = TRUE)
+    if (!identical(pre$scratch, sep$scratch)) return(NULL)
+    rm(sep)
+    if (B != 1L) {
+      one <- augmented_if_budget(backend, 1L, links, FALSE)
+      sep <- reconstruction_if_envelope(backend, 1L, links, FALSE, augmented = TRUE)
+      if (!identical(one$scratch, sep$scratch)) return(NULL)
+      rm(one, sep)
+    }
+  } else {
+    # Fund only the actual V44 inventory, not an assumed legacy compartment.
+    # Both affine endpoints also cover every issued full/tail row count.
+    sp <- selection_if_budget(backend$selection_backend, B, pre$q_ids, details = FALSE)
+    inv <- reconstruction_ordinary_inventory(backend, B, links, pre, sp)
+    if (!identical(pre$scratch, inv$scratch)) return(NULL)
+    rm(sp, inv)
+    if (B != 1L) {
+      one <- augmented_if_budget(backend, 1L, links, FALSE)
+      sp <- selection_if_budget(backend$selection_backend, 1L, one$q_ids, details = FALSE)
+      inv <- reconstruction_ordinary_inventory(backend, 1L, links, one, sp)
+      if (!identical(one$scratch, inv$scratch)) return(NULL)
+      rm(one, sp, inv)
+    }
   }
   cells <- backend$cells; groups <- backend$groups
   nc <- length(cells); ng <- length(groups)
   pg <- vapply(groups, `[[`, integer(1L), "p")
-  P <- sum(pg); r <- max(c(0, pg)); q <- backend$shared_or$p
-  alpha <- if (backend$outcome_recipe$intercept)
+  P <- sum(pg); r <- max(c(0, pg))
+  q <- if (has_pooled_or) backend$shared_or$p else 0L
+  alpha <- if (has_pooled_or && backend$outcome_recipe$intercept)
     sort(unique(vapply(backend$links[links], `[[`, integer(1L), "or_block_id"))) else integer(0L)
   dense <- nc + 9 * ng + P + 55
-  alpha_bounds <- vapply(alpha, function(bid) {
+  alpha_bounds <- if (length(alpha)) vapply(alpha, function(bid) {
     cids <- backend$shared_or$blocks[[bid]]$control_cell_ids
     gids <- unique(vapply(cells[cids], `[[`, integer(1L), "group_id"))
     # Existing structural compact representation, including numerical zeros.
     min(dense, 512 + 4 * length(cids) + 32 * length(gids) + 4 * sum(pg[gids]))
-  }, numeric(1L))
-  seed_bound <- 2048 + 256 * ng + 4 * nc + 4 * P
-  retained <- 4096 + 32 * (q + length(alpha)) + q * (dense + 128) +
-    sum(alpha_bounds + 128) + seed_bound
+  }, numeric(1L)) else numeric(0L)
+  seed_bound <- if (has_pooled_or) 2048 + 256 * ng + 4 * nc + 4 * P else 0
   cell_columns <- sum(vapply(cells, function(cf) pg[cf$group_id], numeric(1L)))
-  names_bytes <- sum(nchar(c(backend$design_columns, backend$outcome_recipe$columns,
-    backend$treatment_recipe$columns, colnames(reader$state$Z)), type = "bytes"))
-  # Original input loadings, dense solved/replacement record, old/new inactive
-  # templates, compact packing, scalar solves and the guarded C score peak.
-  peak <- 8192 + 16 * nc + 192 * ng + 4 * cell_columns + 4 * P +
-    32 * r^2 + 64 * names_bytes + 2 * dense
-  funded <- 16384 + 320 * nc + 512 * ng + 8 * cell_columns + 8 * P +
-    32 * r^2 + 80 * names_bytes
+  if (separate_or) {
+    retained <- 2048 + 16 * (length(links) + length(pre$bids))
+    peak <- 2048 + 16 * (nc + ng) + 32 * r^2
+    funded <- 4096 + 64 * (nc + ng + length(backend$or_blocks) + length(links) + length(pre$uids)) +
+      64 * nc * (backend$outcome_recipe$p + 2) + 128 * (backend$outcome_recipe$p + 2)^2
+  } else {
+    names_bytes <- sum(nchar(c(backend$design_columns, backend$outcome_recipe$columns,
+      backend$treatment_recipe$columns, colnames(reader$state$Z)), type = "bytes"))
+    retained <- 4096 + 32 * (q + length(alpha)) + q * (dense + 128) +
+      sum(alpha_bounds + 128) + seed_bound
+    # Original input loadings, dense solved/replacement record, old/new inactive
+    # templates, compact packing, scalar solves and the guarded C score peak.
+    peak <- 8192 + 16 * nc + 192 * ng + 4 * cell_columns + 4 * P +
+      32 * r^2 + 64 * names_bytes + (if (has_pooled_or) 2 * dense else 0)
+    funded <- 16384 + 320 * nc + 512 * ng + 8 * cell_columns + 8 * P +
+      32 * r^2 + 80 * names_bytes
+  }
   tail <- N %% B; min_B <- if (tail) min(B, tail) else B
   # The constant compartments fund retention even between chunks. Score
   # output/centering uses only the original adjoint row compartment.
