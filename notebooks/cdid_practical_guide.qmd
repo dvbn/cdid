@@ -4,6 +4,9 @@ format:
   html:
     embed-resources: true
     self-contained-math: true
+    html-math-method:
+      method: mathjax
+      url: https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg-full.js
     toc: true
     toc-depth: 3
     code-fold: false
@@ -29,11 +32,16 @@ The 16 sections contain 35 R chunks: 31 run automatically and four are disabled 
 
 ```{r}
 #| label: setup
+# If tutorial packages are missing, run once in your R console:
+# install.packages(c("knitr", "rmarkdown", "ggplot2"))
 proj_root <- if (file.exists("notebooks/simulate_panel.R")) "." else if (file.exists("simulate_panel.R")) ".." else stop("Cannot locate simulate_panel.R.")
 val_lib <- file.path(proj_root, "validation", ".lib")
 if (dir.exists(val_lib)) .libPaths(c(normalizePath(val_lib, winslash = "/"), .libPaths()))
 
 library(cdid); library(did); library(DRDID); library(knitr); library(ggplot2)
+if (utils::packageVersion("cdid") < "1.2.0.0") {
+  stop("This guide requires cdid 1.2.0.0 or later. Update the active library and restart R; check validation/.lib if it is present.")
+}
 
 pkg_info <- data.frame(
   package  = c("R", "cdid", "did", "DRDID", "knitr", "ggplot2"),

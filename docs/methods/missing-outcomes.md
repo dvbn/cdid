@@ -140,10 +140,6 @@ All three adjustments need conditional mean trends missing at random for every n
 
 The augmented correction with treatment IPW needs a correct treatment propensity model; with treatment OR it needs a correct counterfactual regression. In either case, every needed cell also needs a correct observation model or a correct actual-change imputer. Augmentation protects the missing-outcome layer; it does not give treatment IPW or OR the treatment-DR guarantee.
 
-The augmented correction with treatment IPW needs a correct treatment propensity model; with treatment OR it needs a correct counterfactual regression. In either case, every needed cell also needs a correct observation model or a correct actual-change imputer. Augmentation protects the missing-outcome layer; it does not give treatment IPW or OR the treatment-DR guarantee.
-
-The augmented correction with treatment IPW needs a correct treatment propensity model; with treatment OR it needs a correct counterfactual regression. In either case, every needed cell also needs a correct observation model or a correct actual-change imputer. Augmentation protects the missing-outcome layer; it does not give treatment IPW or OR the treatment-DR guarantee.
-
 For the augmented correction combined with treatment DR, the sufficient condition is therefore: (treatment propensity model correct or counterfactual regression correct) and, for every needed cell, (observation model correct or imputation model correct). The correct alternative may differ from one cell to another. These are sufficient conditions for the primitive links with several qualifications. ATT/GMM recovery additionally needs valid moments for every used catalog link and the accepted identification and regularity conditions; incompatible link pseudo-targets can make the limit depend on the GMM weights.
 
 - Shared coefficients in the chosen observation, imputation or outcome model, and the two endpoints of a date model, link cells together. An error elsewhere in a shared group can affect its other predictions.
