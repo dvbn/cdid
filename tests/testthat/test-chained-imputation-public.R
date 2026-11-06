@@ -137,14 +137,8 @@ testthat::test_that("ordinary mode neither evaluates nor forwards either new cha
 testthat::test_that("selection_est_method and imputation gates refuse unsupported requests before the data promise", {
   testthat::skip_if_not(impp_has_installed_cdid(), "Installed cdid namespace required.")
   uns <- "cdid_chained_request_unsupported_selection"
-  # The augmented observation correction (D52 seventh route) is implemented with
-  # est_method = "dr" only (test-chained-augmented-public.R); it stays explicitly
-  # unavailable with treatment IPW/reg and still requires conditional_mtar.
-  for (m in setdiff(impp_methods, "dr")) {
-    e <- impp_refuse(c("cdid_chained_unavailable", uns), est_method = m, selection = "conditional_mtar",
-      selection_est_method = "dr", imputation_pooling = quote(stop("imputation_pooling was evaluated")))
-    testthat::expect_match(conditionMessage(e), "not implemented", fixed = TRUE)
-  }
+  # Augmented built-in IPW, reg and DR calls are exercised in
+  # test-chained-augmented-public.R; conditional_mtar is still required.
   e <- impp_refuse(uns, selection_est_method = "dr")
   testthat::expect_match(conditionMessage(e), "conditional_mtar", fixed = TRUE)
   for (bad in list("IPW", "imputed", "", NA_character_, c("ipw", "imputation"), 1)) impp_refuse(uns, selection_est_method = bad)
@@ -184,9 +178,9 @@ testthat::test_that("gates pass without forcing inactive promises and reach the 
     reach(est_method = m, selection = "conditional_mtar", selection_est_method = "ipw",
       imputation_pooling = quote(stop("imputation_pooling was evaluated")))
   }
-  # Development entry: the same gate runs before its explicit-control requirement.
+  # Supported augmented calls reach the development entry's control requirement.
   dev <- impp_val("chained_att_gt_request")
-  impp_refuse(c("cdid_chained_unavailable", "cdid_chained_request_unsupported_selection"), entry = dev,
+  impp_refuse("cdid_chained_request_control_error", entry = dev,
     est_method = "ipw", selection = "conditional_mtar", selection_est_method = "dr")
   impp_refuse("cdid_chained_request_control_error", entry = dev, est_method = "reg", selection = "conditional_mtar",
     selection_est_method = "imputation", selection_model = quote(stop("inactive selection_model was evaluated")))

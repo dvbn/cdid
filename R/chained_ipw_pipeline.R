@@ -4981,7 +4981,8 @@ run_chained_ipw_pipeline <- function(
     conventions <- paste0(conventions, "|IMP-", cp04$imputation_est_method, "-", cp04$imputation_pooling,
       "-F-actual-change-fixed-w")
   } else if (augmented) {
-    conventions <- paste0(conventions, "|AUG-DR-", cp04$imputation_pooling, "-", cp04$selection_model, "-",
+    aug_m <- toupper(if (is.null(cp04$augmented_est_method)) "dr" else cp04$augmented_est_method)
+    conventions <- paste0(conventions, "|AUG-", aug_m, "-", cp04$imputation_pooling, "-", cp04$selection_model, "-",
       cp04$selection_pooling, "-F-actual-change-fixed-w-Z=j+S(D-j)/q")
   } else if (!is.null(cp04) && !identical(cp04$or_method, "baseline") && !identical(cp04$dr_method, "baseline") &&
              is.null(cp04$ipw_method)) {

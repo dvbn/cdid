@@ -87,8 +87,8 @@ att_gt <- function(yname,
   # selection_est_method = "ipw" (default) keeps the
   # probability-weighted correction and never evaluates imputation_pooling;
   # "imputation" never evaluates selection_model/selection_pooling/
-  # selection_xformla; "dr" (augmented correction, est_method = "dr" only)
-  # evaluates both groups. All stay lazy promises here.
+  # selection_xformla; "dr" (augmented correction, est_method = "dr", "ipw" or
+  # "reg") evaluates both groups. All stay lazy promises here.
   chained_public_att_gt(
     yname = yname, tname = tname, idname = idname, gname = gname, xformla = xformla, data = data,
     panel = panel, allow_unbalanced_panel = allow_unbalanced_panel, control_group = control_group,

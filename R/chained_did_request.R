@@ -105,7 +105,7 @@ chained_request_scope_gate <- function(mode, panel, allow_unbalanced_panel, est_
   # "ipw" keeps the existing probability-weighted normalization and never
   # evaluates `imputation_pooling`; "imputation" never evaluates the inactive
   # selection_model/selection_pooling/selection_xformla promises; "dr"
-  # (augmented correction) is implemented with est_method = "dr" only and
+  # (augmented correction) supports est_method = "dr", "ipw" or "reg" and
   # uses both the imputation and the observation-probability arguments.
   sel_method <- chained_request_selection_est_method(selection_est_method)
   imputation <- identical(sel_method, "imputation")
@@ -260,7 +260,8 @@ chained_public_att_gt <- function(yname, tname, idname, gname, xformla, data, pa
     outcome_regression = !imputation && !augmented && identical(est_label, "reg"), or_resource = resolved$profile,
     doubly_robust = !imputation && !augmented && identical(est_label, "dr"),
     selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
-    imputation_est_method = if (imputation) est_label else NULL, fix_weights = gate$fix_weights)
+    imputation_est_method = if (imputation) est_label else NULL,
+    augmented_est_method = if (augmented) est_label else NULL, fix_weights = gate$fix_weights)
   validate_chained_pt_request(gate$pt_assumption, gate$pt_start, prep$calendar)
   # Every pure-imputation treatment method and the augmented route use the
   # automatic row planner.
@@ -437,7 +438,8 @@ chained_att_gt_request <- function(yname,
     outcome_regression = !imputation && !augmented && identical(est_label, "reg"),
     doubly_robust = !imputation && !augmented && identical(est_label, "dr"),
     selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
-    imputation_est_method = if (imputation) est_label else NULL, fix_weights = gate$fix_weights)
+    imputation_est_method = if (imputation) est_label else NULL,
+    augmented_est_method = if (augmented) est_label else NULL, fix_weights = gate$fix_weights)
   validate_chained_pt_request(gate$pt_assumption, gate$pt_start, prep$calendar)
 
   # ---- one accepted pipeline fit (explicit flags, caller RNG for draws) --------
@@ -528,7 +530,8 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
                                            outcome_regression = FALSE, or_resource = NULL,
                                            doubly_robust = FALSE, selection_est_method = "ipw",
                                            imputation_pooling = NULL, imputation_est_method = NULL,
-                                           fix_weights = NULL, outcome_pooling = NULL) {
+                                           fix_weights = NULL, outcome_pooling = NULL,
+                                           augmented_est_method = NULL) {
   chained_request_need(is.data.frame(data) && nrow(data) >= 1L, "`data` must be a nonempty data.frame.")
   chained_request_need(chained_request_chr1(idname),
     "Chained (panel) estimation requires `idname`: units are aligned by identity, never by row position.")
@@ -694,8 +697,10 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
       x_static <- frame_Z
     }
   } else if (augmented) {
+    aug_est <- if (!is.null(augmented_est_method)) augmented_est_method else
+      if (!is.null(imputation_est_method)) imputation_est_method else "dr"
     aug <- covariate_gate(function() chained_request_augmented_inputs(xformla, selection_xformla, frame, data, frame_ids, id, frame_g,
-      sel_norm, imputation_pooling, selection_justification, frame_supplied), list(xformla, selection_xformla), "xformla")
+      sel_norm, imputation_pooling, selection_justification, frame_supplied, est_method = aug_est), list(xformla, selection_xformla), "xformla")
     if (is_marker(aug)) {
       merge_prov(aug$prov)
       xf <- if (is.null(xformla)) chained_request_default_formula() else xformla
@@ -712,7 +717,7 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
       frame_Z <- carrier("reference_carrier")
       cp04 <- chained_request_reference_selection_record("augmented", xf, sf, sel_norm, selection_justification,
         frame_supplied, n_frame, imputation_pooling = imputation_pooling,
-        selection_formula_inherited = is.null(selection_xformla))
+        selection_formula_inherited = is.null(selection_xformla), augmented_est_method = aug_est)
       imputation_design <- cp04$augmented_design
     } else {
       xf <- aug$xformla; frame_Z <- aug$frame_Z; cp04 <- aug$cp04; imputation_design <- aug$design

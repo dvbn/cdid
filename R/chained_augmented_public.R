@@ -1,9 +1,9 @@
 # Narrow public adapter for the D52 augmented observation correction
-# (`selection_est_method = "dr"` with treatment `est_method = "dr"`;
-# AUGMENTED_SELECTION_SPEC.md sections 1-3 and IMPLEMENTATION_HANDOFF.md
+# (`selection_est_method = "dr"` with treatment `est_method = "dr"`, `"ipw"` or
+# `"reg"`; AUGMENTED_SELECTION_SPEC.md sections 1-3 and IMPLEMENTATION_HANDOFF.md
 # section 2). The private backend (R/chained_augmented.R) composes the accepted
 # observation-probability, actual-change imputation, roster treatment and
-# shared counterfactual OR kernels. This file only validates the public request,
+# counterfactual OR kernels. This file only validates the public request,
 # prepares the two full-F designs (xformla for the imputation, counterfactual OR
 # and treatment logits; selection_xformla, or the inherited xformla, for the
 # observation probabilities), calls the backend through its sealed X_frame /
@@ -16,20 +16,19 @@
 # Request validation (before any data promise is forced)
 # ------------------------------------------------------------------------------
 
-# Only the treatment DR combination is implemented. Built-in IPW/reg and custom
-# callbacks are refused explicitly; nothing is substituted.
+# Built-in treatment DR, IPW and OR are implemented. Custom callbacks and
+# unimplemented est_method strings are refused explicitly; nothing is substituted.
 chained_request_augmented_est_method <- function(est_method, is_custom_est = FALSE) {
   chained_request_need(!is_custom_est,
     paste0('selection_est_method = "dr" (augmented observation correction) with a custom IPW callback is ',
       "unsupported: callbacks have no specified augmented forcing or complete upstream score replay. ",
       "Nothing is substituted."),
     "cdid_chained_request_unsupported_selection")
-  if (!identical(est_method, "dr")) {
+  if (!(chained_request_chr1(est_method) && est_method %in% c("dr", "ipw", "reg"))) {
     chained_request_abort(paste0(
-      'selection_est_method = "dr" (augmented observation correction) is implemented only with est_method = "dr" in cdid ',
+      'selection_est_method = "dr" (augmented observation correction) supports only est_method = "dr", "ipw" or "reg" in cdid ',
       cdid_version(), '; est_method = "', est_method, '" with the augmented correction is not implemented. ',
-      "It is refused before the data are evaluated and no other correction or treatment method is substituted. ",
-      'Use est_method = "dr", or selection_est_method = "ipw" / "imputation" with this treatment method.'),
+      "It is refused before the data are evaluated and no other correction or treatment method is substituted."),
       c("cdid_chained_request_unsupported_selection", "cdid_chained_unavailable"))
   }
   invisible(TRUE)
@@ -66,14 +65,15 @@ chained_request_augmented_declaration <- function(selection, selection_model, se
 # Input preparation: both designs on EVERY F row
 # ------------------------------------------------------------------------------
 
-# xformla defines the imputation j, the shared counterfactual OR and the
-# treatment logit; it is evaluated on every F row exactly as for pure
+# xformla defines the imputation j, the counterfactual OR (reg/dr) and the
+# treatment logit (ipw/dr); it is evaluated on every F row exactly as for pure
 # imputation (no common A-only alias reduction). selection_xformla (NULL
 # inherits xformla) defines the observation logits and is the reader design.
 # The selection design never doubles as the outcome design: the latter reaches
 # the backend only through X_frame.
 chained_request_augmented_inputs <- function(xformla, selection_xformla, frame, data, frame_ids, id, frame_g,
-                                             sel_norm, imputation_pooling, justification, frame_supplied) {
+                                             sel_norm, imputation_pooling, justification, frame_supplied,
+                                             est_method = "dr") {
   n_frame <- length(frame_ids)
   chained_request_need(!anyNA(frame_g),
     paste0('The augmented observation correction (selection_est_method = "dr") requires known cohorts on every F row, ',
@@ -90,14 +90,15 @@ chained_request_augmented_inputs <- function(xformla, selection_xformla, frame, 
   cols <- colnames(Z)
   slopes <- cols[setdiff(seq_along(cols), icpt)]
   recipe <- or_pooled_outcome_recipe(cols, intercept, slopes)
+  trt <- if (est_method %in% c("ipw", "dr")) cols else NULL
   inherited <- is.null(selection_xformla)
   sf <- if (inherited) xf else selection_xformla
   SZ <- cp04_public_design(sf, frame, data, frame_ids, id, U_all,
     if (inherited) "xformla" else "selection_xformla", allow_zero_col = TRUE)
-  design <- list(route = 'augmented observation correction (selection_est_method = "dr", est_method = "dr")',
+  design <- list(route = paste0('augmented observation correction (selection_est_method = "dr", est_method = "', est_method, '")'),
     formula = xf, columns = cols, intercept = intercept,
     intercept_column = if (intercept) cols[icpt] else NULL, slope_columns = slopes,
-    outcome_recipe = recipe, treatment_columns = cols,
+    outcome_recipe = recipe, treatment_columns = if (is.null(trt)) character(0) else trt,
     selection_formula = sf, selection_formula_inherited = inherited,
     selection_columns = colnames(SZ), selection_intercept = isTRUE(attr(SZ, "intercept")),
     n_rows = n_frame,
@@ -114,9 +115,9 @@ chained_request_augmented_inputs <- function(xformla, selection_xformla, frame, 
     legacy_alias = sel_norm$legacy_alias, selection_model = sel_norm$selection_model,
     selection_pooling = sel_norm$selection_pooling,
     population = if (frame_supplied) "supplied representative frame" else "supplied panel unit roster (including singletons)",
-    selection_est_method = "dr", augmented_est_method = "dr", imputation_pooling = imputation_pooling,
+    selection_est_method = "dr", augmented_est_method = est_method, imputation_pooling = imputation_pooling,
     outcome_formula = xf, selection_formula_inherited = inherited,
-    outcome_recipe = recipe, treatment_columns = cols, X_frame = Z, augmented_design = design)
+    outcome_recipe = recipe, treatment_columns = trt, X_frame = Z, augmented_design = design)
   list(xformla = xf, frame_Z = Z, cp04 = cp04, design = design)
 }
 
@@ -129,21 +130,22 @@ chained_request_augmented_inputs <- function(xformla, selection_xformla, frame, 
 augmented_public_fit <- function(cp04, reader, views, ctrl, retained, work, automatic_chunk_rows = FALSE,
                                  reference = NULL) {
   external <- max(0, retained - reader$accounting$borrowed_owner_entries)
-  recipe <- cp04$outcome_recipe; trt <- cp04$treatment_columns
+  est_m <- if (is.null(cp04$augmented_est_method)) "dr" else cp04$augmented_est_method
+  recipe <- cp04$outcome_recipe; trt <- if (est_m %in% c("ipw", "dr")) cp04$treatment_columns else NULL
   if (!is.null(reference) && is.null(recipe)) {
     rr <- chained_reference_outcome_recipe(reference)
-    recipe <- rr$recipe; trt <- rr$columns
+    recipe <- rr$recipe; trt <- if (est_m %in% c("ipw", "dr")) rr$columns else NULL
   }
   tryCatch(fit_augmented_backend(reader, views, ctrl$owner_control, ctrl$glm_control, or_public_rank_tol(),
       outcome_recipe = recipe, treatment_columns = trt,
-      est_method = "dr", imputation_pooling = cp04$imputation_pooling,
+      est_method = est_m, imputation_pooling = cp04$imputation_pooling,
       selection_model = cp04$selection_model, selection_pooling = cp04$selection_pooling,
       X_frame = if (is.null(reference)) cp04$X_frame else NULL, retained_external_entries = external,
       external_work_ops = work, automatic_chunk_rows = automatic_chunk_rows, reference = reference,
       outcome_pooling = if (is.null(cp04$outcome_pooling)) "pooled" else cp04$outcome_pooling),
     cdid_or_wls_rank_error = function(e) {
       # The backend message already states that this is not a non-identification claim.
-      e$or_columns <- cp04$outcome_recipe$columns
+      e$or_columns <- recipe$columns
       e$or_stage <- paste("group-local actual-change imputation or shared counterfactual OR WLS on the full-F design",
         "(augmented observation correction)")
       stop(e)
@@ -161,7 +163,8 @@ augmented_public_nuisance_keys <- function(backend) {
     if (length(backend$treatments)) paste0("AUG:", law, ":treatment:", seq_along(backend$treatments)))
 }
 
-augmented_public_model_text <- function(intercept, selection_model, selection_pooling, imputation_pooling, outcome_pooling = "pooled") {
+augmented_public_model_text <- function(intercept, selection_model, selection_pooling, imputation_pooling,
+                                        outcome_pooling = "pooled", est_method = "dr") {
   list(
     imputation_model = paste0("actual-change imputation j: observed pair changes on S_e = 1 with fixed unit weights w, ",
       "local cohort/pair intercepts when xformla has one, slopes on d_e = L_e z(X) shared by imputation_pooling = \"",
@@ -173,13 +176,19 @@ augmented_public_model_text <- function(intercept, selection_model, selection_po
         "; one direct logit for observing both endpoints of each actual pair"),
     augmented_response = paste("Z = j + S_e (Delta_e - j) / max(q, 1e-6) on observed pairs and Z = j elsewhere;",
       "Delta and the floored inverse are evaluated only where S_e = 1; the observed residual term is not renormalized"),
-    counterfactual_model = paste0(if (identical(outcome_pooling, "separate")) "comparison-specific one-period counterfactual control outcome-change regressions on the reconstructed " else "shared one-period counterfactual control outcome-change regression on the reconstructed ",
-      "synthetic control changes Z (", if (isTRUE(intercept)) "local block intercepts; " else "no intercepts; ",
-      if (identical(outcome_pooling, "separate")) "unrestricted block slopes on their local retained bases)" else "slope coefficients shared across every deduplicated block on their retained basis)"),
-    treatment_model = "risk-set treatment propensity logit with roster synthetic weights w*a_k on F (no observation-probability weight)")
+    counterfactual_model = if (est_method %in% c("reg", "dr"))
+      paste0(if (identical(outcome_pooling, "separate")) "comparison-specific one-period counterfactual control outcome-change regressions on the reconstructed " else "shared one-period counterfactual control outcome-change regression on the reconstructed ",
+        "synthetic control changes Z (", if (isTRUE(intercept)) "local block intercepts; " else "no intercepts; ",
+        if (identical(outcome_pooling, "separate")) "unrestricted block slopes on their local retained bases)" else "slope coefficients shared across every deduplicated block on their retained basis)") else
+      "none (est_method = \"ipw\" fits no counterfactual OR)",
+    treatment_model = if (est_method %in% c("ipw", "dr"))
+      "risk-set treatment propensity logit with roster synthetic weights w*a_k on F (no observation-probability weight)" else
+      "none (est_method = \"reg\" fits no treatment logit)")
 }
 
 augmented_public_selection_record <- function(cp04, backend = NULL, reader = NULL) {
+  m <- if (!is.null(backend) && !is.null(backend$est_method)) backend$est_method else
+    if (is.null(cp04$augmented_est_method)) "dr" else cp04$augmented_est_method
   acc <- if (is.null(backend)) NULL else backend$accounting
   fields <- c("n_cells", "n_groups", "n_imputation_fits", "n_imputation_local_intercepts",
     "n_imputation_slopes_by_group", "n_or_fits", "n_or_blocks", "n_or_local_intercepts", "n_or_shared_slopes",
@@ -188,16 +197,31 @@ augmented_public_selection_record <- function(cp04, backend = NULL, reader = NUL
   sb_sum <- selection_backend_summary(backend)
   date <- identical(cp04$selection_model, "independent_period_logit")
   pool <- cp04$imputation_pooling
+  icpt <- if (!is.null(backend) && !is.null(backend$outcome_recipe)) backend$outcome_recipe$intercept else cp04$outcome_recipe$intercept
+  trt_assump <- switch(m,
+    ipw = "In addition the synthetic treatment propensity logit (weights w*a_k on F) must be correct, ",
+    reg = paste0("In addition the counterfactual control-mean regressions under the chosen outcome pooling (",
+      if (identical(cp04$outcome_pooling, "separate")) "comparison-specific" else "shared across deduplicated blocks",
+      ", each used cell needing one reconstruction arm) must be correct, "),
+    dr = paste0("In addition EITHER the synthetic treatment propensity logit OR the ",
+      "counterfactual control-mean regressions under the chosen outcome pooling (each used cell needs one reconstruction arm) must be correct, "))
+  inf_paths <- switch(m,
+    ipw = "probabilities, imputation, repeat rates, treatment logits, both normalizers); core",
+    reg = "probabilities, imputation, repeat rates, counterfactual OR, treated normalizer); core",
+    dr = "probabilities, imputation, repeat rates, treatment logits, shared counterfactual OR, both normalizers); core")
+  inf_clip <- switch(m,
+    reg = "Clipping can change the target and the observation robustness branches; ordinary IF inference",
+    "Clipping can change the target and the observation/treatment robustness branches; ordinary IF inference")
   c(list(method = "augmented", canonical_assumption = "conditional_mtar",
     requested_selection = cp04$selection_requested, legacy_alias = isTRUE(cp04$legacy_alias),
-    selection_est_method = "dr", est_method = "dr", imputation_pooling = pool, outcome_pooling = cp04$outcome_pooling,
+    selection_est_method = "dr", est_method = m, imputation_pooling = pool, outcome_pooling = cp04$outcome_pooling,
     selection_model = cp04$selection_model, selection_pooling = cp04$selection_pooling,
-    inactive_arguments = character(0),
+    inactive_arguments = if (m %in% c("reg", "dr")) character(0) else "outcome_pooling",
     fitting_universe = "F", population = cp04$population, formula = cp04$formula,
     outcome_formula = cp04$outcome_formula,
     selection_formula_inherited = isTRUE(cp04$selection_formula_inherited),
     transport = "rho=1", justification = cp04$justification),
-    augmented_public_model_text(cp04$outcome_recipe$intercept, cp04$selection_model, cp04$selection_pooling, pool, cp04$outcome_pooling),
+    augmented_public_model_text(icpt, cp04$selection_model, cp04$selection_pooling, pool, cp04$outcome_pooling, m),
     list(duration_convention = "stored-calendar transition count L_e = i_t - i_s",
     active_cells = if (is.null(sb_sum)) data.frame(cell_id = integer(), kind = character(), cohort = numeric(),
       label = character(), block_id = integer(), stringsAsFactors = FALSE) else sb_sum$active_cells,
@@ -215,8 +239,7 @@ augmented_public_selection_record <- function(cp04, backend = NULL, reader = NUL
       "OR the observation arm (a correct ", cp04$selection_model, " model given W for every cell of its ",
       cp04$selection_pooling, " selection block",
       if (date) ", correct date logits at both endpoint blocks and used-pair conditional date independence R_s _||_ R_t | G, W on F" else "",
-      "); the arms may differ across cells. In addition EITHER the synthetic treatment propensity logit OR the ",
-      "counterfactual control-mean regressions under the chosen outcome pooling (each used cell needs one reconstruction arm) must be correct, ",
+      "); the arms may differ across cells. ", trt_assump,
       "with PT/no anticipation and the fixed-weight population law. Original-target branch claims also require ",
       "clipping to be inactive in population or the clipped moments to preserve that target. ",
       "These conditions are sufficient, not necessary. ",
@@ -224,14 +247,14 @@ augmented_public_selection_record <- function(cp04, backend = NULL, reader = NUL
       "the outcome-change mean; it requires the stated compatibility (for example q given W correct, or its error depending ",
       "on xformla covariates only). No observed-level conditioning is used."),
     inference = paste("Complete original-unit sandwich on all F rows with every fitted-model path retained (observation",
-      "probabilities, imputation, repeat rates, treatment logits, shared counterfactual OR, both normalizers); core",
+      inf_paths,
       "psi = (n_A/N) phi_F with 1/n_A covariance normalization; clusters sum original-unit rows. Recovered joint ATT/GMM",
       "coordinates additionally need compatible catalog moments preserving the target and the stated identification",
-      "premises. Clipping can change the target and the observation/treatment robustness branches; ordinary IF inference",
+      "premises.", inf_clip,
       "also requires a negligible threshold-crossing remainder."),
     if_scale = "phi_F on ALL N roster rows; core psi=(n_A/N)*phi_F with 1/n_A covariance normalization",
     unsupported = c("selection_universe B/A", "transport columns (rho)", "corrected custom IPW callbacks",
-      "augmented correction with est_method = \"ipw\" or \"reg\"", "observed-level conditioning", "B/A augmentation",
+      "observed-level conditioning", "B/A augmentation",
       "SMAR / Corollary 2", "singleton outcome levels", "cross-fitting / ML nuisances"),
     models = if (is.null(acc)) NULL else acc[intersect(fields, names(acc))]))
 }
@@ -284,8 +307,8 @@ augmented_public_diagnostics <- function(res, control, public_object = NULL) {
     active_cells = sb_sum$active_cells, blocks = selection_blocks_diagnostic_list(sb),
     coefficients = sb$coefficients)
   so <- b$shared_or
-  block_names <- vapply(so$blocks, `[[`, character(1), "name")
-  counterfactual_or <- list(rank = so$p, kept_columns = so$kept_columns,
+  block_names <- if (is.null(so)) character(0) else vapply(so$blocks, `[[`, character(1), "name")
+  counterfactual_or <- if (is.null(so)) NULL else list(rank = so$p, kept_columns = so$kept_columns,
     shared_slopes = so$beta, has_local_intercepts = isTRUE(so$intercept),
     local_block_intercepts = if (isTRUE(so$intercept)) stats::setNames(as.double(so$alpha), block_names) else numeric(0),
     response = "reconstructed augmented response Z",
@@ -312,9 +335,9 @@ augmented_public_diagnostics <- function(res, control, public_object = NULL) {
     has_local_intercepts = icpt,
     selection = sb$coefficients,
     # Counterfactual OR fields keep the existing OR/DR diagnostic names.
-    shared_slopes = so$beta,
+    shared_slopes = if (is.null(so)) NULL else so$beta,
     block_slopes = if (reconstruction_separate(so)) lapply(counterfactual_or$blocks, `[[`, "beta") else NULL,
-    local_intercepts = counterfactual_or$local_block_intercepts,
+    local_intercepts = if (is.null(counterfactual_or)) NULL else counterfactual_or$local_block_intercepts,
     treatment = lapply(treatment, `[[`, "coefficients"))
   link_ids <- vapply(b$links, `[[`, character(1), "link_id")
   fitted_catalog <- data.frame(index = seq_along(b$links), link_id = link_ids,
@@ -345,13 +368,15 @@ augmented_public_diagnostics <- function(res, control, public_object = NULL) {
   if (unname(cp04_payload(diag_copy)["entries"]) > bound)
     cp04_abort("Augmented diagnostic copy bound underestimated.", "bound")
   out <- c(list(status = "available", method = "augmented", selection_est_method = "dr",
-    est_method = "dr", imputation_pooling = b$imputation_pooling, outcome_pooling = b$outcome_pooling,
+    est_method = b$est_method, imputation_pooling = b$imputation_pooling, outcome_pooling = b$outcome_pooling,
     selection_model = b$selection_model, selection_pooling = b$selection_pooling),
-    augmented_public_model_text(b$outcome_recipe$intercept, b$selection_model, b$selection_pooling, b$imputation_pooling, b$outcome_pooling),
+    augmented_public_model_text(b$outcome_recipe$intercept, b$selection_model, b$selection_pooling, b$imputation_pooling, b$outcome_pooling, b$est_method),
     list(fit_structure = paste0("one WLS fit per imputation pooling group (", length(b$groups), " group(s), ",
       length(b$cells), " cell(s)), ", length(sb$blocks), " observation-probability logit block fit(s) over ",
-      length(sb$cells), if (reconstruction_separate(so)) paste0(" selection cell(s), ", so$n_blocks, " comparison-specific counterfactual OR fits on Z, ") else " selection cell(s), one joint shared counterfactual OR fit on Z, ",
-      length(b$treatments), " deduplicated treatment logit(s)"),
+      length(sb$cells), " selection cell(s)",
+      if (reconstruction_separate(so)) paste0(", ", so$n_blocks, " comparison-specific counterfactual OR fits on Z") else
+        if (!is.null(so)) ", one joint shared counterfactual OR fit on Z" else "",
+      if (length(b$treatments)) paste0(", ", length(b$treatments), " deduplicated treatment logit(s)") else ""),
     duration_convention = "stored-calendar transition count L_e = i_t - i_s",
     selection = "conditional_mtar", selection_route = res$selection,
     outcome_recipe = b$outcome_recipe, treatment_recipe = b$treatment_recipe),
@@ -360,10 +385,22 @@ augmented_public_diagnostics <- function(res, control, public_object = NULL) {
     frame_counts = list(n_full_frame_units = res$reporting$inference$n_total,
       n_pair_eligible_A_units = res$frame_owner$n_a_units),
     auxiliary_descriptor_status = res$auxiliary_reporting$descriptor_status,
-    interpretation = paste("Augmented observation correction with treatment DR: each needed cell uses",
-      "Z = j + S(Delta - j)/q, combining the actual-change imputation fit (observed pairs, fixed weights) with the",
-      "observation-probability fit (every F row). Complete F-row influence functions include the observation-probability,",
-      "imputation, repeat-rate, treatment-propensity and shared counterfactual OR paths and both normalizers.",
-      "T - C and T - B_g are internal algebra, not reported routes. No numerical certificate.")))
+    interpretation = if (identical(b$est_method, "dr"))
+      paste("Augmented observation correction with treatment DR: each needed cell uses",
+        "Z = j + S(Delta - j)/q, combining the actual-change imputation fit (observed pairs, fixed weights) with the",
+        "observation-probability fit (every F row). Complete F-row influence functions include the observation-probability,",
+        "imputation, repeat-rate, treatment-propensity and shared counterfactual OR paths and both normalizers.",
+        "T - C and T - B_g are internal algebra, not reported routes. No numerical certificate.") else
+      if (identical(b$est_method, "ipw"))
+      paste("Augmented observation correction with treatment IPW: each needed target and control cell uses",
+        "Z = j + S(Delta - j)/q, combining the actual-change imputation fit (observed pairs, fixed weights) with the",
+        "observation-probability fit (every F row); no counterfactual OR is fitted (outcome_pooling is inactive).",
+        "Complete F-row influence functions include the observation-probability, imputation, repeat-rate and",
+        "treatment-propensity paths and both normalizers. No numerical certificate.") else
+      paste("Augmented observation correction with treatment OR (est_method = \"reg\"): each needed cell uses",
+        "Z = j + S(Delta - j)/q, combining the actual-change imputation fit (observed pairs, fixed weights) with the",
+        "observation-probability fit (every F row); counterfactual control outcome-change regressions are fitted on Z,",
+        "and no treatment logit is fitted. Complete F-row influence functions include the observation-probability,",
+        "imputation, repeat-rate and counterfactual OR paths and the treated normalizer. No numerical certificate.")))
   cp04_public_diagnostic_check(out, b, bound)
 }

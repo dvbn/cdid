@@ -44,7 +44,7 @@ For the fixed covariates used here, the fitting set also decides where the obser
 | Observation weighting with the pair logit | `selection = "conditional_mtar"`, `selection_est_method = "ipw"`, `selection_model = "pair_logit"` | `"F"` (default), `"B"` or `"A"` | one pair logit per cohort and pair, fitted on the cohort's rows in U |
 | Observation weighting with the product of date probabilities | the same, with `selection_model = "independent_period_logit"` | `"F"` only | date logits fitted on the whole unit table |
 | Change imputation | `selection_est_method = "imputation"` | `"F"` only, with `selection_rho = NULL` | no observation model; each change model is trained on the units observed at both dates of its pair and evaluated on every row of its cohort in the unit table |
-| Augmented correction | `selection_est_method = "dr"`, with `est_method = "dr"` | `"F"` only, with `selection_rho = NULL` | the observation model, fitted on every row of the cohort in the unit table, and the change models of change imputation |
+| Augmented correction | `selection_est_method = "dr"`, with treatment IPW, OR or DR | `"F"` only, with `selection_rho = NULL` | the observation model, fitted on every row of the cohort in the unit table, and the change models of change imputation |
 
 In the first row, the treatment adjustment can be any that observation weighting supports. `"B"` and `"A"` are available only there; other requests are refused with an error before estimation, and no other combination is substituted.
 

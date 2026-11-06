@@ -279,7 +279,8 @@ chained_conditional_did_pretest <- function(yname, tname, idname, gname, xformla
     outcome_regression = !imputation && !augmented && identical(est_label, "reg"), or_resource = resolved$profile,
     doubly_robust = !imputation && !augmented && identical(est_label, "dr"),
     selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
-    imputation_est_method = if (imputation) est_label else NULL, fix_weights = gate$fix_weights)
+    imputation_est_method = if (imputation) est_label else NULL,
+    augmented_est_method = if (augmented) est_label else NULL, fix_weights = gate$fix_weights)
   if ((imputation || augmented || est_label %in% c("reg", "dr")) && !is.null(prep$cp04))
     prep$cp04$automatic_chunk_rows <- is.null(resolved$chunk_rows)
   dims <- chained_public_dimensions(prep, biters = biters, clustered = !is.null(prep$cluster_full))

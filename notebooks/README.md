@@ -21,4 +21,4 @@ Render from the repository root:
 quarto render notebooks/cdid_practical_guide.qmd --to html
 ```
 
-Unexpected errors stop execution. There are 34 R chunks: 30 run automatically and four are disabled (`eval: false`): the opt-in `reg` (OR)/`ipw` comparison on the three continuous-X robustness draws (Section 12), expected aggregation refusal after a point-only fit (Section 14), optional parallel multiplier computation (Section 15), and exports to `guide-output/` (Section 16). Run these individually when wanted. The custom-estimator section documents the supported callable contract. No PDF/TeX compilation is needed.
+Unexpected errors stop execution. There are 35 R chunks: 31 run automatically and four are disabled (`eval: false`): the opt-in `reg` (OR)/`ipw` comparison on the three continuous-X robustness draws (Section 12), expected aggregation refusal after a point-only fit (Section 14), optional parallel multiplier computation (Section 15), and exports to `guide-output/` (Section 16). Run these individually when wanted. The custom-estimator section documents the supported callable contract. No PDF/TeX compilation is needed.
