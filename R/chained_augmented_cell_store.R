@@ -6,7 +6,8 @@ augmented_cell_replay_store <- function(backend, pre, phase_store) {
       !identical(phase_store$phase, "covariance") || !identical(phase_store$state, "reserved") ||
       !identical(phase_store$backend_ref, backend$ref) ||
       exists("producer_cell_accounting", phase_store, inherits = FALSE) ||
-      !identical(backend$outcome_pooling, "pooled") || !identical(backend$imputation_pooling, "separate") ||
+      !backend$outcome_pooling %in% c("pooled", "separate", "inactive") ||
+      !backend$imputation_pooling %in% c("separate", "within_cohort", "across_cohorts") ||
       !is.null(backend$reference_ref) || !is.null(backend$layout) || !is.null(backend$pair_outcomes)) return(NULL)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
   X <- augmented_backend_X_F(backend)

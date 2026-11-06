@@ -83,7 +83,7 @@ A custom function has `did`'s panel IPW interface `f(y1, y0, D, covariates, i.we
 | `mode` | `NULL` | `NULL`, `"chained"` or `"ordinary"` | Always. `NULL` selects chained mode for `panel = TRUE` and ordinary mode otherwise. |
 | `frame` | `NULL` | the unit table: a data frame with one row per study unit, matched to `data` by `idname` | Chained mode. Without it, the units in `data` form the study population. |
 | `selection` | `"none"` | `"none"`, `"conditional_mtar"`, or the legacy name `"corollary1"` | Chained mode. `"corollary1"` means `"conditional_mtar"` with `selection_model = "pair_logit"`. |
-| `selection_est_method` | `"ipw"` | `"ipw"` (observation weighting), `"imputation"` (change imputation) or `"dr"` (augmented correction) | `"imputation"` and `"dr"` require `selection = "conditional_mtar"`; `"dr"` also requires `est_method = "dr"`. |
+| `selection_est_method` | `"ipw"` | `"ipw"` (observation weighting), `"imputation"` (change imputation) or `"dr"` (augmented correction) | `"imputation"` and `"dr"` require `selection = "conditional_mtar"` and a built-in `est_method` (`"ipw"`, `"reg"` or `"dr"`). |
 | `selection_model` | `"pair_logit"` | `"pair_logit"` or `"independent_period_logit"` | An active conditional-MTAR correction with `selection_est_method` equal to `"ipw"` or `"dr"`. Never evaluated under `"imputation"`. A nondefault value with `selection = "none"` is refused. |
 | `selection_pooling` | `"separate"` | `"separate"`, `"within_cohort"` or `"across_cohorts"` | As for `selection_model`. |
 | `selection_xformla` | `NULL`, which inherits `xformla` | one sided formula | An observation model is fitted (`"ipw"` or `"dr"`). Never evaluated under `"imputation"`. |
@@ -104,7 +104,7 @@ A custom function has `did`'s panel IPW interface `f(y1, y0, D, covariates, i.we
 - **Formulas.** `xformla` and `selection_xformla` are one sided formulas whose `stats::terms` intercept and assignment information is respected, including intercept only (`~ 1`) and no intercept (`~ 0 + x`) forms. Only `selection_xformla` accepts a design with no columns (`~ 0`); its observation model then has no parameters and uses the fixed probability 0.5 for each pair, or 0.25 for a product of two dates.
 - **Observation weighting** (`selection_est_method = "ipw"`) fits `selection_model` with `selection_pooling` on the fitting sample selected by `selection_universe`. `"independent_period_logit"` requires `selection_universe = "F"` and the independence of the two dates given cohort and covariates.
 - **Change imputation** (`"imputation"`) requires `selection = "conditional_mtar"`, `selection_universe = "F"`, `selection_rho = NULL`, known cohorts and complete `xformla` covariates on every row of the unit table, and `est_method` equal to `"ipw"`, `"reg"` or `"dr"`. It fits no observation model.
-- **Augmented correction** (`"dr"`) has the requirements of change imputation, requires `est_method = "dr"`, needs complete covariates of both formulas on every row of the unit table and uses every observation model and imputation argument. Observation, imputation and counterfactual outcome pooling are independent choices.
+- **Augmented correction** (`"dr"`) has the requirements of change imputation, supports treatment IPW, OR or DR, needs complete covariates of both formulas on every row of the unit table and uses every observation model and imputation argument. Observation, imputation and counterfactual outcome pooling are independent choices.
 - **Not supported:** known pair probabilities (including a design probability of one), estimated or unnormalized transport ratios, and probit models.
 
 ## Parallel trends and reporting
@@ -161,12 +161,12 @@ Work estimates are conservative diagnostics, not measured run time. These contro
 
 ## Supported combinations
 
-With `selection = "conditional_mtar"`, seven built-in combinations of treatment adjustment and adjustment for missing outcomes are supported. The qualified custom IPW extension is listed separately in the last row:
+With `selection = "conditional_mtar"`, all nine built-in combinations of treatment adjustment and adjustment for missing outcomes are supported. The qualified custom IPW extension is listed separately in the last row:
 
 | `est_method` | `selection_est_method = "ipw"` | `"imputation"` | `"dr"` |
 | --- | --- | --- | --- |
-| `"ipw"` | supported | supported | refused |
-| `"reg"` | supported | supported | refused |
+| `"ipw"` | supported | supported | supported |
+| `"reg"` | supported | supported | supported |
 | `"dr"` | supported | supported | supported |
 | custom IPW function | supported with `log_weight_gradient` | refused | refused |
 
@@ -224,7 +224,8 @@ Refusals are errors that inherit class `cdid_error`. The most common classes are
 | `cdid_mode_error` | invalid `mode`, or invalid `panel` while resolving `mode = NULL` |
 | `cdid_chained_panel` | chained mode with `panel` not equal to `TRUE` |
 | `cdid_chained_balanced` | explicit `allow_unbalanced_panel = FALSE` in chained mode |
-| `cdid_chained_unavailable` | an unsupported request, such as an unknown `est_method` string (also `cdid_chained_request_est_method`) or the augmented correction with `est_method` other than `"dr"` (also `cdid_chained_request_unsupported_selection`) |
+| `cdid_chained_unavailable` | an unsupported request, such as an unknown `est_method` string (also `cdid_chained_request_est_method`) |
+| `cdid_chained_request_unsupported_selection` | an unsupported missing-outcome correction, including custom callbacks with change imputation or the augmented correction |
 | `cdid_chained_request_*` | other unsupported requests or inputs, for example invalid `pt_start` values |
 | `cdid_chained_request_parallel_error` | `pl = TRUE, cores = k` beyond the declared `control$workers` |
 | `cdid_chained_public_control_error` | an invalid `control` list |

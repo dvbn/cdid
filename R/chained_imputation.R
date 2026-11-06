@@ -581,7 +581,8 @@ imputation_build_catalog <- function(records, cohorts, est_method, imputation_po
 
 imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_index,
                                 trt_recipe, est_method, imputation_pooling,
-                                glm_control, rank_tol, ctrl, outcome_pooling = "pooled") {
+                                glm_control, rank_tol, ctrl, outcome_pooling = "pooled",
+                                stage1_only = FALSE) {
   separate_or <- est_method %in% c("reg", "dr") && identical(outcome_pooling, "separate")
   N <- st$N
   G <- length(st$cohorts)
@@ -832,6 +833,16 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
         objective = fit_r$objective
       )
     )
+  }
+
+  if (isTRUE(stage1_only)) {
+    return(list(
+      cells = cells_fitted,
+      groups = group_fits,
+      shared_or = NULL,
+      treatments = NULL,
+      links = NULL
+    ))
   }
 
   # ----------------------------------------------------------------------------

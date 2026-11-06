@@ -12,8 +12,8 @@
 # ------------------------------------------------------------------------------
 
 # Observation-correction axis. "dr" (augmented observation correction) is
-# implemented with treatment est_method = "dr" only; the scope gate refuses its
-# other treatment combinations before the data are evaluated
+# implemented with treatment est_method = "dr", "ipw" or "reg"; custom
+# callbacks are refused before the data are evaluated
 # (chained_request_augmented_est_method, R/chained_augmented_public.R).
 chained_request_selection_est_method <- function(selection_est_method) {
   chained_request_need(chained_request_chr1(selection_est_method) &&

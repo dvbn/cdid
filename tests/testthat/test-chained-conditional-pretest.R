@@ -175,6 +175,16 @@ test_that("on routes without process references the h = 1 process equals the bac
     dated_baseline_dr = list(Bd, list(est_method = "dr", fix_weights = "base_period"), "cdid_dr_baseline"),
     dated_imputation = list(Bd, list(est_method = "dr", fix_weights = "base_period", selection = "conditional_mtar",
       selection_est_method = "imputation", imputation_pooling = "within_cohort"), "cdid_imputation_backend"),
+    augmented_ipw = list(B, c(sel, list(est_method = "ipw", selection_est_method = "dr",
+      imputation_pooling = "within_cohort")), "cdid_augmented_backend"),
+    augmented_or = list(B, c(sel, list(est_method = "reg", selection_est_method = "dr",
+      imputation_pooling = "within_cohort")), "cdid_augmented_backend"),
+    dated_augmented_ipw = list(Bd, list(est_method = "ipw", fix_weights = "base_period", selection = "conditional_mtar",
+      selection_est_method = "dr", selection_model = "independent_period_logit", selection_pooling = "within_cohort",
+      imputation_pooling = "within_cohort", selection_xformla = ~sx + sz), "cdid_augmented_backend"),
+    dated_augmented_or = list(Bd, list(est_method = "reg", fix_weights = "base_period", selection = "conditional_mtar",
+      selection_est_method = "dr", selection_model = "independent_period_logit", selection_pooling = "within_cohort",
+      imputation_pooling = "within_cohort", selection_xformla = ~sx + sz), "cdid_augmented_backend"),
     dated_augmented = list(Bd, list(est_method = "dr", fix_weights = "base_period", selection = "conditional_mtar",
       selection_est_method = "dr", selection_model = "independent_period_logit", selection_pooling = "within_cohort",
       selection_xformla = ~sx + sz), "cdid_augmented_backend"))
@@ -185,13 +195,32 @@ test_that("on routes without process references the h = 1 process equals the bac
     expect_identical(r$chained$status, "available", info = nm)
     st <- attr(r, "state")
     expect_true(inherits(st$registry$cp04, rr[[3L]]), info = nm)
+    if (nm %in% c("augmented_ipw", "dated_augmented_ipw")) {
+      expect_identical(st$registry$cp04$est_method, "ipw", info = nm)
+      expect_null(st$registry$cp04$shared_or, info = nm)
+      expect_gt(length(st$registry$cp04$treatments), 0L)
+    }
+    if (nm %in% c("augmented_or", "dated_augmented_or")) {
+      expect_identical(st$registry$cp04$est_method, "reg", info = nm)
+      expect_null(st$registry$cp04$treatments, info = nm)
+      expect_false(is.null(st$registry$cp04$shared_or), info = nm)
+    }
     for (cell in attr(r, "cells")) {
       q <- cpt_q_of(st, cell$id)
       expect_lt(max(abs(cpt_cell_scalar_rows(cell) - cell$sigma * cpt_backend_rows(st, q))), 1e-9)
       expect_equal(cell$sigma * cell$mu1, cell$estimate_scalar, tolerance = 1e-10, info = paste(nm, cell$id))
       expect_lt(max(abs(cell$denominator_check$supplied - cell$denominator_check$accumulated)), 1e-12)
+      if (nm %in% c("augmented_ipw", "dated_augmented_ipw")) {
+        expect_true(any(startsWith(cell$coords, "ps:")) && any(startsWith(cell$coords, "th:")), info = nm)
+        expect_false(any(startsWith(cell$coords, "oa:") | startsWith(cell$coords, "ob:")), info = nm)
+      }
+      if (nm %in% c("augmented_or", "dated_augmented_or")) {
+        expect_true(any(startsWith(cell$coords, "ob:")) && any(startsWith(cell$coords, "th:")), info = nm)
+        expect_false(any(startsWith(cell$coords, "ps:")), info = nm)
+      }
     }
-    if (nm %in% c("dated_baseline_ipw", "dated_imputation")) expect_identical(r$chained$grid$columns[[1L]], c("(Intercept)", "x", "z"))
+    if (nm %in% c("dated_baseline_ipw", "dated_imputation", "dated_augmented_ipw", "dated_augmented_or"))
+      expect_identical(r$chained$grid$columns[[1L]], c("(Intercept)", "x", "z"))
   }
 })
 

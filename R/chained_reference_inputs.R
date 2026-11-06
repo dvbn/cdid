@@ -212,10 +212,12 @@ chained_reference_formula_dated <- function(formula, prov) {
 # sealed reader on the canonical required rows; nothing reaches X_frame.
 chained_request_reference_selection_record <- function(kind, xf, sf, sel_norm, justification, frame_supplied, n_frame,
                                                       imputation_pooling, imputation_est_method = NULL,
-                                                      selection_formula_inherited = TRUE) {
+                                                      selection_formula_inherited = TRUE,
+                                                      augmented_est_method = "dr") {
   population <- if (frame_supplied) "supplied representative frame" else "supplied panel unit roster (including singletons)"
+  aug_est <- if (is.null(augmented_est_method)) "dr" else augmented_est_method
   design <- list(route = if (identical(kind, "imputation")) 'pure actual-change imputation (selection_est_method = "imputation")' else
-      'augmented observation correction (selection_est_method = "dr", est_method = "dr")',
+      paste0('augmented observation correction (selection_est_method = "dr", est_method = "', aug_est, '")'),
     formula = xf, columns = NULL, intercept = identical(as.integer(attr(stats::terms(xf), "intercept")), 1L),
     n_rows = n_frame,
     row_universe = paste("every F roster row of each needed cohort, read at each recipe's extraction date on the canonical",
@@ -234,7 +236,7 @@ chained_request_reference_selection_record <- function(kind, xf, sf, sel_norm, j
     design$selection_formula <- sf
     design$selection_formula_inherited <- selection_formula_inherited
     c(out, list(formula = sf, selection_model = sel_norm$selection_model, selection_pooling = sel_norm$selection_pooling,
-      selection_est_method = "dr", augmented_est_method = "dr", outcome_formula = xf,
+      selection_est_method = "dr", augmented_est_method = aug_est, outcome_formula = xf,
       selection_formula_inherited = selection_formula_inherited, augmented_design = design))
   }
 }

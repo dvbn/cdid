@@ -350,7 +350,7 @@ cpt_extract_or <- function(state, backend, kind, j, sel, chunk_rows) {
 }
 
 # ------------------------------------------------------------------------------
-# Pure imputation (ipw / reg / dr) and the augmented correction (dr): treated
+# Pure imputation and the augmented correction (ipw / reg / dr): treated
 # T and B_g, control C and B_o ratios with imputed (or augmented) responses.
 # ------------------------------------------------------------------------------
 cpt_extract_imputation <- function(state, backend, kind, j, sel, chunk_rows) {
@@ -368,7 +368,7 @@ cpt_extract_imputation <- function(state, backend, kind, j, sel, chunk_rows) {
     cp04_pair_rows(reader, lay$orig_row[r_sub], pair, read_outcomes) else
     function(r_sub, pair, read_outcomes = TRUE) cp04_pair_rows(reader, r_sub, pair, read_outcomes)
   recipe <- backend$outcome_recipe; trt_recipe <- backend$treatment_recipe
-  est <- if (augmented) "dr" else backend$est_method
+  est <- backend$est_method
   lf <- backend$links[[j]]
   cells <- backend$cells; groups <- backend$groups; sh <- backend$shared_or
   ci_g <- lf$target_cohort_index; cid_g <- lf$target_cell_id

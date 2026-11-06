@@ -166,10 +166,11 @@ with \code{selection_rho = NULL}, known cohorts and complete \code{xformla}
 covariates on every F row, and a built-in \code{est_method}; it fits no
 observation-probability model, so \code{selection_model},
 \code{selection_pooling} and \code{selection_xformla} are inactive and never
-evaluated. \code{"dr"} has the same declaration requirements, is implemented
-with \code{est_method = "dr"} only (\code{"ipw"}, \code{"reg"} and custom
-callbacks are refused before the data are evaluated; nothing is substituted)
-and uses every probability-model and imputation argument. Ordinary mode neither
+evaluated. \code{"dr"} has the same declaration requirements, supports built-in
+\code{est_method = "ipw"}, \code{"reg"} or \code{"dr"}; custom callbacks
+remain unavailable. It uses every probability-model and imputation argument.
+Treatment IPW fits no counterfactual regression; treatment OR fits no treatment
+propensity; treatment DR fits both. Ordinary mode neither
 evaluates nor forwards it.}
 \item{outcome_pooling}{Chained counterfactual outcome regression for
 \code{est_method = "reg"} or \code{"dr"}: \code{"separate"} (default)
@@ -314,9 +315,9 @@ Refusals are explicit errors inheriting \code{"cdid_error"}:
 \itemize{
   \item \code{"cdid_chained_unavailable"}, also inheriting
     \code{"cdid_chained_request_est_method"}, for unsupported string chained requests.
-  \item \code{"cdid_chained_unavailable"}, also inheriting
-    \code{"cdid_chained_request_unsupported_selection"}, for the not implemented
-    \code{selection_est_method = "dr"} with \code{est_method = "ipw"} or \code{"reg"}.
+  \item \code{"cdid_chained_request_unsupported_selection"} for unsupported
+    missing-outcome correction requests, including custom callbacks with
+    imputation or the augmented correction.
   \item \code{"cdid_custom_ipw_error"} for malformed or nonfinite custom callback outputs.
   \item \code{"cdid_chained_panel"} if \code{panel} is not \code{TRUE}.
   \item \code{"cdid_chained_balanced"} for an explicit
@@ -768,7 +769,7 @@ the next section. No numerical certificate or coverage claim is made.
 \section{Augmented observation correction}{
 With \code{selection = "conditional_mtar"} (or the legacy direct-pair alias
 \code{"corollary1"}), \code{selection_est_method = "dr"} and
-\code{est_method = "dr"}, every needed actual cohort/pair cell \eqn{c = (k, e)}
+built-in \code{est_method = "ipw"}, \code{"reg"} or \code{"dr"}, every needed actual cohort/pair cell \eqn{c = (k, e)}
 is reconstructed by
 \deqn{\widehat Z_c = \widehat j_c(X) + S_e \{\Delta_e - \widehat j_c(X)\} / \widehat q_c(W),}{Zhat_c = jhat_c(X) + S_e (Delta_e - jhat_c(X)) / qhat_c(W),}
 combining the actual-change imputation \eqn{\widehat j_c}{jhat_c} of the previous section
@@ -778,11 +779,12 @@ observation probability \eqn{\widehat q_c}{qhat_c} of the conditional-MTAR secti
 cohort). \eqn{\Delta_e} and \eqn{1/\widehat q_c}{1/qhat_c} are evaluated only on observed
 pairs (\eqn{S_e = 1}); the residual term is not renormalized, \eqn{\widehat q}{qhat} enters
 only through the floored inverse \eqn{1/\max(\widehat q, 10^{-6})}{1/max(qhat, 1e-6)}
-(see Probability clipping), and no fill-only rule is used. The repeat rates \eqn{a_k}, the risk-set
-treatment propensity logits on the unit masses \eqn{w a_k}, the
-counterfactual control-mean regression (now fitted to \eqn{\widehat Z}{Zhat}
-with the requested \code{outcome_pooling}) and both normalizers are those of the pure-imputation DR
-route. It is one estimator, not an average of the weighted and imputed estimates,
+(see Probability clipping), and no fill-only rule is used. The repeat rates \eqn{a_k}, synthetic unit masses \eqn{w a_k},
+and normalizers retain the pure-imputation conventions. Treatment IPW uses
+risk-set treatment propensity logits and no counterfactual regression; OR uses
+a counterfactual control-mean regression fitted to \eqn{\widehat Z}{Zhat}
+with the requested \code{outcome_pooling}, and no treatment propensity;
+DR uses both. It is one estimator, not an average of the weighted and imputed estimates,
 and it has no general finite equality with either.
 
 Two formulas, two designs: \code{xformla} builds the imputation, counterfactual
@@ -816,18 +818,21 @@ pooling group) OR the observation arm (a correct observation model given
 \eqn{W} for every cell of its selection block; for \code{"independent_period_logit"}
 correct date logits at both endpoint blocks and conditional independence of
 the two used dates given cohort and \eqn{W}); the arms may differ across
-cells; and in addition EITHER a correct synthetic treatment propensity logit OR
-a correct counterfactual control-mean regression for the relevant block
-(across all shared blocks when \code{outcome_pooling="pooled"}), each of whose
+cells; and in addition a correct synthetic treatment propensity logit for
+treatment IPW, a correct counterfactual control-mean regression for treatment
+OR, or either for treatment DR. Regression correctness concerns the relevant
+block (all shared blocks when \code{outcome_pooling="pooled"}), each of whose
 cells needs one valid reconstruction arm, with PT/no anticipation and the
-fixed-weight population law. Shared coefficients and the two endpoints of a
+fixed-weight population law. Observation-layer robustness does not make
+treatment IPW or OR doubly robust in the treatment layer. Shared coefficients and the two endpoints of a
 date model couple cells, so a reconstruction error elsewhere in a shared
 group can affect its other predictions. Correctness of an \code{xformla}-only
 imputer alone does not establish reconstruction when variables only in
 \code{selection_xformla} shift the outcome-change mean; a correct observation
 model given \eqn{W} does. Adding selection covariates is therefore not
-automatically harmless. When both arms of a needed cell are wrong, or both the
-propensity and the regression are wrong, the link is generally biased.
+automatically harmless. When both reconstruction arms of a needed cell are
+wrong, or the selected treatment adjustment lacks its required correct model,
+the link is generally biased.
 Recovered joint ATT/GMM coordinates additionally need valid catalog moments for
 every used link and the accepted identification premises; with incompatible
 per-link pseudo-targets the limit depends on the weighting. There is no
@@ -835,7 +840,7 @@ finite-sample unbiasedness; small fitted probabilities inflate the variance.
 
 Complete original-unit influence functions on all F rows carry the
 observation-probability, imputation, repeat-rate, treatment-propensity and
-shared-regression paths and both normalizers into the existing GMM, aggregation,
+counterfactual-regression paths when active, and both normalizers into the existing GMM, aggregation,
 clustering, multiplier-band and pretest consumers with core scaling
 \eqn{\psi = (n_A/N)\phi_F}. \code{chained$selection} reports
 \code{method = "augmented"}, both method axes, \code{selection_model},

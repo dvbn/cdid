@@ -79,9 +79,13 @@ testthat::test_that("separate conditional extractors recover complete link IFs o
     legacy_or = list(B, pair),
     general_dr = list(B, c(pair, list(est_method = "dr", selection_model = "independent_period_logit", selection_pooling = "within_cohort"))),
     imputation_reg = list(B, list(selection = "conditional_mtar", selection_est_method = "imputation", imputation_pooling = "across_cohorts")),
+    augmented_reg = list(B, c(pair, list(selection_est_method = "dr", selection_model = "pair_logit",
+      selection_pooling = "separate", imputation_pooling = "across_cohorts"))),
     dated_or = list(Bd, list(fix_weights = "base_period", base_period = "universal")),
     dated_imputation_dr = list(Bd, list(est_method = "dr", fix_weights = "base_period", selection = "conditional_mtar",
       selection_est_method = "imputation", imputation_pooling = "within_cohort")),
+    dated_augmented_reg = list(Bd, c(pair, list(fix_weights = "base_period", selection_est_method = "dr",
+      selection_model = "independent_period_logit", selection_pooling = "within_cohort", imputation_pooling = "within_cohort"))),
     dated_augmented_dr = list(Bd, c(pair, list(est_method = "dr", fix_weights = "base_period", selection_est_method = "dr",
       selection_model = "independent_period_logit", selection_pooling = "within_cohort", imputation_pooling = "within_cohort"))))
   for (nm in names(runs)) {
@@ -91,6 +95,11 @@ testthat::test_that("separate conditional extractors recover complete link IFs o
     testthat::expect_identical(result$chained$request$outcome_pooling, "separate", info = nm)
     state <- attr(result, "state"); backend <- state$registry$cp04
     testthat::expect_identical(backend$outcome_pooling, "separate", info = nm)
+    if (nm %in% c("augmented_reg", "dated_augmented_reg")) {
+      testthat::expect_identical(backend$est_method, "reg", info = nm)
+      testthat::expect_null(backend$treatments, info = nm)
+      testthat::expect_identical(backend$accounting$n_treatment_fits, 0L, info = nm)
+    }
     frozen <- opcpt_frozen_fit(backend)
     for (cell in attr(result, "cells")) {
       q <- opcpt_index(state, cell$id)
@@ -100,6 +109,10 @@ testthat::test_that("separate conditional extractors recover complete link IFs o
       testthat::expect_equal(unname(cell$denominator_check$supplied), unname(cell$denominator_check$accumulated), tolerance = 1e-12)
       slopes <- grep("^(or_beta|ob):", cell$coords, value = TRUE)
       testthat::expect_true(all(grepl("^(or_beta|ob):[0-9]+:[0-9]+$", slopes)), info = nm)
+      if (nm %in% c("augmented_reg", "dated_augmented_reg")) {
+        testthat::expect_true(any(startsWith(cell$coords, "th:")), info = nm)
+        testthat::expect_false(any(startsWith(cell$coords, "ps:")), info = nm)
+      }
       # Replaying distinct row chunks reads the same sealed union nuisance fit.
       sel <- list(id = cell$id, sign = cell$sigma)
       extractor <- opcpt_ns("cpt_cell_extractor")(state, q, sel, 5L)
