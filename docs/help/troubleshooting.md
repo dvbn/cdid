@@ -139,7 +139,7 @@ Outcome regression (OR), used by `est_method = "reg"` and `"dr"`, and change imp
 | --- | --- |
 | Exactly collinear columns on the fitting rows | Pivoted QR (tolerance `1e-7`) proposes an alias, accepted only if the retained columns reconstruct every needed prediction row to arithmetic roundoff, `64 * .Machine$double.eps` times the original column count. The removal is recorded. |
 | A direction that varies on treated prediction rows but not among control fitting rows, such as a level present only among treated units | Refused; its slope is never set to zero. |
-| A comparison block that is rank deficient on its own | Supported when the pooled control design identifies the shared slopes. |
+| A comparison block that is rank deficient on its own | In default separate mode, valid alias removal must preserve that block's required predictions. Explicit pooled mode can use other blocks to identify shared slopes. There is no automatic switch to pooling. |
 | Nearly collinear columns that fail the alias check | Retained. The fit is refused if the reduced design is rank deficient or badly conditioned overall; no further columns, observations or moments are dropped. |
 | An imputation pooling group whose reduced design remains rank deficient | Refused; nothing is pooled automatically. |
 
@@ -201,7 +201,7 @@ An unusual standard error alone is not evidence of a numerical error. Investigat
 | Setting | Relation to `did` |
 | --- | --- |
 | The matched case above | Point estimates agree up to floating point rounding. |
-| OR or doubly robust (DR) treatment adjustment | Can differ when fitted coefficient restrictions or procedures differ: chained OR shares one slope vector across comparison blocks. The method label alone does not imply a difference. |
+| OR or doubly robust (DR) treatment adjustment | Can differ when fitted coefficient restrictions or procedures differ. Chained OR uses separate coefficients by default; explicit `outcome_pooling = "pooled"` shares slopes across comparison blocks. The method label alone does not imply a difference. |
 | Units not yet treated as controls, even in a balanced panel | Can differ: chained estimation keeps additional valid control pool moments for the same date pair. |
 | PT-all | Need not agree; `did` has no such option. |
 | Incomplete panel | Different observations and assumptions: `did`'s balanced subset, or its repeated cross section estimators with `allow_unbalanced_panel = TRUE`. |

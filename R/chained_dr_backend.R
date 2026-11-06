@@ -150,18 +150,29 @@ dr_selection_support <- function(reader, spec, sel_fit, up_map, q_id, recipe, or
   acc <- or_pooled_support_start(recipe, spec$transitions)
   moments <- array(0, c(m, m, dq))
 
-  dr_support_visit(reader, spec, ctrl, or_frame_index, function(rows, S, obs, dy, Z) {
-    if (!length(obs)) return(invisible(NULL))
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = reference)
+  on.exit(op$abort(), add = TRUE)
+  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+  first <- st$cohort_start[spec$cohort]; last <- st$cohort_end[spec$cohort]
+  for (start in seq.int(first, last, by = ctrl$max_chunk_rows)) {
+    rows <- st$cohort_order[seq.int(start, min(last, start + ctrl$max_chunk_rows - 1L))]
+    hit <- cp04_pair_rows(reader, rows, spec$pair, TRUE)
+    obs <- which(hit$S == 1)
+    Z <- if (is.null(reference)) frame$Z_a[st$a_index[rows[obs]], or_frame_index, drop = FALSE] else
+      chained_reference_x(reference, spec$reference, rows[obs])[, or_frame_index, drop = FALSE]
+    dy <- hit$dy[obs]
+    if (!length(obs)) next
     rr <- rows[obs]
-    ld <- selection_pair_cohort_log_deriv(sel_fit, up_map, q_id, rr)
+    ld <- op$deriv(up_map, q_id, rr)
     q <- ld$pred$weight
     cp04_finite(q, "Corollary 1 fitted pair weights", TRUE)
-    acc <<- or_pooled_support_add(acc, recipe, Z, dy, q, "corollary1")
-    moments <<- or_selection_moments_add(moments, Z[, recipe$slope_index, drop = FALSE], dy, q, ld$T_logit)
-  }, reference)
+    acc <- or_pooled_support_add(acc, recipe, Z, dy, q, "corollary1")
+    moments <- or_selection_moments_add(moments, Z[, recipe$slope_index, drop = FALSE], dy, q, ld$T_logit)
+  }
   if (!is.finite(acc$weight_mass) || acc$weight_mass <= 0 || acc$weight_mass / st$N <= 0)
     dr_corollary1_abort("Positive actual-pair cohort support required.", "support")
   cp04_finite(c(acc$sumZ, acc$sumY, moments), "Corollary 1 compact support moments")
+  op$finish()
   list(design = acc, moments = moments, a = a, pair_mass = acc$weight_mass, n_pair = acc$n)
 }
 
@@ -327,7 +338,7 @@ dr_baseline_treatment_fit <- function(reader, spec, supports, reg, shared,
       rows <- sort(unlist(lapply(spec$cohorts, function(k) st$cohort_order[seq_len(st$cohort_end[k] -
         st$cohort_start[k] + 1) + st$cohort_start[k] - 1])), method = "radix")
     post <- panel$postings
-    res <- .Call(or_baseline_native_kernel("C_gmm_cp08_pair_rows"), panel$observations$y, post$date_start,
+    res <- or_baseline_native_kernel("C_gmm_cp08_pair_rows")(panel$observations$y, post$date_start,
       post$post_a_index, post$post_obs_index, rows, st$a_index,
       as.integer(c(spec$pair$s_calendar_index, spec$pair$t_calendar_index)), as.integer(ctrl$max_chunk_rows),
       ctrl$max_matrix_entries)
@@ -512,7 +523,7 @@ dr_baseline_treatment_batch <- function(reader, specs, supports, regressions, sh
                                         recipe, or_frame_index, trt_recipe,
                                         glm_control, ctrl, reference = NULL,
                                         complete = NULL, share = NULL,
-                                        scratch = NULL, call_fn = .Call) {
+                                        scratch = NULL, call_fn = function(kernel, ...) kernel(...)) {
   if (is.null(complete) || !is.null(reference) || !is.environment(share) ||
       !is.list(specs) || !length(specs) || !is.list(supports) ||
       !is.list(regressions) || !is.list(shared) || !is.list(reader))
@@ -728,6 +739,10 @@ dr_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, reg, share
   y <- w <- pp <- dy <- numeric(n)
   kk <- obs_rows <- integer(n)
   pos <- 0L
+  dated_prediction <- identical(sel_fit$selection_model, "independent_period_logit")
+  prob_s <- prob_t <- if (dated_prediction) numeric(n) else NULL
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = reference)
+  on.exit(if (!is.null(op)) op$abort(), add = TRUE)
 
   for (start in seq.int(1L, st$N, by = ctrl$max_chunk_rows)) {
     rows <- seq.int(start, min(st$N, start + ctrl$max_chunk_rows - 1L))
@@ -758,13 +773,19 @@ dr_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, reg, share
     for (k in unique(ci)) {
       jj <- which(ci == k)
       q <- spec$selection_ids[k]
-      pred_k <- predict_pair_selection(sel_fit, rows[jj], q)
+      pred_k <- op$pair(rows[jj], q)
       pp[ii[jj]] <- pred_k$prob
       w[ii[jj]] <- pred_k$weight
+      if (dated_prediction) {
+        prob_s[ii[jj]] <- pred_k$prob_s
+        prob_t[ii[jj]] <- pred_k$prob_t
+      }
     }
   }
   if (pos != n) dr_corollary1_abort("Observed risk support changed from its owner view.", "identity")
 
+  sources <- op$sources
+  op$finish(); op <- NULL
   fit <- cp04_logit(X_trt, y, w, glm_control, st$N, spec)
   names(fit$coefficients) <- trt_recipe$columns
   lv <- ipw_logit_values(X_trt, fit$coefficients)
@@ -806,6 +827,9 @@ dr_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, reg, share
   residual_dr <- cbind(wp * (r_obs - T_dr) / dp, wm * (r_obs - M_dr) / dm, wp, wm)
   residual_ipw <- cbind(wp * (dy - T_ipw) / dp, wm * (dy - M_ipw) / dm, wp, wm)
 
+  op <- selection_prediction_operation(sel_fit, expected_sources = sources,
+    source_reader = reader, source_reference = reference)
+  sources <- NULL
   for (k in seq_len(m)) {
     rr <- which(kk == k)
     if (!length(rr)) next
@@ -816,12 +840,17 @@ dr_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, reg, share
     for (cs in seq.int(1L, length(rr), by = ctrl$max_chunk_rows)) {
       ce <- min(length(rr), cs + ctrl$max_chunk_rows - 1L)
       sub <- cs:ce
-      ld_mat[sub, ] <- selection_pair_cohort_log_deriv(sel_fit, up_map, q, obs_rows[rr[sub]])$log_deriv
+      ix <- rr[sub]
+      pred <- list(prob = pp[ix], weight = w[ix])
+      if (dated_prediction) { pred$prob_s <- prob_s[ix]; pred$prob_t <- prob_t[ix] }
+      ld_mat[sub, ] <- op$deriv(up_map, q, obs_rows[ix], pred = pred)$log_deriv
     }
     C[, pos_k] <- C[, pos_k] + crossprod(score[rr, , drop = FALSE], ld_mat) / st$N
     U_dr[, pos_k] <- U_dr[, pos_k] + crossprod(residual_dr[rr, , drop = FALSE], ld_mat) / st$N
     U_ipw[, pos_k] <- U_ipw[, pos_k] + crossprod(residual_ipw[rr, , drop = FALSE], ld_mat) / st$N
   }
+
+  op$finish(); op <- NULL
 
   wm_act <- wm * lv$active
   V_dr <- matrix(0, 4L, p_trt, dimnames = list(c("T", "M", "dp", "dm"), trt_recipe$columns))
@@ -929,8 +958,10 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
                             glm_control, rank_tol = or_public_rank_tol(),
                             outcome_recipe, treatment_columns = NULL,
                             retained_external_entries = 0, external_work_ops = 0,
-                            automatic_chunk_rows = FALSE, reference = NULL) {
+                            automatic_chunk_rows = FALSE, reference = NULL, outcome_pooling = "pooled") {
   validate_cp04_reader(reader)
+  outcome_pooling <- or_baseline_outcome_mode(outcome_pooling)
+  separate <- identical(outcome_pooling, "separate")
   if (missing(rank_tol)) dr_baseline_abort("Supply explicit private rank_tol.")
   rank_tol <- or_baseline_rank_tol(rank_tol)
   ctrl <- validate_ipw_owner_control(control)
@@ -1010,6 +1041,8 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
       link_id = v$link_id, source_functional_key = source,
       functional_key = paste0("cmpcat:DR-baseline-shared-slope-WLS-IPW|", substring(source, 8L))
     )
+    if (separate) records[[ell]]$functional_key <- sub("shared-slope", "separate-slopes",
+      records[[ell]]$functional_key, fixed = TRUE)
     if (!is.null(reference)) {
       records[[ell]]$reference <- reference$view_recipe[ell]
       records[[ell]]$functional_key <- paste0(records[[ell]]$functional_key, "|reference:",
@@ -1047,28 +1080,47 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
   # CP08 stage 3: the route is chosen here from actual facts, before any scan:
   # the OR facts plus each model's exact complete risk-set observer count.
   # Treatment roots are shared only within identical ordered (g, K) groups.
-  complete <- or_baseline_complete_facts(reader, recipe, records, specs, ctrl, reference, trt_recipe,
+  complete <- if (separate) NULL else or_baseline_complete_facts(reader, recipe, records, specs, ctrl, reference, trt_recipe,
     retained_external_entries = retained_external_entries, external_work_ops = external_work_ops,
     metadata_entries = header + metadata)
   if (!is.null(complete) && !all(vapply(ts, function(s) is.integer(s$cohorts) && length(s$cohorts) >= 2L &&
       s$cohorts[1L] %in% complete$target && all(s$cohorts[-1L] %in% complete$control) &&
       identical(as.integer(s$n_observers), as.integer(sum(st$cohort_end[s$cohorts] - st$cohort_start[s$cohorts] + 1L))),
       logical(1)))) complete <- NULL
-  trt_groups <- if (is.null(complete)) NULL else {
+  fixed <- if (separate) or_separate_complete_facts(reader, recipe, records, specs, ctrl, reference,
+    frame_index = or_frame_index, treatment = trt_recipe,
+    retained_external_entries = retained_external_entries, external_work_ops = external_work_ops,
+    metadata_entries = header + metadata) else NULL
+  if (!is.null(fixed) && !all(vapply(ts, function(s)
+      identical(as.integer(s$n_observers), as.integer(sum(st$cohort_end[s$cohorts] - st$cohort_start[s$cohorts] + 1L))),
+      logical(1)))) fixed <- NULL
+  trt_groups <- if (is.null(complete) && is.null(fixed)) NULL else {
     trt_keys <- vapply(ts, function(s) paste(s$cohorts, collapse = ":"), character(1))
     lapply(unique(trt_keys), function(k) which(trt_keys == k))
   }
   name_bytes <- sum(nchar(c(recipe$columns, trt_recipe$columns), type = "bytes"))
-  or_charges <- if (is.null(complete)) or_baseline_fit_charges(
+  or_charge <- if (separate) function(...) or_baseline_separate_fit_charges(...,
+    pools = pools, links = links, support_rows = vapply(specs, function(s)
+      st$cohort_end[s$cohort] - st$cohort_start[s$cohort] + 1, numeric(1))) else or_baseline_fit_charges
+  or_charges <- if (is.null(complete)) or_charge(
     S, G, L, p_or, st$N, st$n_A, min(st$N, ctrl$max_chunk_rows),
     metadata, header, name_bytes
   ) else or_baseline_complete_fit_charges(st, specs, S, G, L, p_or, min(st$N, ctrl$max_chunk_rows),
     metadata, header, name_bytes, complete)
+  if (!is.null(fixed)) {
+    extra <- or_separate_complete_extra(fixed, min(st$N, ctrl$max_chunk_rows), p_or, S, G, L)
+    or_charges <- Map(`+`, or_charges, extra)
+  }
   trt_models_bound <- T_count * (p_trt * p_trt + 12 * (p_trt + p_or) + 8 * max_m + p_trt * max_m + 4096) +
     L * (8 * p_or + 8 * p_trt + 1024) + 8192
   trt_scratch <- max_trt_n * (p_trt + p_or + 16) + 32 * (p_trt + max_m + 4)^2 + 8192
   trt_work <- 128 * (gc$maxit + 2) * trt_scan_n * (p_trt + 2)^2 +
     128 * T_count * st$N * max_m + 128 * trt_models_bound
+  if (!is.null(fixed)) {
+    # One exact treatment root and prepared risk roster live at a time.
+    trt_scratch <- trt_scratch + max_trt_n * (p_trt + p_or + 16) +
+      64 * (T_count + max_m + (p_trt + 2)^2)
+  }
   if (!is.null(complete)) {
     # One logit on the first model's observers plus its prepared invariants
     # (share$inputs and share$prep) per (g, K) cohort group, followed by one
@@ -1100,15 +1152,29 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
     "baseline DR pipeline fit work"
   )
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline DR fits")
+  qr_buffer <- if (automatic_chunk_rows && is.null(reference) && is.null(complete) && is.null(fixed))
+    or_baseline_qr_buffer_plan(ctrl, base, bound, scratch, p_or, st$n_A) else NULL
+  if (!is.null(qr_buffer)) {
+    scratch <- ipw_owner_safe_sum(c(scratch, qr_buffer$extra), ctrl$max_matrix_entries, "baseline DR buffered QR scratch")
+    cp04_budget(ctrl, c(base, bound), scratch, work, bound, "baseline DR buffered QR fit")
+  }
 
   state <- if (is.null(complete)) {
-    supports <- lapply(specs, function(s) dr_baseline_support(reader, s, recipe, or_frame_index,
-      ctrl, reference, complete))
-    ans <- or_baseline_assemble(
+    fixed_supports <- if (is.null(fixed)) NULL else or_separate_complete_supports(reader,
+      specs, recipe, or_frame_index, ctrl, fixed, scratch)
+    supports <- if (is.null(fixed_supports)) lapply(specs, function(s)
+      if (is.null(qr_buffer)) dr_baseline_support(reader, s, recipe, or_frame_index, ctrl, reference, complete) else
+        or_baseline_qr_buffered_support(reader, s, recipe, ctrl, qr_buffer$rows, or_frame_index)) else fixed_supports$supports
+    assemble <- if (separate) or_baseline_separate_assemble else or_baseline_assemble
+    ans <- assemble(
       recipe, supports, pools, links, rank_tol, st$N,
       function(sid, visit) dr_support_visit(reader, specs[[sid]], ctrl, or_frame_index,
                                             function(rows, S_vec, obs, dy, Z) visit(Z), reference, complete)
     )
+    if (!is.null(fixed_supports)) {
+      fixed_counts <- fixed_supports$counts
+      rm(fixed_supports)
+    }
     rm(supports)
     ans
   } else {
@@ -1118,12 +1184,29 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
       or_frame_index, dr_baseline_abort)
   }
 
-  share <- if (is.null(complete)) NULL else new.env(parent = emptyenv())
-  treatments <- if (is.null(complete)) {
+  share <- if (is.null(complete) && is.null(fixed)) NULL else new.env(parent = emptyenv())
+  treatments <- if (!is.null(fixed)) {
+    out_trt <- vector("list", T_count)
+    share$calls <- share$reuses <- share$summary_batches <- share$summary_batched_models <- 0L
+    for (g_idx in trt_groups) {
+      share_g <- new.env(parent = emptyenv())
+      for (tid in g_idx) {
+        spec <- ts[[tid]]
+        out_trt[[tid]] <- dr_baseline_treatment_fit(reader, spec, state$supports,
+          state$regressions[[spec$regression]], or_outcome_block_fit(state$outcome_groups, spec$regression),
+          recipe, or_frame_index, trt_recipe, gc, ctrl, reference, fixed, share_g)
+      }
+      share$calls <- share$calls + share_g$calls
+      share$reuses <- share$reuses + share_g$reuses
+      rm(share_g)
+    }
+    out_trt
+  } else if (is.null(complete)) {
     lapply(ts, function(s) {
       dr_baseline_treatment_fit(
         reader, s, state$supports, state$regressions[[s$regression]],
-        state$shared, recipe, or_frame_index, trt_recipe, gc, ctrl, reference, complete, share
+        if (separate) or_outcome_block_fit(state$outcome_groups, s$regression) else state$shared,
+        recipe, or_frame_index, trt_recipe, gc, ctrl, reference, complete, share
       )
     })
   } else if (length(trt_groups) <= 1L) {
@@ -1144,7 +1227,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
       rest_trt <- dr_baseline_treatment_batch(
         reader, ts[-1L], state$supports, state$regressions, state$shared,
         recipe, or_frame_index, trt_recipe, gc, ctrl, reference, complete,
-        share, scratch = scratch, call_fn = .Call
+        share, scratch = scratch, call_fn = function(kernel, ...) kernel(...)
       )
       if (is.null(rest_trt)) {
         # Structural decline precedes any native summary execution. Reserve the
@@ -1198,7 +1281,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
         rest_g <- dr_baseline_treatment_batch(
           reader, ts[g_idx[-1L]], state$supports, state$regressions, state$shared,
           recipe, or_frame_index, trt_recipe, gc, ctrl, reference, complete,
-          share_g, scratch = scratch, call_fn = .Call
+          share_g, scratch = scratch, call_fn = function(kernel, ...) kernel(...)
         )
         if (is.null(rest_g)) {
           ng <- ts[[g_idx[1L]]]$n_observers
@@ -1257,6 +1340,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
       control = ctrl,
       glm_control = gc,
       rank_tol = rank_tol,
+      outcome_pooling = outcome_pooling,
       outcome_recipe = recipe,
       or_frame_index = or_frame_index,
       treatment_recipe = trt_recipe,
@@ -1296,10 +1380,10 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
         n_regression_fits = 1L,
         n_regression_blocks = G,
         n_local_intercepts = if (recipe$intercept) G else 0L,
-        n_shared_slopes = state$shared$p,
+        n_shared_slopes = if (separate) 0L else state$shared$p,
         n_slope_columns = p_or,
-        n_aliased_slopes = length(state$shared$basis$aliased_columns),
-        n_support_scans = S * (1L + state$shared$verification_scan),
+        n_aliased_slopes = if (separate) 0L else length(state$shared$basis$aliased_columns),
+        n_support_scans = if (separate) S else S * (1L + state$shared$verification_scan),
         n_treatment_fits = T_count,
         n_treatment_columns = p_trt,
         full_F_masks_per_model = 0L,
@@ -1311,6 +1395,13 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
     ),
     class = c("cdid_dr_baseline", "cdid_dr_backend")
   )
+  if (separate) obj <- or_selection_separate_record(obj, state)
+  if (!is.null(fixed)) {
+    obj$separate_complete <- or_separate_complete_index(fixed, specs, obj$links, ts, trt_groups)
+    obj$accounting$fixed_operator <- c(list(route = "separate_complete"), as.list(fixed_counts),
+      list(n_treatment_logit_fits = unname(logit_counts["fits"]),
+        n_treatment_logit_reuses = unname(logit_counts["reuses"])))
+  }
   if (!is.null(reference)) {
     obj$reference_ref <- reference$ref
     obj$accounting$n_reference_recipes <- nrow(reference$recipes)
@@ -1342,6 +1433,7 @@ fit_dr_baseline <- function(reader, link_views, control = ipw_owner_control(),
 }
 
 dr_baseline_if_envelope <- function(backend, B, links, details = FALSE) {
+  if (dr_separate(backend)) return(dr_separate_if_envelope(backend, B, links, details))
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
@@ -1783,7 +1875,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
   po <- or_baseline_complete_panel(reader, backend$complete_support, dr_baseline_abort)
   post <- po$postings; rows_i <- as.integer(rows); cap <- backend$control$max_matrix_entries
   if (is.null(plan$groups)) {
-    a <- .Call(or_baseline_native_kernel("C_gmm_cp08_dr_if_prepare"), po$observations$y, post$date_start,
+    a <- or_baseline_native_kernel("C_gmm_cp08_dr_if_prepare")(po$observations$y, post$date_start,
       post$post_a_index, post$post_obs_index, rows_i, st$cohort_index, st$a_index, st$w, plan$dates,
       plan$sup, plan$sup_par, plan$mdl, plan$mdl_cross, cap)
     code <- a$status
@@ -1810,7 +1902,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
     if (!is.null(dn) && !is.null(dn[[1L]])) {
       dn[[1L]][[1L]][[1L]] <- frame$Z_a
     }
-    b <- .Call(or_baseline_native_kernel("C_gmm_cp08_dr_if_assemble"), rows_i, st$cohort_index, st$a_index, st$w,
+    b <- or_baseline_native_kernel("C_gmm_cp08_dr_if_assemble")(rows_i, st$cohort_index, st$a_index, st$w,
       a$gather, plan$sup, plan$sup_par, plan$mdl, plan$mdl_par, xi, as.integer(rr), wp, wm, plan$lnk,
       as.integer(n_ok), dn, cap)
     if (!identical(b$status[1L], 0L)) or_baseline_native_refuse(b$status, dr_baseline_abort)
@@ -1822,7 +1914,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
     prep_kernel <- or_baseline_native_kernel("C_gmm_cp08_dr_if_prepare")
     asm_kernel <- or_baseline_native_kernel("C_gmm_cp08_dr_if_assemble")
     for (grp in plan$groups) {
-      a <- .Call(prep_kernel, po$observations$y, post$date_start,
+      a <- prep_kernel(po$observations$y, post$date_start,
         post$post_a_index, post$post_obs_index, rows_i, st$cohort_index, st$a_index, st$w, plan$dates,
         plan$sup, plan$sup_par, grp$mdl, grp$mdl_cross, cap)
       code <- a$status
@@ -1848,7 +1940,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
       if (!is.null(dn) && !is.null(dn[[1L]])) {
         dn[[1L]][[1L]][[1L]] <- frame$Z_a
       }
-      b <- .Call(asm_kernel, rows_i, st$cohort_index, st$a_index, st$w,
+      b <- asm_kernel(rows_i, st$cohort_index, st$a_index, st$w,
         a$gather, plan$sup, plan$sup_par, grp$mdl, grp$mdl_par, xi, as.integer(rr), wp, wm, grp$lnk,
         as.integer(n_ok), dn, cap)
       if (!identical(b$status[1L], 0L)) or_baseline_native_refuse(b$status, dr_baseline_abort)
@@ -1874,6 +1966,7 @@ dr_baseline_native_if_chunk <- function(backend, reader, rows, links, scale, pre
 }
 
 evaluate_dr_baseline_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE, plan = NULL) {
+  if (dr_separate(backend)) return(evaluate_dr_separate_if_chunk(backend, rows, links, scale, details, plan = plan))
   validate_dr_baseline_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
@@ -1890,6 +1983,8 @@ evaluate_dr_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
   # requests keep the route below.
   if (!details && !is.null(backend$complete_support))
     return(dr_baseline_native_if_chunk(backend, reader, rows, links, scale, pre, plan))
+  if (!details && !is.null(plan) && is.null(backend$reference_ref))
+    return(dr_sparse_native_if(backend, reader, rows, links, scale, pre, plan))
   B <- length(rows)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   p_or <- backend$shared$p
@@ -2202,8 +2297,10 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
                               automatic_chunk_rows = FALSE,
                               selection_model = "pair_logit",
                               selection_pooling = "separate",
-                              sel_fit = NULL, reference = NULL) {
+                              sel_fit = NULL, reference = NULL, outcome_pooling = "pooled") {
   validate_cp04_reader(reader)
+  outcome_pooling <- or_selection_outcome_mode(outcome_pooling)
+  separate <- identical(outcome_pooling, "separate")
   if (missing(rank_tol) || !gmm_scalar_numeric(rank_tol) || rank_tol <= 0 || rank_tol >= 1)
     dr_corollary1_abort("Supply explicit finite private rank_tol in (0, 1).")
   ctrl <- validate_ipw_owner_control(control)
@@ -2273,6 +2370,8 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
         "-shared-slope-WLS-IPW-a/(rho*p)|", substring(source, 8L)
       )
     )
+    if (separate) records[[ell]]$functional_key <- sub("shared-slope", "separate-slopes",
+      records[[ell]]$functional_key, fixed = TRUE)
     if (!is.null(reference)) {
       records[[ell]]$reference <- reference$view_recipe[ell]
       records[[ell]]$functional_key <- paste0(records[[ell]]$functional_key, "|reference:",
@@ -2357,18 +2456,23 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
 
   metadata <- unname(cp04_payload(list(specs, pools, links, ts, selection_specs, upstream, sel_fit, trt_recipe))["entries"])
   cohort_n <- vapply(specs, function(s) st$cohort_end[s$cohort] - st$cohort_start[s$cohort] + 1, numeric(1))
-  or_charges <- or_corollary1_fit_charges(
+  or_charge <- if (separate) function(...) or_selection_separate_fit_charges(...,
+    pools = pools, links = links, channels = channels, support_rows = cohort_n) else or_corollary1_fit_charges
+  fit_name_bytes <- sum(nchar(c(recipe$columns, trt_recipe$columns, if (is.null(reference)) colnames(st$Z) else
+    reference$designs[[reference$role_slot["s"]]]$columns), type = "bytes"))
+  or_charges <- or_charge(
     S, G, L, p_or, max(1L, up_map$d), D, st$n_A, min(st$N, ctrl$max_chunk_rows),
-    max(cohort_n), sum(cohort_n), gc$maxit, metadata, header,
-    sum(nchar(c(recipe$columns, trt_recipe$columns, if (is.null(reference)) colnames(st$Z) else
-      reference$designs[[reference$role_slot["s"]]]$columns), type = "bytes"))
+    max(cohort_n), sum(cohort_n), gc$maxit, metadata, header, fit_name_bytes
   )
   max_m <- max(vapply(ts, function(x) length(x$cohorts), integer(1)))
   max_trt_n <- max(vapply(ts, `[[`, integer(1), "n_observers"))
   trt_scan_n <- sum(vapply(ts, `[[`, integer(1), "n_observers"))
   trt_models_bound <- T_count * (p_trt * p_trt + 12 * (p_trt + p_or) + 8 * D + p_trt * D + 4096) +
     L * (8 * p_or + 8 * p_trt + 1024) + 8192
-  trt_scratch <- max_trt_n * (p_trt + p_or + d + 16) + 32 * (p_trt + D + 4)^2 + 8192
+  trt_fit_inventory <- dr_selection_treatment_fit_scratch(st, ts, up_map, p_trt, p_or, d,
+    min(st$N, ctrl$max_chunk_rows), reference,
+    fit_name_bytes + if (is.null(reference)) 0 else sum(nchar(reference$x_columns, type = "bytes")))
+  trt_scratch <- trt_fit_inventory$scratch
   trt_work <- 128 * (gc$maxit + 2) * trt_scan_n * (p_trt + 2)^2 +
     128 * T_count * st$N * max_m + 128 * trt_models_bound
 
@@ -2384,7 +2488,8 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
   supports <- lapply(seq_len(S), function(j) {
     dr_selection_support(reader, specs[[j]], sel_fit, up_map, q_of_s[j], recipe, or_frame_index, ctrl, reference)
   })
-  state <- or_selection_assemble(
+  assemble <- if (separate) or_selection_separate_assemble else or_selection_assemble
+  state <- assemble(
     recipe, supports, pools, links, channels, D, rank_tol, st$N,
     function(sid, visit) dr_support_visit(reader, specs[[sid]], ctrl, or_frame_index,
                                           function(rows, S_vec, obs, dy, Z) visit(Z), reference)
@@ -2394,7 +2499,8 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
   treatments <- lapply(ts, function(s) {
     dr_selection_treatment_fit(
       reader, s, sel_fit, up_map, state$regressions[[s$regression]],
-      state$shared, recipe, or_frame_index, trt_recipe, gc, ctrl, reference
+      if (separate) or_outcome_block_fit(state$outcome_groups, s$regression) else state$shared,
+      recipe, or_frame_index, trt_recipe, gc, ctrl, reference
     )
   })
   links_out <- dr_populate_link_records(links, state$links, treatments, pools)
@@ -2411,6 +2517,7 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
       control = ctrl,
       glm_control = gc,
       rank_tol = rank_tol,
+      outcome_pooling = outcome_pooling,
       outcome_recipe = recipe,
       or_frame_index = or_frame_index,
       treatment_recipe = trt_recipe,
@@ -2441,6 +2548,7 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
         external_work_ops = external_work_ops,
         retained_bound = base + bound,
         fit_scratch_bound = scratch,
+        treatment_fit_inventory = trt_fit_inventory,
         work_ops_bound = work,
         support_cohort_row_visits = sum(cohort_n),
         automatic_chunk_rows = automatic_chunk_rows,
@@ -2456,10 +2564,10 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
         n_regression_fits = 1L,
         n_regression_blocks = G,
         n_local_intercepts = if (recipe$intercept) G else 0L,
-        n_shared_slopes = state$shared$p,
+        n_shared_slopes = if (separate) 0L else state$shared$p,
         n_slope_columns = p_or,
-        n_aliased_slopes = length(state$shared$basis$aliased_columns),
-        n_support_scans = S * (1L + state$shared$verification_scan),
+        n_aliased_slopes = if (separate) 0L else length(state$shared$basis$aliased_columns),
+        n_support_scans = if (separate) S else S * (1L + state$shared$verification_scan),
         n_treatment_fits = T_count,
         n_treatment_columns = p_trt,
         full_F_masks_per_model = 0L,
@@ -2471,12 +2579,14 @@ fit_dr_corollary1 <- function(reader, link_views, control = ipw_owner_control(),
     ),
     class = c("cdid_dr_selection_backend", "cdid_dr_corollary1", "cdid_dr_backend")
   )
+  if (separate) obj <- or_selection_separate_record(obj, state)
   if (!is.null(reference)) {
     obj$reference_ref <- reference$ref
     obj$accounting$n_reference_recipes <- nrow(reference$recipes)
   }
   obj["ref"] <- list(NULL)
   actual <- unname(cp04_payload(obj)["entries"])
+  if (separate && actual > bound) dr_corollary1_abort("Retained separate DR bound underestimated.", "bound")
   obj$accounting$owned_entries <- actual
   obj$accounting$retained_bound <- max(obj$accounting$retained_bound, base + actual)
   cp04_budget(ctrl, c(base, actual), scratch, c(work, external_work_ops), actual,
@@ -2488,6 +2598,7 @@ fit_dr_selection_models <- fit_dr_corollary1
 fit_dr_conditional_mtar <- fit_dr_corollary1
 
 dr_corollary1_if_envelope <- function(backend, B, links, details = FALSE) {
+  if (dr_separate(backend)) return(dr_separate_if_envelope(backend, B, links, details))
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
@@ -2548,6 +2659,10 @@ dr_corollary1_if_envelope <- function(backend, B, links, details = FALSE) {
   scratch <- scratch + selection_pre$output + selection_pre$scratch
   work <- work + selection_pre$work
 
+  if (!details) return(dr_corollary1_ordinary_if_envelope(backend, B, links,
+    list(gids = gids, beta_gids = beta_gids, sids = sids, tids = tids,
+      uids = uids, active_blocks = active_blocks, active_cells = active_cells,
+      output = output, scratch = scratch, work = work), selection_pre, metadata))
   list(
     gids = gids, beta_gids = beta_gids, sids = sids, tids = tids,
     uids = uids, active_blocks = active_blocks, active_cells = active_cells,
@@ -2568,7 +2683,8 @@ dr_corollary1_if_budget <- function(backend, B, links, details = FALSE) {
   pre
 }
 
-evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE) {
+evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE, plan = NULL) {
+  if (dr_separate(backend)) return(evaluate_dr_separate_if_chunk(backend, rows, links, scale, details, plan = plan))
   validate_dr_corollary1_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
@@ -2598,7 +2714,12 @@ evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
   sel_fit <- backend$selection_backend
   up_map <- backend$up_map
   # 1. Evaluate upstream selection & rate IFs ONCE for the chunk
-  up_res <- evaluate_selection_upstream_chunk(sel_fit, up_map, rows, pre$uids, details = details)
+  pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "dr_pooled", details)
+  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
+  op <- selection_prediction_operation(sel_fit, source_reader = reader, source_reference = ref,
+    pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair)
+  on.exit(op$abort(), add = TRUE)
+  up_res <- op$upstream(up_map, rows, pre$uids, details = details)
   up <- up_res$up
 
   # D92: the non-detailed Corollary 1 DR IF reads only core$beta (psi_or, the
@@ -2616,10 +2737,11 @@ evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
       sp <- backend$support_specs[[sid]]
       q <- backend$q_of_s[sid]
       ix <- which(ci == sp$cohort & U_rows)
-      hit <- cp04_pair_rows(reader, rows[ix], sp$pair, TRUE)
+      hit <- if (is.null(pair_op)) cp04_pair_rows(reader, rows[ix], sp$pair, TRUE) else
+        pair_op$pair(rows[ix], sp$pair, TRUE)
       obs <- which(hit$S == 1)
       rr <- rows[ix[obs]]
-      pr_obs <- if (length(rr)) predict_pair_selection(sel_fit, rr, q)$prob else numeric(0)
+      pr_obs <- if (length(rr)) op$pair(rr, q)$prob else numeric(0)
       hits[[j]] <- if (is.null(ref)) list(
         obs = ix[obs],
         dy = hit$dy[obs],
@@ -2649,7 +2771,10 @@ evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
     upstream <- up[, u_pos, drop = FALSE]
 
     ci_in <- which(ci %in% spec$cohorts)
-    hit_all <- if (length(ci_in)) cp04_pair_rows(reader, rows[ci_in], spec$pair, TRUE) else list(S = numeric(0), dy = numeric(0))
+    hit_all <- if (length(ci_in)) {
+      if (is.null(pair_op)) cp04_pair_rows(reader, rows[ci_in], spec$pair, TRUE) else
+        pair_op$pair(rows[ci_in], spec$pair, TRUE)
+    } else list(S = numeric(0), dy = numeric(0))
     obs_local <- which(hit_all$S == 1)
     rr <- ci_in[obs_local]
 
@@ -2687,7 +2812,7 @@ evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
       for (k in seq_along(spec$cohorts)) {
         sub_k <- which(ci[rr] == spec$cohorts[k])
         if (length(sub_k)) {
-          fw[sub_k] <- predict_pair_selection(sel_fit, rows[rr[sub_k]], spec$selection_ids[k])$weight
+          fw[sub_k] <- op$pair(rows[rr[sub_k]], spec$selection_ids[k])$weight
         }
       }
       wp <- fw * D_ind
@@ -2836,6 +2961,8 @@ evaluate_dr_corollary1_if_chunk <- function(backend, rows, links, scale = "frame
   }
   if (unname(cp04_payload(out)["entries"]) > pre$output)
     dr_corollary1_abort("IF output bound underestimated.", "bound")
+  op$finish()
+  if (!is.null(pair_op)) pair_op$finish()
   out
 }
 
@@ -2891,7 +3018,7 @@ fit_dr_backend <- function(reader, link_views, control = ipw_owner_control(),
                            selection_pooling = "separate",
                            retained_external_entries = 0, external_work_ops = 0,
                            automatic_chunk_rows = FALSE,
-                           sel_fit = NULL) {
+                           sel_fit = NULL, outcome_pooling = "pooled") {
   if (!is.character(selection) || length(selection) != 1L || is.na(selection) ||
       !selection %in% c("none", "baseline", "conditional_mtar", "corollary1")) {
     dr_baseline_abort('`selection` must be "none" ("baseline") or "conditional_mtar" ("corollary1").', "input")
@@ -2903,7 +3030,7 @@ fit_dr_backend <- function(reader, link_views, control = ipw_owner_control(),
       outcome_recipe = outcome_recipe, treatment_columns = treatment_columns,
       retained_external_entries = retained_external_entries,
       external_work_ops = external_work_ops,
-      automatic_chunk_rows = automatic_chunk_rows
+      automatic_chunk_rows = automatic_chunk_rows, outcome_pooling = outcome_pooling
     )
   } else {
     fit_dr_corollary1(
@@ -2915,7 +3042,7 @@ fit_dr_backend <- function(reader, link_views, control = ipw_owner_control(),
       automatic_chunk_rows = automatic_chunk_rows,
       selection_model = selection_model,
       selection_pooling = selection_pooling,
-      sel_fit = sel_fit
+      sel_fit = sel_fit, outcome_pooling = outcome_pooling
     )
   }
 }

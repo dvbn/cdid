@@ -1,6 +1,6 @@
 # Impute actual changes for missing outcomes
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
 
 Observation weighting reweights the changes of units observed at both dates. Change imputation instead predicts the actual change of every unit from its covariates, and the augmented correction combines prediction with weighting. This example compares the three corrections on the panel of [Choose an observation model for missing outcomes](observation-models.md), where every model they need is correctly specified by construction. [Handling missing outcomes](../methods/missing-outcomes.md#change-imputation) defines the methods.
 
@@ -28,7 +28,7 @@ Change imputation fits a model `j` of actual changes. It is not the counterfactu
 | Layer | handling missing outcomes: `selection_est_method = "imputation"` or `"dr"` | treatment adjustment: `est_method = "reg"` or `"dr"` |
 | Predicts | the actual change of a cohort over a pair of dates, effects included | the untreated change |
 | Fitted to | units of the cohort observed at both dates | control changes, reconstructed under imputation and the augmented correction |
-| Slopes | shared as `imputation_pooling` declares | one vector for all blocks, with no pooling argument |
+| Slopes | shared as `imputation_pooling` declares | separate by comparison by default, or shared across blocks with `outcome_pooling = "pooled"` |
 
 Both read `xformla`. Here `~ x` defines `j` and both treatment models of `est_method = "dr"`, the treatment logit `p` and `m`. `selection_xformla` defines only the observation model `q`.
 
@@ -52,6 +52,7 @@ The three fits keep treatment DR and every setting of the first example; only th
 
 ```r
 fit_weighting <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "time", idname = "id", gname = "g",
   xformla = ~ x, data = panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -65,6 +66,7 @@ fit_weighting <- cdid::att_gt(
 )
 
 fit_imputation <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "time", idname = "id", gname = "g",
   xformla = ~ x, data = panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -77,6 +79,7 @@ fit_imputation <- cdid::att_gt(
 )
 
 fit_augmented <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "time", idname = "id", gname = "g",
   xformla = ~ x, data = panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -103,6 +106,8 @@ Z(c) = j(c)(x) + S(e) * { change(e) - j(c)(x) } / max(q(c)(x), 1e-6)
 
 where `S(e)` is 1 for units observed at both dates and 0 otherwise, and `q(c)` is the fitted probability of observing both dates, here a product of two fitted date probabilities. For cohort 3, `j(c)` is the model of its actual change, effects included, not the counterfactual regression `m`; `m` is fitted afterward to the reconstructed changes of the controls. The correction term is not renormalized. Since version 1.1.0.0 its inverse observation denominator is floored at `1e-6` ([Probability safeguards](../methods/missing-outcomes.md#probability-safeguards)). The result is one estimator, not an average of the other two.
 
+The examples keep `est_method = "dr"` so only the missing-outcome adjustment changes. You can instead combine any of the three adjustments with treatment `"ipw"` or `"reg"`. The augmented correction still fits both `q` and `j`; treatment IPW additionally fits only `p`, and treatment OR only `m`. Their treatment-model requirements differ as shown in [Correctness conditions across both layers](robustness.md#correctness-conditions-across-both-layers).
+
 ## Which models must be correct
 
 | Fit | Missing outcome layer | Treatment layer |
@@ -115,7 +120,7 @@ Every fit also needs conditional mean trends missing at random given a scientifi
 
 ## Three kinds of slope sharing
 
-`imputation_pooling` shares slopes of `j`, and `selection_pooling` shares slopes of `q`; under the augmented correction they act independently. The counterfactual regression `m` always shares one slope vector and has no pooling argument.
+`imputation_pooling` shares slopes of `j`, and `selection_pooling` shares slopes of `q`; under the augmented correction they act independently. The counterfactual regression `m` uses separate comparison slopes by default; `outcome_pooling = "pooled"` shares them across blocks. Its pooling choice is independent of the other two.
 
 | `imputation_pooling` | Slopes of `j` | Here |
 | --- | --- | --- |
@@ -414,7 +419,7 @@ With one treated cohort, the simple aggregate is the average of ATT(3, 3) to ATT
 ## Refusals and limits
 
 - Pure imputation fits no observation logit, so no such logit can cause a refusal, and it can run when every unit of a cell is observed. Its own models must still pass their support and rank checks, and the treatment logits and counterfactual regression keep theirs.
-- The augmented correction fits every model and is refused when any of them fails, including an active observation cell with its own free intercept in which every unit, or none, is observed. Nothing falls back to another correction.
+- The augmented correction fits both missing-outcome models and the models active under the chosen treatment method. A failure in any active model is refused, including an active observation cell with its own free intercept in which every unit, or none, is observed. Nothing falls back to another correction.
 - A route's label does not make every cell available. A cell that the comparisons cannot support is reported as unavailable with its reason.
 - Version 1.1.0.0 applies fixed treatment-propensity caps and inverse-observation floors without dropping observations; binding safeguards can alter the original target and robustness claims ([Probability safeguards](../methods/missing-outcomes.md#probability-safeguards)). A multiplier bootstrap, when requested, reuses the influence functions and refits nothing. Missing outcomes or changes are not randomly drawn: this is not multiple imputation and uses no combination by Rubin's rules. The multiplier bootstrap does draw random signs for inference.
 - Standard errors come from complete influence functions with one row for every unit of `units`, including units observed once or never. They account for the estimated imputation, observation, treatment and counterfactual models, the response rates and the cohort shares used. With `compute_inffunc = FALSE` a fit returns point estimates only, and `aggte()` refuses it.

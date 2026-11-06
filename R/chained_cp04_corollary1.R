@@ -37,19 +37,20 @@ cp04_payload_native_kernel <- function() {
   owner <- environment(sys.function())
   cache <- get0("cp04_payload_native_cache", envir = owner, mode = "environment", inherits = FALSE)
   hit <- if (is.environment(cache)) get0("C_gmm_cp08_payload", envir = cache, inherits = FALSE) else NULL
-  if (is.list(hit) && identical(hit$owner, owner) && gmm_sexp_aliases(hit$syms, syms)) return(hit$address)
+  if (is.list(hit) && identical(hit$owner, owner) &&
+      isTRUE(attr(syms, "calls")$C_gmm_sexp_aliases(hit$syms, syms))) return(hit$address)
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- tryCatch(base::getNativeSymbolInfo("C_gmm_cp08_payload", PACKAGE = dlls[["cdid"]]), error = function(e) NULL)
   if (is.null(si) || !inherits(si, "NativeSymbolInfo") || is.null(si$address) ||
       !identical(as.integer(si$numParameters), 3L))
     cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_cp08_payload`.",
       c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-  if (is.environment(cache)) assign("C_gmm_cp08_payload", list(owner = owner, syms = syms, address = si$address), envir = cache)
-  si$address
+  if (is.environment(cache)) assign("C_gmm_cp08_payload", list(owner = owner, syms = syms, address = attr(syms, "calls")[["C_gmm_cp08_payload"]]), envir = cache)
+  attr(syms, "calls")[["C_gmm_cp08_payload"]]
 }
 
 cp04_payload <- function(x, scan_attrs = TRUE) {
-  .Call(cp04_payload_native_kernel(), x, scan_attrs, environment())
+  cp04_payload_native_kernel()(x, scan_attrs, environment())
 }
 
 # CP08 general-panel performance: the sparse two-date pair-row join of
@@ -63,7 +64,8 @@ cp04_pair_rows_native_kernel <- function() {
   owner <- environment(sys.function())
   cache <- get0("cp04_pair_rows_native_cache", envir = owner, mode = "environment", inherits = FALSE)
   hit <- if (is.environment(cache)) get0("C_gmm_cp08_sparse_pair_rows", envir = cache, inherits = FALSE) else NULL
-  if (is.list(hit) && identical(hit$owner, owner) && gmm_sexp_aliases(hit$syms, syms)) return(hit$address)
+  if (is.list(hit) && identical(hit$owner, owner) &&
+      isTRUE(attr(syms, "calls")$C_gmm_sexp_aliases(hit$syms, syms))) return(hit$address)
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- tryCatch(base::getNativeSymbolInfo("C_gmm_cp08_sparse_pair_rows", PACKAGE = dlls[["cdid"]]),
     error = function(e) NULL)
@@ -71,8 +73,8 @@ cp04_pair_rows_native_kernel <- function() {
       !identical(as.integer(si$numParameters), 6L))
     cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_cp08_sparse_pair_rows`.",
       c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-  if (is.environment(cache)) assign("C_gmm_cp08_sparse_pair_rows", list(owner = owner, syms = syms, address = si$address), envir = cache)
-  si$address
+  if (is.environment(cache)) assign("C_gmm_cp08_sparse_pair_rows", list(owner = owner, syms = syms, address = attr(syms, "calls")[["C_gmm_cp08_sparse_pair_rows"]]), envir = cache)
+  attr(syms, "calls")[["C_gmm_cp08_sparse_pair_rows"]]
 }
 
 # Structural admission of one pair-row query to the native join: plain integer
@@ -322,7 +324,7 @@ cp04_pair_rows <- function(reader, rows, pair, read_outcomes = FALSE) {
       post$date_count[ds] > 0L && post$date_count[dt] > 0L) {
     bounds <- c(post$date_start[ds], post$date_end[ds], post$date_start[dt], post$date_end[dt])
     if (cp04_pair_rows_native_ok(ai, post, bounds, read_outcomes)) {
-      hit <- .Call(cp04_pair_rows_native_kernel(), ai, post$post_a_index, post$post_obs_index,
+      hit <- cp04_pair_rows_native_kernel()(ai, post$post_a_index, post$post_obs_index,
         bounds, read_outcomes, reader$control$max_matrix_entries)
       obs <- hit$obs
       if (length(obs)) {
@@ -620,6 +622,7 @@ fit_cp04_corollary1 <- function(reader, link_views, control, glm_control,
     universe = st$universe, transport_justification = st$justification)
   obj <- structure(c(state, list(reader_ref = reader$ref, control = ctrl,
     accounting = list(owned_entries = 0, character_bytes = 0, borrowed_entries = base,
+      retained_external_entries = retained_external_entries,
       retained_bound = retained_bound, fit_scratch_bound = scratch, work_ops_bound = work,
       n_selection_fits = length(ss), n_treatment_fits = length(ts),
       full_F_masks_per_model = 0L, full_F_by_link_IF_retained = FALSE,
@@ -682,65 +685,82 @@ evaluate_cp04_if_chunk <- function(backend, rows, links, scale = "frame", detail
   pre <- cp04_if_budget(backend, length(rows), links)
   tids <- pre$tids; sids <- pre$sids
   B <- length(rows); d <- ncol(st$Z)
+  # The original32-fold row scratch leaves24-fold for all existing
+  # rows/solves/results; only the other8-fold can fund shared position reads.
+  pair_op <- NULL
+  if (!details && is.null(backend$reference_ref) && is.null(backend$layout) && is.null(backend$pair_outcomes)) {
+    frame_p <- get("frame_owner", reader$frame_ref, inherits = FALSE)$n_covariates
+    widths <- length(sids) * (d + 2) + sum(vapply(backend$treatment_specs[tids],
+      function(s) 2 * frame_p + 10 + length(s$cohorts) * (d + 1), numeric(1))) +
+      3 * length(st$cohorts) + length(links) + 16
+    pair_op <- cp04_pair_read_operation(reader, rows, 8 * B * (widths + frame_p + d + 4))
+  }
+  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE); p <- frame$n_covariates
-  # Scores evaluated once for each actual model needed by this requested batch.
-  ci <- st$cohort_index[rows]; w <- st$w[rows]; A <- as.double(st$a_index[rows] > 0L)
-  a_if <- matrix(0, B, length(st$cohorts))
-  for (k in unique(ci)) {
-    rr <- which(ci == k & st$U[rows])
-    a_if[rr, k] <- w[rr] * (A[rr] - st$a[k]) / st$mass_U[k]
-  }
-  alpha <- probabilities <- responses <- vector("list", length(backend$selections))
-  for (sj in sids) {
-    s <- backend$selection_specs[[sj]]; f <- backend$selections[[sj]]
-    rr <- which(ci == s$cohort & st$U[rows])
-    xi <- matrix(0, B, d); pr <- S <- numeric(B)
-    if (length(rr)) {
-      pr[rr] <- cp04_predict_selection(reader, rows[rr], s, f)
-      S[rr] <- cp04_pair_rows(reader, rows[rr], s$pair)$S
-      score <- w[rr] * (S[rr] - pr[rr]) * st$Z[rows[rr], , drop = FALSE]
-      xi[rr, ] <- t(cp04_solve(f$H_chol, t(score)))
+  models <- if (!details && !is.null(pair_op)) cp04_legacy_ipw_native(backend, reader, frame, rows, tids, sids,
+    pair_op, pre$scratch - 8 * B * (widths + p + d + 4)) else NULL
+  if (is.null(models)) {
+    # Scores evaluated once for each actual model needed by this requested batch.
+    ci <- st$cohort_index[rows]; w <- st$w[rows]; A <- as.double(st$a_index[rows] > 0L)
+    a_if <- matrix(0, B, length(st$cohorts))
+    for (k in unique(ci)) {
+      rr <- which(ci == k & st$U[rows])
+      a_if[rr, k] <- w[rr] * (A[rr] - st$a[k]) / st$mass_U[k]
     }
-    alpha[[sj]] <- xi; probabilities[[sj]] <- pr; responses[[sj]] <- S
-  }
-  models <- vector("list", length(backend$treatments))
-  for (tj in tids) {
-    spec <- backend$treatment_specs[[tj]]; f <- backend$treatments[[tj]]
-    u <- length(spec$cohorts) * (d + 1L)
-    upstream <- matrix(0, B, u)
-    S <- pp <- numeric(B)
-    for (k in seq_along(spec$cohorts)) {
-      sj <- spec$selection_ids[k]; rr <- which(ci == spec$cohorts[k])
-      ix <- (k - 1L) * (d + 1L) + seq_len(d + 1L)
-      upstream[, ix] <- cbind(a_if[, spec$cohorts[k]], alpha[[sj]])
-      S[rr] <- responses[[sj]][rr]; pp[rr] <- probabilities[[sj]][rr]
+    alpha <- probabilities <- responses <- vector("list", length(backend$selections))
+    for (sj in sids) {
+      s <- backend$selection_specs[[sj]]; f <- backend$selections[[sj]]
+      rr <- which(ci == s$cohort & st$U[rows])
+      xi <- matrix(0, B, d); pr <- S <- numeric(B)
+      if (length(rr)) {
+        pr[rr] <- cp04_predict_selection(reader, rows[rr], s, f)
+        S[rr] <- (if (is.null(pair_op)) cp04_pair_rows(reader, rows[rr], s$pair) else
+          pair_op$pair(rows[rr], s$pair))$S
+        score <- w[rr] * (S[rr] - pr[rr]) * st$Z[rows[rr], , drop = FALSE]
+        xi[rr, ] <- t(cp04_solve(f$H_chol, t(score)))
+      }
+      alpha[[sj]] <- xi; probabilities[[sj]] <- pr; responses[[sj]] <- S
     }
-    rr <- which(S == 1)
-    beta_score <- matrix(0, B, p); direct <- matrix(0, B, 4L)
-    direct[, 3L] <- -f$means["dp"]; direct[, 4L] <- -f$means["dm"]
-    if (length(rr)) {
-      X <- frame$Z_a[st$a_index[rows[rr]], , drop = FALSE]
-      hit <- cp04_pair_rows(reader, rows[rr], spec$pair, TRUE)
-      lv <- ipw_logit_values(X, f$coefficients)
-      cp04_finite(c(lv$prob, lv$eta, lv$odds), "treatment replay")
-      D <- as.double(ci[rr] == spec$cohorts[1L])
-      fw <- w[rr] * st$a[ci[rr]] / (st$rho[rows[rr]] * ipw_clip_floor(pp[rr]))
-      wp <- fw * D; wm <- fw * (1 - D) * lv$odds
-      beta_score[rr, ] <- fw * (D - lv$prob) * X
-      direct[rr, 1L] <- wp * (hit$dy - f$means["T"]) / f$means["dp"]
-      direct[rr, 2L] <- wm * (hit$dy - f$means["M"]) / f$means["dm"]
-      direct[rr, 3L] <- direct[rr, 3L] + wp
-      direct[rr, 4L] <- direct[rr, 4L] + wm
+    models <- vector("list", length(backend$treatments))
+    for (tj in tids) {
+      spec <- backend$treatment_specs[[tj]]; f <- backend$treatments[[tj]]
+      u <- length(spec$cohorts) * (d + 1L)
+      upstream <- matrix(0, B, u)
+      S <- pp <- numeric(B)
+      for (k in seq_along(spec$cohorts)) {
+        sj <- spec$selection_ids[k]; rr <- which(ci == spec$cohorts[k])
+        ix <- (k - 1L) * (d + 1L) + seq_len(d + 1L)
+        upstream[, ix] <- cbind(a_if[, spec$cohorts[k]], alpha[[sj]])
+        S[rr] <- responses[[sj]][rr]; pp[rr] <- probabilities[[sj]][rr]
+      }
+      rr <- which(S == 1)
+      beta_score <- matrix(0, B, p); direct <- matrix(0, B, 4L)
+      direct[, 3L] <- -f$means["dp"]; direct[, 4L] <- -f$means["dm"]
+      if (length(rr)) {
+        X <- frame$Z_a[st$a_index[rows[rr]], , drop = FALSE]
+        hit <- if (is.null(pair_op)) cp04_pair_rows(reader, rows[rr], spec$pair, TRUE) else
+          pair_op$pair(rows[rr], spec$pair, TRUE)
+        lv <- ipw_logit_values(X, f$coefficients)
+        cp04_finite(c(lv$prob, lv$eta, lv$odds), "treatment replay")
+        D <- as.double(ci[rr] == spec$cohorts[1L])
+        fw <- w[rr] * st$a[ci[rr]] / (st$rho[rows[rr]] * ipw_clip_floor(pp[rr]))
+        wp <- fw * D; wm <- fw * (1 - D) * lv$odds
+        beta_score[rr, ] <- fw * (D - lv$prob) * X
+        direct[rr, 1L] <- wp * (hit$dy - f$means["T"]) / f$means["dp"]
+        direct[rr, 2L] <- wm * (hit$dy - f$means["M"]) / f$means["dm"]
+        direct[rr, 3L] <- direct[rr, 3L] + wp
+        direct[rr, 4L] <- direct[rr, 4L] + wm
+      }
+      xb <- t(cp04_solve(f$H_chol, t(beta_score + upstream %*% t(f$cross))))
+      coord <- direct + upstream %*% t(f$partials$upstream) + xb %*% t(f$partials$beta)
+      colnames(coord) <- c("T", "M", "dp", "dm")
+      cp04_finite(c(xb, coord), "complete frame IF")
+      models[[tj]] <- if (details) list(beta = xb, coordinates = coord, direct = direct,
+        beta_score = beta_score, upstream = upstream,
+        normalizers_A = coord[, 3:4, drop = FALSE] / st$lambda -
+          outer(A - st$lambda, f$means[c("dp", "dm")] / st$lambda^2)) else
+        list(phi = coord[, 1L] - coord[, 2L])
     }
-    xb <- t(cp04_solve(f$H_chol, t(beta_score + upstream %*% t(f$cross))))
-    coord <- direct + upstream %*% t(f$partials$upstream) + xb %*% t(f$partials$beta)
-    colnames(coord) <- c("T", "M", "dp", "dm")
-    cp04_finite(c(xb, coord), "complete frame IF")
-    models[[tj]] <- if (details) list(beta = xb, coordinates = coord, direct = direct,
-      beta_score = beta_score, upstream = upstream,
-      normalizers_A = coord[, 3:4, drop = FALSE] / st$lambda -
-        outer(A - st$lambda, f$means[c("dp", "dm")] / st$lambda^2)) else
-      list(phi = coord[, 1L] - coord[, 2L])
   }
   phi <- matrix(0, B, length(links), dimnames = list(NULL,
     vapply(backend$links[links], `[[`, character(1), "link_id")))
@@ -766,6 +786,7 @@ evaluate_cp04_if_chunk <- function(backend, rows, links, scale = "frame", detail
   }
   actual_output <- unname(cp04_payload(out)["entries"])
   if (actual_output > pre$output) cp04_abort("IF output bound underestimated.", "bound")
+  if (!is.null(pair_op)) pair_op$finish()
   out
 }
 

@@ -1,6 +1,6 @@
 # Choose an observation model for missing outcomes
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
 
 When outcomes are missing at some dates, chained DiD uses the changes of units observed at both dates of each pair. You decide how those observed changes stand in for the study population: with no observation equation, with a logit for each date, or with a logit for each pair of dates, and with more or fewer shared slopes. This example makes that choice on one small simulated panel in which the right answer is known by construction. [Handling missing outcomes](../methods/missing-outcomes.md) defines the assumptions and models.
 
@@ -90,6 +90,7 @@ The fits share the data, the unit table, `xformla = ~ x`, never treated controls
 
 ```r
 fit_none <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "time", idname = "id", gname = "g",
   xformla = ~ x, data = panel, frame = units,
   control_group = "nevertreated", est_method = "dr",

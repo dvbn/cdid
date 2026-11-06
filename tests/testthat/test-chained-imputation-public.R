@@ -7,6 +7,15 @@
 # test-only dense diagnostics. Acceptance of point/IF/covariance values against
 # the independent company public reference is supplied separately by root.
 
+# Import only the diagnostic witness definition, without sibling fixtures/tests.
+impp_diagnostic_copy_witness <- local({
+  defs <- parse(testthat::test_path("test-chained-or-public.R"), keep.source = FALSE)
+  hit <- which(vapply(defs, function(x) is.call(x) && identical(x[[1L]], as.name("<-")) &&
+    identical(x[[2L]], as.name("orp_diagnostic_copy_witness")), logical(1L)))
+  stopifnot(length(hit) == 1L)
+  eval(defs[[hit]])
+})
+
 impp_has_installed_cdid <- function() {
   isNamespaceLoaded("cdid") || requireNamespace("cdid", quietly = TRUE)
 }
@@ -59,7 +68,7 @@ impp_fixture <- function(balanced = FALSE, reps = 2L) {
 }
 
 impp_args <- function(fx, ...) {
-  args <- list(yname = "y", tname = "time", idname = "id", gname = "g", data = fx$data, frame = fx$frame,
+  args <- list(outcome_pooling = "pooled", yname = "y", tname = "time", idname = "id", gname = "g", data = fx$data, frame = fx$frame,
     xformla = ~x + z, weightsname = "w", est_method = "dr", control_group = "nevertreated",
     bstrap = FALSE, cband = FALSE, gmm_weighting = "identity")
   utils::modifyList(args, list(...))
@@ -105,7 +114,8 @@ testthat::test_that("att_gt adds selection_est_method and imputation_pooling as 
   testthat::expect_identical(f$imputation_pooling, "separate")
   testthat::expect_identical(f$est_method, "dr")
   testthat::expect_identical(f$selection, "none")
-  testthat::expect_identical(names(f)[length(f)], "control")
+  testthat::expect_identical(utils::tail(names(f), 2L), c("control", "outcome_pooling"))
+  testthat::expect_identical(f$outcome_pooling, "separate")
 })
 
 testthat::test_that("ordinary mode neither evaluates nor forwards either new chained-only argument", {
@@ -127,14 +137,8 @@ testthat::test_that("ordinary mode neither evaluates nor forwards either new cha
 testthat::test_that("selection_est_method and imputation gates refuse unsupported requests before the data promise", {
   testthat::skip_if_not(impp_has_installed_cdid(), "Installed cdid namespace required.")
   uns <- "cdid_chained_request_unsupported_selection"
-  # The augmented observation correction (D52 seventh route) is implemented with
-  # est_method = "dr" only (test-chained-augmented-public.R); it stays explicitly
-  # unavailable with treatment IPW/reg and still requires conditional_mtar.
-  for (m in setdiff(impp_methods, "dr")) {
-    e <- impp_refuse(c("cdid_chained_unavailable", uns), est_method = m, selection = "conditional_mtar",
-      selection_est_method = "dr", imputation_pooling = quote(stop("imputation_pooling was evaluated")))
-    testthat::expect_match(conditionMessage(e), "not implemented", fixed = TRUE)
-  }
+  # Augmented built-in IPW, reg and DR calls are exercised in
+  # test-chained-augmented-public.R; conditional_mtar is still required.
   e <- impp_refuse(uns, selection_est_method = "dr")
   testthat::expect_match(conditionMessage(e), "conditional_mtar", fixed = TRUE)
   for (bad in list("IPW", "imputed", "", NA_character_, c("ipw", "imputation"), 1)) impp_refuse(uns, selection_est_method = bad)
@@ -174,9 +178,9 @@ testthat::test_that("gates pass without forcing inactive promises and reach the 
     reach(est_method = m, selection = "conditional_mtar", selection_est_method = "ipw",
       imputation_pooling = quote(stop("imputation_pooling was evaluated")))
   }
-  # Development entry: the same gate runs before its explicit-control requirement.
+  # Supported augmented calls reach the development entry's control requirement.
   dev <- impp_val("chained_att_gt_request")
-  impp_refuse(c("cdid_chained_unavailable", "cdid_chained_request_unsupported_selection"), entry = dev,
+  impp_refuse("cdid_chained_request_control_error", entry = dev,
     est_method = "ipw", selection = "conditional_mtar", selection_est_method = "dr")
   impp_refuse("cdid_chained_request_control_error", entry = dev, est_method = "reg", selection = "conditional_mtar",
     selection_est_method = "imputation", selection_model = quote(stop("inactive selection_model was evaluated")))
@@ -202,7 +206,8 @@ testthat::test_that("default selection_est_method = 'ipw' is identical to explic
     testthat::expect_identical(fit_exp$chained$selection, fit_def$chained$selection)
     testthat::expect_identical(fit_exp$chained$request$selection_est_method, "ipw")
     testthat::expect_null(fit_exp$chained$request$imputation_pooling)
-    testthat::expect_identical(fit_exp$chained$request$inactive_arguments, "imputation_pooling")
+    testthat::expect_identical(fit_exp$chained$request$inactive_arguments,
+      c(if (identical(cs$est_method, "ipw")) "outcome_pooling", "imputation_pooling"))
     testthat::expect_false(identical(fit_exp$chained$selection$method, "imputation"))
   }
 })
@@ -215,6 +220,7 @@ impp_state <- new.env(parent = emptyenv())
 
 testthat::test_that("pure imputation runs for every treatment method and pooling with accurate metadata", {
   testthat::skip_if_not(impp_has_installed_cdid(), "Installed cdid namespace required.")
+  witness <- impp_diagnostic_copy_witness()
   fx <- impp_fixture()
   N <- nrow(fx$frame)
   label <- impp_val("chained_result_estimator")
@@ -231,7 +237,8 @@ testthat::test_that("pure imputation runs for every treatment method and pooling
     testthat::expect_identical(req$imputation_pooling, p)
     testthat::expect_identical(req$est_method, m)
     testthat::expect_null(req$selection_model); testthat::expect_null(req$selection_pooling)
-    testthat::expect_identical(req$inactive_arguments, c("selection_model", "selection_pooling", "selection_xformla"))
+    testthat::expect_identical(req$inactive_arguments,
+      c(if (identical(m, "ipw")) "outcome_pooling", "selection_model", "selection_pooling", "selection_xformla"))
     sel <- fit$chained$selection
     testthat::expect_identical(sel$method, "imputation")
     testthat::expect_identical(sel$canonical_assumption, "conditional_mtar")
@@ -303,7 +310,8 @@ testthat::test_that("pure imputation runs for every treatment method and pooling
     testthat::expect_equal(fit$se[av], unname(sqrt(diag(fit$V_analytical)[av] / fit$n)), tolerance = 1e-12)
     # Existing resource reservation for the final diagnostic copy.
     ra <- fit$chained$resource_accounting
-    testthat::expect_equal(ra$final_diagnostic_copy_entries, 5 * (4 * nd$accounting$owned_entries + 4096), tolerance = 0)
+    testthat::expect_equal(ra$final_diagnostic_copy_entries, 5 * witness$output, tolerance = 0)
+    testthat::expect_lte(witness$payload(nd), witness$output)
     testthat::expect_lte(max(ra$simultaneous_entries, ra$initial_envelope_entries) + ra$final_diagnostic_copy_entries,
       fit$chained$public$numeric_workspace_entries)
     # Reporting adapters.

@@ -88,6 +88,8 @@ with ATT = 0 in these pre cells. They coincide because observation is independen
 
 ## 5. Model classification
 
+This campaign explicitly requests `outcome_pooling="pooled"` to preserve its specified counterfactual regression; it does not test the new separate default.
+
 The models are p (propensity), m (shared counterfactual change regression), q (observation probability) and j (actual-change imputation). Sufficient branches:
 
 - `none`: representative pair-change means.

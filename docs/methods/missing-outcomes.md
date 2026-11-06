@@ -1,6 +1,6 @@
 # Handling missing outcomes
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
 
 An observed outcome change is available only when the same unit is observed at both dates. Imputation and augmented correction also reconstruct changes on the full study population. The choices on this page decide what must be true for those observed changes to stand in for the study population, and which models adjust for differences between the units observed and the population. The arguments involved begin with `selection`, together with `imputation_pooling` and the unit table `frame`.
 
@@ -83,7 +83,7 @@ With `selection = "conditional_mtar"`, `selection_est_method` chooses the adjust
 | --- | --- | --- |
 | `"ipw"` (default) | observation weighting | probability of observing both dates |
 | `"imputation"` | change imputation | the actual change of each cohort and date pair |
-| `"dr"` | augmented correction | both, with `est_method = "dr"` only |
+| `"dr"` | augmented correction | both; treatment IPW, OR or DR is chosen separately |
 
 ### Observation weighting
 
@@ -118,7 +118,7 @@ Z(c) = j(c)(X) + S(e) * { change(e) - j(c)(X) } / max(q(c)(W), 1e-6)
 
 where `j(c)` is the change imputation model, `q(c)` is the fitted probability of observing both dates, `S(e)` is 1 for units observed at both dates and 0 otherwise, and W contains the covariates of both formulas. In words, the package imputes each unit's change and then adds back the prediction errors of the observed units, weighted by their inverse observation probabilities. The correction term is not renormalized; version 1.1.0.0 floors its inverse observation denominator at `1e-6`. The result is a single estimator: in finite samples it generally differs from both the weighting and the imputation estimates, and it is not their average.
 
-It requires `est_method = "dr"`; requests with `"ipw"`, `"reg"` or a custom function are refused before the data are read. The declaration requirements of change imputation apply, and complete covariates of both formulas are needed on every row of the unit table.
+It works with built-in `est_method = "ipw"`, `"reg"` or `"dr"`. Treatment IPW fits the treatment propensity but no counterfactual regression; treatment OR fits the counterfactual regression but no treatment propensity; treatment DR fits both. Every choice also fits the observation model and the actual-change imputer. Custom functions remain unavailable. The declaration requirements of change imputation apply, and complete covariates of both formulas are needed on every row of the unit table.
 
 Each model must be estimable. An active pair cell, or endpoint-date cell for a date model, that is all observed or all unobserved cannot fit a logit with its own free intercept and is refused. Pooling slopes does not remove those cell intercepts. Pure imputation avoids that unused observation-logit obstruction but must still satisfy its own model/support checks. Failures of the imputation, treatment or counterfactual models are refused as well. Nothing falls back to change imputation or to observation weighting.
 
@@ -130,7 +130,7 @@ When a safeguard binds with positive population probability, the clipped functio
 
 ## Which models must be correct
 
-All three adjustments need conditional mean trends missing at random for every needed cell, parallel trends and no anticipation, and the condition of the treatment adjustment: a correct treatment propensity model for `est_method = "ipw"`, a correct shared counterfactual regression for `"reg"`, and either of the two for `"dr"`. Observation weighting and augmented correction also require positive observation probabilities; pure imputation needs observed training mass and sufficient prediction support rather than a fitted probability model. In addition:
+All three adjustments need conditional mean trends missing at random for every needed cell, parallel trends and no anticipation, and the condition of the treatment adjustment: a correct treatment propensity model for `est_method = "ipw"`, a correct counterfactual regression under the chosen `outcome_pooling` for `"reg"`, and either of the two for `"dr"`. Observation weighting and augmented correction also require positive observation probabilities; pure imputation needs observed training mass and sufficient prediction support rather than a fitted probability model. In addition:
 
 | Adjustment | What must also be correct |
 | --- | --- |
@@ -138,11 +138,13 @@ All three adjustments need conditional mean trends missing at random for every n
 | Change imputation | the linear mean of the actual change within each pooling group |
 | Augmented correction | for each needed cell, either the imputation model or the observation model |
 
+The augmented correction with treatment IPW needs a correct treatment propensity model; with treatment OR it needs a correct counterfactual regression. In either case, every needed cell also needs a correct observation model or a correct actual-change imputer. Augmentation protects the missing-outcome layer; it does not give treatment IPW or OR the treatment-DR guarantee.
+
 For the augmented correction combined with treatment DR, the sufficient condition is therefore: (treatment propensity model correct or counterfactual regression correct) and, for every needed cell, (observation model correct or imputation model correct). The correct alternative may differ from one cell to another. These are sufficient conditions for the primitive links with several qualifications. ATT/GMM recovery additionally needs valid moments for every used catalog link and the accepted identification and regularity conditions; incompatible link pseudo-targets can make the limit depend on the GMM weights.
 
-- Pooled slopes, the two dates of a date model and the shared counterfactual regression link cells together, so an error in another cell, block or pooling group can move a shared coefficient.
+- Shared coefficients in the chosen observation, imputation or outcome model, and the two endpoints of a date model, link cells together. An error elsewhere in a shared group can affect its other predictions.
 - If variables that appear only in `selection_xformla` shift the mean change, an imputation model built from `xformla` cannot be correct on its own, and the observation model must be. Adding observation covariates is therefore not automatically harmless.
-- When both alternatives of a cell are wrong, or both treatment models are wrong, the estimate is generally biased.
+- When both reconstruction alternatives of a needed cell are wrong, or the chosen treatment adjustment lacks its required correct model, the estimate is generally biased.
 - The results are large sample properties. There is no finite sample unbiasedness, and small fitted probabilities inflate the variance.
 
 ## Pooling: how much the models share
@@ -156,7 +158,7 @@ For the augmented correction combined with treatment DR, the sufficient conditio
 | `"across_cohorts"` | one slope vector shared by all cells | one slope vector shared by all cells |
 | Intercepts | separate for each cell when `selection_xformla` has an intercept | separate for each cohort and pair when `xformla` has an intercept |
 
-Shared slopes are an explicit model restriction that you choose. They can be wrong, for example when the changes of a treated cohort respond to covariates differently across date pairs. The package never pools automatically, and a pooling group whose design is rank deficient is refused. `selection_pooling` changes only the slopes of the observation models; the shared slope and local intercepts of the counterfactual outcome regression are unaffected. Under the augmented correction the two pooling arguments act independently.
+Shared slopes are an explicit model restriction that you choose. They can be wrong, for example when the changes of a treated cohort respond to covariates differently across date pairs. The package never pools automatically, and a pooling group whose design is rank deficient is refused. `selection_pooling` changes only the observation models. `imputation_pooling` controls actual-change imputation, and `outcome_pooling` controls the counterfactual untreated-change regression used by treatment OR and DR. These three choices act independently, including under the augmented correction. The outcome choice has two values: `"separate"` (default) for comparison-specific coefficients, or `"pooled"` for shared per-step slopes and local intercepts. The [treatment adjustment guide](treatment.md#outcome-regression-or) explains that choice.
 
 ## Two covariate formulas
 
@@ -171,12 +173,12 @@ Both are one sided formulas of covariates that are fixed within units or read at
 
 ## Supported combinations
 
-With `selection = "conditional_mtar"`, seven built-in combinations of treatment adjustment and adjustment for missing outcomes are supported:
+With `selection = "conditional_mtar"`, all nine built-in combinations of treatment adjustment and adjustment for missing outcomes are supported:
 
 | `est_method` | Observation weighting | Change imputation | Augmented correction |
 | --- | --- | --- | --- |
-| `"ipw"` | supported | supported | refused |
-| `"reg"` | supported | supported | refused |
+| `"ipw"` | supported | supported | supported |
+| `"reg"` | supported | supported | supported |
 | `"dr"` | supported | supported | supported |
 
 `selection = "none"` works with all three methods and with a custom IPW function. A custom function also works with observation weighting when it returns `log_weight_gradient`; it is refused with change imputation and the augmented correction.
@@ -245,6 +247,7 @@ The four fits below hold the data, the unit table, the covariate formula and the
 
 ```r
 fit_none <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -253,6 +256,7 @@ fit_none <- cdid::att_gt(
 )
 
 fit_weighting <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -264,6 +268,7 @@ fit_weighting <- cdid::att_gt(
 )
 
 fit_imputation <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -274,6 +279,7 @@ fit_imputation <- cdid::att_gt(
 )
 
 fit_augmented <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",

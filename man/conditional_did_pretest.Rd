@@ -50,7 +50,8 @@ conditional_did_pretest(
   selection_justification = NULL,
   selection_est_method = "ipw",
   imputation_pooling = "separate",
-  control = NULL
+  control = NULL,
+  outcome_pooling = "separate"
 )
 
 \method{print}{cdid_MP.TEST}(x, ...)
@@ -75,7 +76,7 @@ conditional process is claimed for arbitrary callbacks.}
 \item{pl, cores}{Multiplier draws may use \code{cores} worker processes when
 \code{pl = TRUE} and \code{control$workers} declares them; signs are drawn in
 the calling session, so results equal \code{cores = 1}.}
-\item{anticipation, base_period, fix_weights, mode, frame, selection, selection_model, selection_pooling, selection_xformla, selection_universe, selection_rho, selection_justification, selection_est_method, imputation_pooling, control}{The
+\item{anticipation, base_period, fix_weights, mode, frame, selection, selection_model, selection_pooling, selection_xformla, selection_universe, selection_rho, selection_justification, selection_est_method, imputation_pooling, outcome_pooling, control}{The
 existing chained settings of \code{att_gt()} with the same meanings; they select
 the fitted route whose auxiliary comparisons are tested. GMM weighting and
 PT-all settings are not test arguments.}
@@ -93,8 +94,8 @@ conditioning on all scientific variables. The process
 link of the fitted union catalog with the grid indicator inserted into its
 numerator integrands: IPW uses the outcome change, OR/DR the link residual and
 pure imputation/augmented correction the imputed or augmented response. The
-shared nuisance fits (rates, selection, propensity, imputation and the single
-global outcome-regression slope) are reused unchanged; only their loadings
+nuisance fits (rates, selection, propensity, imputation and the requested
+separate or pooled outcome regressions) are reused unchanged; only their loadings
 depend on \eqn{u}, and the complete original-unit influence function includes
 all of their forcing (not \eqn{h_u} times the scalar influence function).
 The links use the probability clipping of \code{att_gt()} (section

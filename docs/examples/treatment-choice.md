@@ -1,6 +1,6 @@
 # Choose IPW, OR or DR in an incomplete panel
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
 
 In chained difference in differences (`cdid`, extending Bellégo, Benatia and Dortet-Bernadet 2025 and Callaway and Sant'Anna 2021), `est_method` selects the **treatment adjustment** method: inverse probability weighting (IPW, `"ipw"`), outcome regression (OR, `"reg"`), or doubly robust estimation (DR, `"dr"`). That choice is separate from **handling missing outcomes** (`selection` and `selection_est_method`), which governs how observed outcome changes represent the study population in the unit table (`frame`).
 
@@ -32,7 +32,7 @@ The three fits vary only `est_method` ([Options](../reference/options.md)).
 
 ### Why this law satisfies both treatment models and baseline missingness
 
-Passing `xformla = ~ x` to IPW and OR does not automatically make both models match the population law: IPW fits risk set cohort logits, whereas OR fits one pooled regression of control outcome changes across all comparison blocks ([Treatment adjustment](../methods/treatment.md)). Here both hold by construction:
+Passing `xformla = ~ x` to IPW and OR does not automatically make both models match the population law: IPW fits risk set cohort logits, whereas the explicit `outcome_pooling = "pooled"` used in this example fits one regression of control outcome changes across all comparison blocks ([Treatment adjustment](../methods/treatment.md)). Here both hold by construction:
 
 1. **Cancellation of $\alpha_i$ and conditional parallel trends:** Differencing across any stored calendar pair $e = (s, t)$ with $s < t$ cancels $\alpha_i$, giving $Y_{i,t}(0) - Y_{i,s}(0) = 0.1(t - s) + 0.3 X_i (t - s) + (\varepsilon_{i,t} - \varepsilon_{i,s})$. Since $\varepsilon_{i,t}$ has mean zero given $(G_i, X_i)$, conditional parallel trends hold at all dates $1$ to $6$.
 2. **Representative baseline missingness (`selection = "none"`):** Because observation has probability $0.5$ independently of $(G_i, X_i, \alpha_i, \varepsilon_{i,t})$, observed pair changes within each cohort are mean representative of that cohort in `units`. The estimator uses empirical cohort pair response rates without fitting an observation model; this is not an exact finite sample recovery of the population mean change ([Handling missing outcomes](../methods/missing-outcomes.md)).
@@ -81,6 +81,7 @@ panel$y <- ifelse(observed, y_complete, NA_real_)
 methods <- c(ipw = "ipw", or = "reg", dr = "dr")
 fits <- lapply(methods, function(m) {
   cdid::att_gt(
+    outcome_pooling = "pooled",
     yname = "y", tname = "period", idname = "id", gname = "first_treat",
     xformla = ~ x, data = panel, frame = units,
     control_group = "nevertreated", est_method = m, selection = "none",
@@ -200,8 +201,8 @@ Passing the same `xformla = ~ x` formula to `cdid` and `did` likewise does not i
 ### Practical choice among IPW, OR, and DR
 
 - **IPW (`est_method = "ipw"`):** Needs a credible risk set treatment logit $p$ and strict overlap for every active comparison, while leaving period specific covariate effects on untreated changes unrestricted.
-- **OR (`est_method = "reg"`):** Needs a credible shared control change regression $m$ with constant per step slope $\beta$ on $L(e) z(X_i)$ across all pooled blocks, without fitting treatment logits. Misspecification in one block can move $\hat{\beta}$ everywhere.
-- **DR (`est_method = "dr"`, default):** Consistent for each comparison if either $p$ or $m$ is correct, under valid missing outcome handling, parallel trends, no anticipation, overlap and the usual large sample regularity conditions. Both active fits must still satisfy their computation and support checks. If an active treatment logit separates or is rank deficient, or if the reduced pooled control design remains rank deficient, is badly conditioned or fails required prediction reconstruction, `cdid` stops with an explicit error rather than falling back to OR or IPW. Exact aliases can first be removed when every required prediction is preserved; local rank deficiency alone need not invalidate a pooled fit.
+- **OR (`est_method = "reg"`):** Needs a credible control change regression $m$, without fitting treatment logits. Default separate fits allow each comparison its own coefficients. The explicit pooled specification used here instead requires a constant per step slope $\beta$ on $L(e) z(X_i)$ across its blocks; misspecification in one block can then move $\hat{\beta}$ elsewhere.
+- **DR (`est_method = "dr"`, default):** Consistent for each comparison if either $p$ or $m$ is correct, under valid missing outcome handling, parallel trends, no anticipation, overlap and the usual large sample regularity conditions. Both active fits must still satisfy their computation and support checks. If an active treatment logit separates or is rank deficient, or if a required reduced control regression remains rank deficient, is badly conditioned or fails required prediction reconstruction, `cdid` stops with an explicit error rather than falling back to OR or IPW. Exact aliases can first be removed when every required prediction is preserved; local rank deficiency alone need not invalidate an explicitly pooled fit, but the package never switches to pooling automatically.
 
 There is no general finite sample unbiasedness guarantee for IPW, OR, or DR, and none is guaranteed to have the lowest variance across all designs. In any random finite draw, unsupported cells (`available == FALSE`), unavailable Wald pretrend tests (`fit$W`, `fit$Wpval`), or numerical and conditioning refusals remain possible without automatic retry, redraw, or dropping of units or moments. See [Robustness](robustness.md) and [How to compare precision](precision.md).
 

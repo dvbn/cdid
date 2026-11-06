@@ -1,6 +1,6 @@
 # Compare model robustness across treatment and missing outcome adjustments
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
 
 When covariates influence which units enter treatment, how untreated outcomes evolve, and which outcomes are recorded across dates, chained difference in differences (`cdid`, extending Bellégo, Benatia and Dortet-Bernadet 2025 and Callaway and Sant'Anna 2021) separates estimation into two distinct modeling layers: **treatment adjustment** (`est_method`) and **handling missing outcomes** (`selection` and `selection_est_method`).
 
@@ -21,7 +21,7 @@ To recover average treatment effects for the study population in `units`, `cdid`
 | Symbol | Model name | Layer and active options | What it models and where it is fitted |
 | --- | --- | --- | --- |
 | $p$ | Treatment propensity model | Treatment adjustment (`est_method = "ipw"` or `"dr"`, using `xformla`) | For each distinct risk set, a logit model of membership in target cohort $g$ versus `control_group`, weighted by the chosen missing outcome route. |
-| $m$ | Counterfactual untreated change regression | Treatment adjustment (`est_method = "reg"` or `"dr"`, using `xformla`) | One pooled weighted least squares regression (`n_regression_fits = 1`) fitted on control units across all deduplicated comparison blocks: $m_b(X) = \alpha(b) + L(e) z(X)' \beta$, with local block intercepts $\alpha(b)$ and one shared slope vector $\beta$. |
+| $m$ | Counterfactual untreated change regression | Treatment adjustment (`est_method = "reg"` or `"dr"`, using `xformla`) | Weighted least squares on control units: $m_b(X) = \alpha(b) + L(e) z(X)' \beta_b$. `outcome_pooling = "separate"` (default) gives each distinct comparison block its own slopes; `"pooled"` uses one shared slope vector across blocks. Intercepts are local when the formula includes one. |
 | $q$ | Observation pair probability model | Handling missing outcomes (`selection = "conditional_mtar"` with `selection_est_method = "ipw"` or `"dr"`, using `selection_xformla`) | For each needed cohort and date pair cell $c = (k, e)$, a logit model $q_c(W)$ for observing both dates of pair $e$, either directly (`"pair_logit"`) or as the product of two date logits (`"independent_period_logit"`). |
 | $j$ | Actual cohort change imputer | Handling missing outcomes (`selection = "conditional_mtar"` with `selection_est_method = "imputation"` or `"dr"`, using `xformla`) | For each needed cohort and date pair cell $c = (k, e)$, a weighted least squares linear model $j_c(X) = \alpha(k, e) + L(e) z(X)' \beta(r)$ fitted to observed changes of cohort $k$, **treatment effects included**, and evaluated across every unit of cohort $k$ in `frame`. |
 
@@ -29,7 +29,7 @@ To recover average treatment effects for the study population in `units`, `cdid`
 
 Both $m$ and $j$ use `xformla` and scale covariate slopes by $L(e)$, the number of calendar steps between the positions of dates $s$ and $t$ in the stored calendar (never raw subtraction of date labels), but they serve different layers:
 
-1. **Counterfactual untreated change regression ($m$):** Fitted only to control units across all comparison blocks (including preperiod comparisons). It always estimates one global slope vector $\beta$ across all blocks and periods, with one local intercept $\alpha(b)$ per date pair and control pool block $b$ whenever `xformla` includes an intercept (`~ 0 + x` omits local block intercepts; `~ 1` fits block intercepts with zero slopes; `~ 0` is refused). It has no pooling option.
+1. **Counterfactual untreated change regression ($m$):** Fitted only to control units, separately for each distinct comparison block by default (including preperiod comparisons). Setting `outcome_pooling = "pooled"` shares one slope vector $\beta$ across blocks and periods. Each block keeps a local intercept $\alpha(b)$ whenever `xformla` includes an intercept (`~ 0 + x` omits local block intercepts; `~ 1` fits block intercepts with zero slopes; `~ 0` is refused).
 2. **Actual cohort change imputer ($j$):** Fitted within each cohort $k$ (both treated and control cohorts) on units observed at both endpoints of pair $e$ ($S_e = 1$), using fixed unit weights. For a treated cohort after treatment starts, $j_c(X)$ predicts the **actual** outcome change $\Delta Y_e = Y_t - Y_s$, **including treatment effects**. It keeps a local intercept $\alpha(k, e)$ per cell when `xformla` has an intercept and shares its slope vector $\beta(r)$ according to `imputation_pooling`: `"separate"` (default, separate slopes per cohort and pair cell), `"within_cohort"` (one slope vector per cohort across its pairs), or `"across_cohorts"` (one slope vector across all cells).
 
 The observation probability model $q$ keeps separate cell intercepts when `selection_xformla` includes an intercept and pools slopes via `selection_pooling` (`"separate"`, `"within_cohort"`, or `"across_cohorts"`), independently of `imputation_pooling`. Only `selection_xformla` accepts an empty design (`~ 0`), fixing each pair probability to $0.5$ (or $0.25$ for a two date product).
@@ -39,11 +39,11 @@ The observation probability model $q$ keeps separate cell intercepts when `selec
 - **Without an observation correction (`selection = "none"`):** Fits neither $q$ nor $j$. Observed pair changes within each cohort are scaled by the cohort's empirical pair response rate and passed to treatment adjustment ($p$, $m$, or both).
 - **Observation weighting (`selection = "conditional_mtar", selection_est_method = "ipw"`):** Fits $q_c(W)$ only and weights observed pair changes by inverse fitted pair probabilities combined with cohort repeat rates before running $p$, $m$, or both.
 - **Change imputation (`selection = "conditional_mtar", selection_est_method = "imputation"`):** Fits $j_c(X)$ on observed pairs and averages the predictions $j_c(X)$ over **every** unit of cohort $k$ in the unit table (`selection_universe = "F"`, `selection_rho = NULL`), including units whose change was observed. No observation model $q$ is fitted (`selection_model`, `selection_pooling`, and `selection_xformla` are inactive and never evaluated). Treatment adjustment ($p$, $m$, or both) runs on these imputed changes.
-- **Augmented correction (`selection = "conditional_mtar", selection_est_method = "dr"`):** Requires `est_method = "dr"` (requests with `"ipw"`, `"reg"`, or a custom function are refused before the data are read) on `selection_universe = "F"` (`selection_rho = NULL`). For each needed cell $c = (k, e)$, every unit of cohort $k$ in `frame` receives the reconstructed change
+- **Augmented correction (`selection = "conditional_mtar", selection_est_method = "dr"`):** Supports built-in `est_method = "ipw"`, `"reg"` or `"dr"` on `selection_universe = "F"` (`selection_rho = NULL`). For each needed cell $c = (k, e)$, every unit of cohort $k$ in `frame` receives the reconstructed change
 
 $$Z_c = j_c(X) + S_e \frac{\Delta Y_e - j_c(X)}{\max(q_c(W),10^{-6})}$$
 
-where $S_e = 1$ for units observed at both dates of pair $e$ and $0$ otherwise, and $W$ is the union of the covariates in `xformla` and `selection_xformla`. The residual adjustment is not renormalized. Version 1.1.0.0 floors its inverse observation denominator at $10^{-6}$ ([Probability safeguards](../methods/missing-outcomes.md#probability-safeguards)). Treatment doubly robust estimation ($p$ and $m$) runs on $Z_c$, forming a single estimator that generally differs in finite samples from both observation weighting and change imputation and is not their average.
+where $S_e = 1$ for units observed at both dates of pair $e$ and $0$ otherwise, and $W$ is the union of the covariates in `xformla` and `selection_xformla`. The residual adjustment is not renormalized. Version 1.1.0.0 floors its inverse observation denominator at $10^{-6}$ ([Probability safeguards](../methods/missing-outcomes.md#probability-safeguards)). Treatment adjustment ($p$ for IPW, $m$ for OR, or both for DR) runs on $Z_c$, forming a single estimator that generally differs in finite samples from both observation weighting and change imputation and is not their average.
 
 ## Assumptions
 
@@ -66,14 +66,14 @@ $$E[Y_t - Y_s \mid W, G = k, S_{s,t} = 1] = E[Y_t - Y_s \mid W, G = k]$$
 | `selection = "none"` (no $q$ or $j$) | $p$ correct | $m$ correct across all blocks | $p$ correct **or** $m$ correct |
 | `selection = "conditional_mtar"`, `selection_est_method = "ipw"` (fits $q$) | $q$ correct in every cell **and** $p$ correct | $q$ correct in every cell **and** $m$ correct | $q$ correct in every cell **and** ($p$ correct **or** $m$ correct) |
 | `selection = "conditional_mtar"`, `selection_est_method = "imputation"` (fits $j$) | $j$ correct in every cell/group **and** $p$ correct | $j$ correct in every cell/group **and** $m$ correct | $j$ correct in every cell/group **and** ($p$ correct **or** $m$ correct) |
-| `selection = "conditional_mtar"`, `selection_est_method = "dr"` (fits $q$ and $j$) | Refused | Refused | For every needed cell $c$, ($q_c$ correct **or** $j_c$ correct), **and** ($p$ correct **or** $m$ correct) |
+| `selection = "conditional_mtar"`, `selection_est_method = "dr"` (fits $q$ and $j$) | For every needed cell $c$, ($q_c$ correct **or** $j_c$ correct), **and** $p$ correct | For every needed cell $c$, ($q_c$ correct **or** $j_c$ correct), **and** $m$ correct under the chosen outcome pooling | For every needed cell $c$, ($q_c$ correct **or** $j_c$ correct), **and** ($p$ correct **or** $m$ correct) |
 
 Four essential qualifications govern this table:
 
 1. **Treatment DR supplies no general correction for a wrong imputer:** Under pure imputation, the sufficient condition still requires correct $j$ within each needed cell/pooling group. Choosing treatment DR provides the $p$-or-$m$ alternative after reconstruction; it does not generally repair incorrect reconstructed changes. A wrong $j$ can therefore bias the result even when $p$ and $m$ are correct. These conditions are sufficient, not necessary: special projection, aggregation or error cancellations can preserve an effect despite a misspecified nuisance.
-2. **Coupling through shared fits:** Because $m$ shares one slope vector $\beta$ across all blocks, and because `imputation_pooling`, `selection_pooling`, and `"independent_period_logit"` share parameters across cells or dates, misspecification in one cell or block can shift a shared slope everywhere it is used.
+2. **Coupling through shared fits:** When `outcome_pooling = "pooled"` shares coefficients in $m$, or the selected imputation or observation specification shares coefficients across cells or dates, misspecification in one cell or block can shift a shared slope everywhere it is used.
 3. **Common conditioning set $W$ and covariates only in `selection_xformla`:** Under the augmented correction, `xformla` builds $j$, $m$, and $p$ from covariates $X$, whereas `selection_xformla` builds $q$ from $W = (X, Z)$. Variables $Z$ only in `selection_xformla` never enter $j$, $m$, or $p$. If $Z$ shifts the conditional mean of actual changes given W but is absent from `xformla`, $j_c(X)$ cannot generally represent that W-conditional mean. The stated imputer-correct sufficient branch then fails; correct $q_c(W)$ together with valid treatment adjustment supplies the alternative branch. This does not prove that every effect is biased when both nuisance specifications fail. Adding selection covariates is not automatically harmless.
-4. **All active fit failures are retained without fallback:** Active logits must pass their rank/interior-root checks, and active regressions must pass their own rank/conditioning and prediction-support checks, even when the alternative doubly robust model is correct. A completely observed or completely unobserved cell with a free intercept in $q$ has no finite interior logit root and stops with an error (and pooling slopes via `selection_pooling` retains cell intercepts, so it does not prevent separation). Pure imputation runs on complete cells because $q$ is inactive, but the augmented correction refuses whenever $q$, $j$, $p$, or $m$ fails. Fixed probability safeguards apply to finite fitted weights; they do not rescue failed fits, and nothing falls back automatically.
+4. **All active fit failures are retained without fallback:** Active logits must pass their rank/interior-root checks, and active regressions must pass their own rank/conditioning and prediction-support checks, even when the alternative doubly robust model is correct. A completely observed or completely unobserved cell with a free intercept in $q$ has no finite interior logit root and stops with an error (and pooling slopes via `selection_pooling` retains cell intercepts, so it does not prevent separation). Pure imputation runs on complete cells because $q$ is inactive, but the augmented correction refuses when $q$, $j$ or an active treatment model fails. Treatment IPW does not fit $m$; treatment OR does not fit $p$. Fixed probability safeguards apply to finite fitted weights; they do not rescue failed fits, and nothing falls back automatically.
 
 ## Code
 
@@ -119,6 +119,7 @@ observed <- stats::runif(nrow(full_panel)) <
 obs_panel <- full_panel[observed, ]
 
 fit_none_dr <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -126,6 +127,7 @@ fit_none_dr <- cdid::att_gt(
 )
 
 fit_obs_or <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, selection_xformla = ~ x + z, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "reg",
@@ -135,6 +137,7 @@ fit_obs_or <- cdid::att_gt(
 )
 
 fit_obs_dr <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, selection_xformla = ~ x + z, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -144,6 +147,7 @@ fit_obs_dr <- cdid::att_gt(
 )
 
 fit_imp_dr <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",
@@ -152,6 +156,7 @@ fit_imp_dr <- cdid::att_gt(
 )
 
 fit_aug_dr <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, selection_xformla = ~ x + z, data = obs_panel, frame = units,
   control_group = "nevertreated", est_method = "dr",

@@ -4,6 +4,9 @@ format:
   html:
     embed-resources: true
     self-contained-math: true
+    html-math-method:
+      method: mathjax
+      url: https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg-full.js
     toc: true
     toc-depth: 3
     code-fold: false
@@ -22,18 +25,23 @@ Download the HTML file and open it in a browser to read the tables and plots wit
 
 This Quarto notebook is an interactive, editable tutorial for estimating group-time average treatment effects and event-study aggregations with `cdid` (implementing Bellégo, Benatia and Dortet-Bernadet 2025 and extending Callaway and Sant'Anna 2021). Every estimation call uses the public `cdid` interface directly so you can copy, modify, and run individual chunks in your own workflow. See [Get started](https://github.com/dvbn/cdid/blob/main/docs/get-started.md) and the [User Guide home](https://github.com/dvbn/cdid/blob/main/docs/README.md) for companion documentation.
 
-The 16 sections contain 33 R chunks: 29 run automatically and four are disabled (`eval: false`) for optional use. Run setup and the DGP first, then work downward.
+The 16 sections contain 35 R chunks: 31 run automatically and four are disabled (`eval: false`) for optional use. Run setup and the DGP first, then work downward.
 
 - **Fresh session after reinstall:** If you reinstall `cdid`, `did`, or `DRDID`, restart R before rendering or running chunks interactively so that namespace bindings and compiled symbols are loaded cleanly.
 - **Working directory & fail-fast execution:** You can run chunks from either the repository root or `notebooks/`. The setup chunk resolves `simulate_panel.R` via a relative path, prepends `validation/.lib` when present (else uses your normal R library), and `error: false` stops on the first unexpected error.
 
 ```{r}
 #| label: setup
+# If tutorial packages are missing, run once in your R console:
+# install.packages(c("knitr", "rmarkdown", "ggplot2"))
 proj_root <- if (file.exists("notebooks/simulate_panel.R")) "." else if (file.exists("simulate_panel.R")) ".." else stop("Cannot locate simulate_panel.R.")
 val_lib <- file.path(proj_root, "validation", ".lib")
 if (dir.exists(val_lib)) .libPaths(c(normalizePath(val_lib, winslash = "/"), .libPaths()))
 
 library(cdid); library(did); library(DRDID); library(knitr); library(ggplot2)
+if (utils::packageVersion("cdid") < "1.2.0.0") {
+  stop("This guide requires cdid 1.2.0.0 or later. Update the active library and restart R; check validation/.lib if it is present.")
+}
 
 pkg_info <- data.frame(
   package  = c("R", "cdid", "did", "DRDID", "knitr", "ggplot2"),
@@ -323,7 +331,7 @@ knitr::kable(miss_comp, digits = 6, caption = "Simple ATT under missingness (6-d
 
 ### Interpreting the 6-decimal standard errors in `miss_comp` {#missingness-se-comparison}
 
-At four decimals, all three `std_error` values round to `0.0292`. At six decimals, the default draw gives `0.029188` (none), `0.029185` (pair), and `0.029169` (date). A check of their stored influence functions reconstructed each SE as $\sqrt{\operatorname{mean}(\mathrm{IF}^2)/N}$ with $N=2000$, and found different unit-level IFs across fits. This checks the displayed SEs; it does not verify nuisance propagation or inference validity.
+Read the six-decimal `std_error` values in `miss_comp` above. Similar rounded SEs do not imply identical unit-level influence functions. For these unclustered analytical aggregates, the stored influence function reconstructs the SE as $\sqrt{\operatorname{mean}(\mathrm{IF}^2)/N}$. Agreement with that calculation checks the reported SE, but does not by itself verify nuisance propagation or inference validity.
 
 As documented in [Analytical standard errors and clustering](https://github.com/dvbn/cdid/blob/main/docs/reference/results.md#analytical-standard-errors-and-clustering), analytical SEs use the complete original-unit influence function, including estimated $q$, $j$, $p$, and $m$ **when active**, plus the response rates and cohort shares used by the method. No $q$ is fitted under `selection = "none"` or pure imputation; $p$ is active only for treatment IPW/DR, $m$ for OR/DR, and $j$ for imputation/augmentation. The variance includes covariance between the direct and nuisance-estimation terms, so estimating weights does not necessarily increase variance. Valid population inference still requires the chosen method's identification, model, overlap, and regularity conditions.
 
@@ -337,7 +345,7 @@ Similar precision is plausible here: the fits share outcomes and noise, aim at t
 
 `cdid` separates **treatment adjustment** (`est_method` and `xformla`; see [Treatment adjustment](https://github.com/dvbn/cdid/blob/main/docs/methods/treatment.md)) from **missing-outcome adjustment** (`selection`, `selection_est_method`, and `selection_xformla`; see [Two covariate formulas](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#two-covariate-formulas)):
 
-- **`xformla = ~ x + z`** supplies the predictors for the treatment propensity logits $p$ (`est_method = "ipw"` or `"dr"`) and for the pooled control outcome-change regression $m$ (`est_method = "reg"` or `"dr"`). In our default DGP with `control_group = "nevertreated"`, both models are correctly specified: each cohort's log-odds against $G_i = 0$ are linear in $(X_i, Z_i)$, and the control mean change $(t - s)(\delta + \theta_x X_i + \theta_z Z_i)$ matches `cdid`'s duration-scaled regression $m_b(X_i, Z_i) = \alpha(b) + L(e)(X_i \beta_x + Z_i \beta_z)$ with $L(e) = t - s$.
+- **`xformla = ~ x + z`** supplies the predictors for the treatment propensity logits $p$ (`est_method = "ipw"` or `"dr"`) and for the control outcome-change regression $m$ (`est_method = "reg"` or `"dr"`). In our default DGP with `control_group = "nevertreated"`, both models are correctly specified: each cohort's log-odds against $G_i = 0$ are linear in $(X_i, Z_i)$, and the control mean change $(t - s)(\delta + \theta_x X_i + \theta_z Z_i)$ matches either outcome pooling choice: $m_b(X_i, Z_i) = \alpha(b) + L(e)(X_i \beta_{x,b} + Z_i \beta_{z,b})$, with $L(e) = t - s$. Separate fits allow the coefficients to vary; pooled fits restrict them to be shared. The default DGP satisfies this stronger restriction too.
 - **`selection_xformla = ~ x`** supplies a distinct predictor list used only for the observation model $q$. Leaving `selection_xformla = NULL` would inherit `xformla = ~ x + z`; setting `selection_xformla = ~ x` explicitly restricts the observation logits to the binary covariate $X_i$ that drives observation in the DGP.
 
 ```{r}
@@ -389,11 +397,49 @@ knitr::kable(treat_table, digits = 6, caption = "Treatment adjustment comparison
 
 ### Reading the treatment-adjustment standard errors {#treatment-se-comparison}
 
-Treatment IPW relies on $p$, OR (`"reg"`) on $m$, and DR on either correct model under the remaining assumptions ([Choose IPW, OR or DR](https://github.com/dvbn/cdid/blob/main/docs/examples/treatment-choice.md)). These are distinct functionals: correct models do not imply equal finite-sample estimates, influence functions, or SEs. The default SEs are `0.029236` (IPW), `0.028984` (OR), and `0.029169` (DR).
+Treatment IPW relies on $p$, OR (`"reg"`) on $m$, and DR on either correct model under the remaining assumptions ([Choose IPW, OR or DR](https://github.com/dvbn/cdid/blob/main/docs/examples/treatment-choice.md)). These are distinct functionals: correct models do not imply equal finite-sample estimates, influence functions, or SEs. Compare the SEs in the treatment-adjustment table above.
 
 The nearby values occur in a mild design with binary treatment predictors, correct $p$ and $m$, modest continuous trend variation, and shared outcomes and date-logit observation weights. They give no general efficiency ranking or coverage evidence; the [SE qualifications in Section 5](#missingness-se-comparison) apply here too.
 
 **Try changing:** Increase `trend_z` in `cfg`, redraw once, and refit to explore the role of outcome regression when untreated changes vary more with $Z_i$. Alternatively, keep this draw and omit `z` from `xformla`, or increase `treat_x_slope` before redrawing to explore weaker overlap. Inspect the resulting SEs without assuming an ordering. For separate $p$/$m$ misspecification exercises, see [Section 12](#guide-12).
+
+### Separate or Pooled Untreated-Change Regressions
+
+`outcome_pooling` controls the untreated-change regression in treatment OR and DR. The default, `"separate"`, gives each distinct date-pair/control-group comparison its own coefficients. `"pooled"` keeps local intercepts but shares covariate slopes per calendar step. It reproduces the earlier specification. Neither setting changes the observation model or the actual-change imputation model.
+
+The following exercise adds a time-varying covariate trend to the existing draw. Treatment effects and the observation mask stay the same. The change remains linear in `x`, but its coefficient now varies across date pairs, so a shared per-step slope is restrictive.
+
+```{r}
+#| label: outcome-pooling-comparison
+varying_trends <- missing_panel
+varying_trends$y <- varying_trends$y +
+  0.2 * varying_trends$x * varying_trends$time^2
+
+pool_args <- list(
+  yname = "y", tname = "time", idname = "id", gname = "g",
+  xformla = ~ x + z, selection_xformla = ~ x,
+  data = varying_trends, frame = units,
+  control_group = "nevertreated", est_method = "reg",
+  selection = "conditional_mtar", selection_est_method = "ipw",
+  selection_model = "independent_period_logit",
+  selection_pooling = "separate", selection_universe = "F",
+  pt_assumption = "post", base_period = "varying",
+  bstrap = FALSE, cband = FALSE
+)
+fit_separate <- do.call(cdid::att_gt,
+  c(pool_args, list(outcome_pooling = "separate")))
+fit_pooled <- do.call(cdid::att_gt,
+  c(pool_args, list(outcome_pooling = "pooled")))
+pool_agg <- lapply(list(separate = fit_separate, pooled = fit_pooled),
+  cdid::aggte, type = "simple")
+data.frame(
+  outcome_pooling = names(pool_agg),
+  estimate = vapply(pool_agg, function(x) x$overall.att, numeric(1)),
+  std.error = vapply(pool_agg, function(x) x$overall.se, numeric(1))
+)
+```
+
+This is one draw, not a coverage study. Try the same calls on `missing_panel` to remove the added trend, or set `est_method = "dr"` to see how treatment adjustment changes the comparison. A failed separate regression is not replaced automatically by pooling: check the control sample and required covariate predictions before imposing shared coefficients.
 
 ## 7. Selection Slope Pooling, Date Independence, Rotating Panels, and Support Diagnostics {#guide-7}
 
@@ -498,15 +544,15 @@ list(study_unit_rows      = nrow(fit_to_explore$chained$frame),
 - Confirm that `study_unit_rows` (`nrow(fit_to_explore$chained$frame)`) and the row dimension of `fit_to_explore$inffunc` both equal $N = 2000$, the full study-unit table `units`.
 - **Try changing:** Switch `fit_to_explore` to `fit_rot` (and pair it with `panel_to_explore <- rotating_panel` in [Section 3](#guide-3)) to compare the raw pair support counts with the fitted target availability table.
 
-## 8. Observation Weighting vs Change Imputation and Augmented Double-DR {#guide-8}
+## 8. Observation Weighting vs Change Imputation and Augmented Correction {#guide-8}
 
 To correct for covariate-dependent missingness on `selection_universe = "F"`, `selection = "conditional_mtar"` supports three `selection_est_method` routes ([How to adjust](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#how-to-adjust), [Impute actual changes for missing outcomes](https://github.com/dvbn/cdid/blob/main/docs/examples/change-imputation.md), and [Compare model robustness across treatment and missing outcome adjustments](https://github.com/dvbn/cdid/blob/main/docs/examples/robustness.md)):
 
 1. **Observation weighting (`"ipw"`):** Reweights observed pair changes by the inverse observation probability $q_c(X)$.
 2. **Pure actual-change imputation (`"imputation"`):** Fits a weighted least-squares regression $j_{k,e}(X, Z) = \alpha(k, e) + L(e)(X \beta_{x,r} + Z \beta_{z,r})$ to study units of cohort $k$ observed at both endpoints of pair $e = (s, t)$, then averages predictions across **all** study units of cohort $k$ in `frame = units` (leaving `y = NA` untouched in `data`). No observation model $q$ is fitted (`selection_model`, `selection_pooling`, and `selection_xformla` are omitted).
-3. **Augmented / double-DR (`"dr"`):** Combines actual-change predictions $j_c(X, Z)$ with inverse-probability weighted residuals $S_{i,e}\{\Delta Y_{i,e} - j_c(X, Z)\}/\max(q_c(X_i), 10^{-6})$. Under valid conditional mean restrictions, support, and regularity conditions, its sufficient model condition is ($p$ or $m$ correct) and, for every used cell, ($q_c$ or $j_c$ correct). Pooled models must be correct across the cells sharing coefficients. The package floors inverse observation denominators at $10^{-6}$ and caps treatment propensities at $1 - 10^{-6}$; the usual original-target robustness statements require these safeguards to be inactive in the population or additional target-preserving conditions ([Probability safeguards](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#probability-safeguards)).
+3. **Augmented correction (`"dr"`):** Combines actual-change predictions $j_c(X, Z)$ with inverse-probability weighted residuals $S_{i,e}\{\Delta Y_{i,e} - j_c(X, Z)\}/\max(q_c(X_i), 10^{-6})$. Under valid conditional mean restrictions, support, and regularity conditions, it needs $p$ correct for treatment IPW, $m$ correct for treatment OR, or either for treatment DR, together with ($q_c$ or $j_c$ correct) for every used cell. Only the combination with treatment DR is doubly robust in both layers. Pooled models must be correct across the cells sharing coefficients. The package floors inverse observation denominators at $10^{-6}$ and caps treatment propensities at $1 - 10^{-6}$; the usual original-target robustness statements require these safeguards to be inactive in the population or additional target-preserving conditions ([Probability safeguards](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#probability-safeguards)).
 
-- **Counterfactual regression $m$ (`est_method = "reg"` or `"dr"`) vs actual-change regression $j$ (`selection_est_method = "imputation"` or `"dr"`):** $m$ models **untreated** changes among controls across all comparison blocks with one shared duration-scaled slope vector on $L(e)(X_i, Z_i)$, whereas $j$ models **actual** changes within each cohort $k$ and pair $e = (s, t)$, including treatment effects for treated cohorts. Because $X_i$ shifts the treatment effect by $\tau_x = 0.50$ at onset, any pair $e = (s, t)$ for cohort $g$ that crosses treatment onset ($s < g \le t$) has actual-change slope $\theta_x L(e) + \tau_x$ on $X_i$ (duration-scaled coefficient $\theta_x + \tau_x / L(e)$), whereas pairs entirely before or after $g$ have duration-scaled coefficient $\theta_x$. Thus `imputation_pooling = "separate"` is required here; pooling $j$ slopes via `"within_cohort"` or `"across_cohorts"` is misspecified whenever $\tau_x \neq 0$.
+- **Counterfactual regression $m$ (`est_method = "reg"` or `"dr"`) vs actual-change regression $j$ (`selection_est_method = "imputation"` or `"dr"`):** $m$ models **untreated** changes among controls, separately for each distinct comparison by default. Setting `outcome_pooling = "pooled"` instead shares duration-scaled slopes across comparison blocks, whereas $j$ models **actual** changes within each cohort $k$ and pair $e = (s, t)$, including treatment effects for treated cohorts. Because $X_i$ shifts the treatment effect by $\tau_x = 0.50$ at onset, any pair $e = (s, t)$ for cohort $g$ that crosses treatment onset ($s < g \le t$) has actual-change slope $\theta_x L(e) + \tau_x$ on $X_i$ (duration-scaled coefficient $\theta_x + \tau_x / L(e)$), whereas pairs entirely before or after $g$ have duration-scaled coefficient $\theta_x$. Thus `imputation_pooling = "separate"` is required here; pooling $j$ slopes via `"within_cohort"` or `"across_cohorts"` is misspecified whenever $\tau_x \neq 0$.
 
 ```{r}
 #| label: imputation-and-augmented-dr
@@ -518,15 +564,16 @@ fit_sel_imp <- cdid::att_gt(
   selection_universe = "F", imputation_pooling = "separate",
   pt_assumption = "post", base_period = "varying", bstrap = FALSE, cband = FALSE
 )
-fit_sel_aug <- cdid::att_gt(
+fit_augmented_treatment <- function(method) cdid::att_gt(
   yname = "y", tname = "time", idname = "id", gname = "g",
   xformla = ~ x + z, selection_xformla = ~ x, data = missing_panel, frame = units,
-  control_group = "nevertreated", est_method = "dr",
+  control_group = "nevertreated", est_method = method,
   selection = "conditional_mtar", selection_est_method = "dr",
   selection_model = "independent_period_logit", selection_pooling = "separate",
   selection_universe = "F", imputation_pooling = "separate",
   pt_assumption = "post", base_period = "varying", bstrap = FALSE, cband = FALSE
 )
+fit_sel_aug <- fit_augmented_treatment("dr")
 
 sel_routes <- list(obs_weighting = treat_agg$dr,
                    imputation    = cdid::aggte(fit_sel_imp, type = "simple"),
@@ -545,11 +592,37 @@ knitr::kable(sel_route_tab, digits = 6, caption = "Observation weighting vs pure
 
 ### Reading the observation-adjustment standard errors {#imputation-se-comparison}
 
-In the observation layer, weighting uses $q$, imputation uses $j$, and augmentation uses both; all three calls also use treatment DR ($p$/$m$). Their default SEs are `0.029169`, `0.029055`, and `0.029079`, respectively. The stored IFs differ across routes. Correct models do not imply finite-sample equality, and augmentation is one reconstructed-change estimator, not an average of the other two.
+In the observation layer, weighting uses $q$, imputation uses $j$, and augmentation uses both; all three calls also use treatment DR ($p$/$m$). Compare their SEs in the table above; their influence functions need not coincide. Correct models do not imply finite-sample equality, and augmentation is one reconstructed-change estimator, not an average of the other two.
 
 Inspect `fit_sel_imp$chained$selection` and `fit_sel_aug$chained$selection` for the active-model records.
 
 Shared outcomes, moderate observation probabilities driven by binary $X_i$, and correct models make nearby precision plausible in this mild design. This gives no general efficiency ranking or coverage evidence; see the [SE qualifications in Section 5](#missingness-se-comparison).
+
+### Choose the treatment adjustment separately
+
+Keep the same reconstructed changes and choose treatment IPW, OR or DR. The observation model $q$ and actual-change imputer $j$ are active in every call below. Treatment IPW additionally fits $p$; OR additionally fits $m$; DR fits both. Each standard error includes the uncertainty of the models that the chosen method actually fits.
+
+```{r}
+#| label: augmented-treatment-choices
+augmented_fits <- list(
+  ipw = fit_augmented_treatment("ipw"),
+  reg = fit_augmented_treatment("reg"),
+  dr = fit_sel_aug
+)
+augmented_aggregates <- lapply(augmented_fits, cdid::aggte, type = "simple")
+augmented_table <- data.frame(
+  est_method = names(augmented_fits),
+  treatment_models = c("propensity p", "counterfactual regression m", "p and m"),
+  simple_att = vapply(augmented_aggregates, function(a) a$overall.att, numeric(1)),
+  std_error = vapply(augmented_aggregates, function(a) a$overall.se, numeric(1)),
+  population_att = study_truth$overall$population_att[study_truth$overall$type == "simple"],
+  row.names = NULL
+)
+knitr::kable(augmented_table, digits = 6,
+  caption = "Augmented missing-outcome correction with treatment IPW, OR and DR")
+```
+
+All models are representable in this example, so the methods aim at the same population effect. To explore their different assumptions, change the outcome or treatment law in [Section 2](#guide-2) and redraw the study. Correct observation probabilities alone do not protect treatment OR from an incorrect counterfactual regression; correct change imputation alone does not protect treatment IPW from an incorrect treatment propensity. Neither the ranking in this table nor one close estimate establishes repeated-sample reliability.
 
 **Try changing:** Lower `obs_intercept` or increase `obs_x_slope` in `cfg`, redraw once, and refit to explore how observation rates and weight dispersion affect the three SEs. Alternatively, set `obs_z_slope = 0.50` and compare the current observation formula with `selection_xformla = ~ x + z`: omitting `z` misspecifies $q$ while separate-cell $j$ remains representable. Setting `effect_x = 0` instead makes the shared imputation slopes representable too. Keep support/model refusals visible.
 
@@ -594,7 +667,7 @@ knitr::kable(pt_comp, digits = 6, caption = "Comparison across control_group, ba
 Setting `mode = "ordinary"` delegates directly to `did::att_gt()` ([Moving from did](https://github.com/dvbn/cdid/blob/main/docs/from-did.md)). On `balanced_panel`, whether `mode = "chained"` and `mode = "ordinary"` produce identical estimates depends on the actual moment system and nuisance specifications fitted:
 
 - **Exact algebraic reduction:** With a balanced panel, `control_group = "nevertreated"`, no covariates (`xformla = NULL`, `est_method = "ipw"`), equal unit weights, `selection = "none"`, `pt_assumption = "post"`, and matched anticipation and base-period settings, chained comparisons telescope algebraically to the long two-period differences computed by `did`, so point estimates are expected to agree up to floating-point rounding. This is a computational comparison. In our main DGP, omitting $X_i$ leaves cohort-related untreated trends unadjusted, so agreement of these two unadjusted fits does not establish identification of the ATT.
-- **Why covariate-adjusted, NYT, or `PT-all` specifications can differ:** With covariates (`xformla = ~ x + z` under `"reg"` or `"dr"`), `cdid` fits one pooled control regression $m$ with duration-scaled slopes $L(e)(X_i, Z_i)'\beta$ and combines links via GMM, whereas `did` ordinarily fits separate pair-specific regressions. Different coefficient restrictions or fitting procedures can change finite-sample estimates; method labels alone do not imply a difference, and nuisance corrections can cancel. Likewise, `control_group = "notyettreated"` in chained GMM retains additional fixed-horizon control-pool comparisons, and `pt_assumption = "all"` adds pre-reference zero-differential GMM moments. No uniform precision ranking follows from these differences.
+- **Why covariate-adjusted, NYT, or `PT-all` specifications can differ:** With covariates (`xformla = ~ x + z` under `"reg"` or `"dr"`), `cdid` now fits separate comparison regressions by default, as `did` does. Explicit `outcome_pooling = "pooled"` instead shares duration-scaled slopes across comparisons. Chained estimation also combines its catalog links via GMM. Different coefficient restrictions or fitting procedures can change finite-sample estimates; method labels alone do not imply a difference, and nuisance corrections can cancel. Likewise, `control_group = "notyettreated"` in chained GMM retains additional fixed-horizon control-pool comparisons, and `pt_assumption = "all"` adds pre-reference zero-differential GMM moments. No uniform precision ranking follows from these differences.
 
 ```{r}
 #| label: ordinary-did-comparison
@@ -621,7 +694,7 @@ max_abs_diff_unadj
 
 **What to inspect and try changing:**
 - Read the printed `max_abs_diff_unadj` after matching cells by cohort and date: the telescoping reduction predicts agreement up to floating-point rounding, while both fits can share bias from omitting $X_i$. Point-estimate agreement alone also says nothing about equality of standard errors or bands.
-- **Try changing:** Compare `fit_bal` (which uses `xformla = ~ x + z` and `est_method = "dr"`) against `mode = "ordinary"` with the same treatment method, formula, anticipation, and base period, matching cells by cohort and date. Inspect whether the pooled and separate regressions change the finite-sample estimates or standard errors.
+- **Try changing:** Compare `fit_bal` (which uses `xformla = ~ x + z` and `est_method = "dr"`) against `mode = "ordinary"` with the same treatment method, formula, anticipation, and base period, matching cells by cohort and date. Compare both `outcome_pooling = "separate"` and `"pooled"`, keeping the other settings fixed. Differences can reflect coefficient restrictions or the moments combined by GMM.
 
 ## 10. Analytical Intervals, Multiplier Bands and Clustered Inference {#guide-10}
 
@@ -938,7 +1011,7 @@ A custom `est_method` is a callable IPW implementation with the documented signa
 
 | Entry point | Current supported boundary |
 | --- | --- |
-| `selection_est_method = "dr"` | Requires built-in `est_method = "dr"`; imputation and augmented routes require `"F"` and no transport ratio. |
+| `selection_est_method = "dr"` | Supports built-in `est_method = "ipw"`, `"reg"` or `"dr"`; imputation and augmented routes require `"F"` and no transport ratio. |
 | Custom IPW callbacks | Baseline and qualified observation weighting only; no imputation or augmented callback route. |
 | Genuine repeated cross sections | `panel = FALSE` selects ordinary `did` delegation; chained mode requires within-unit changes. Dependent rows from this panel are not an IID repeated-cross-section example. |
 | GMM covariance handling | `"tikhonov"` is supported; Moore-Penrose weighting is deferred and refused. |
@@ -982,7 +1055,7 @@ Use this workflow for an experiment:
 | [5. Missing outcomes](#guide-5) | Define `selection_universe = "F"` and `selection_pooling = "separate"`, compare pair and date logits | `selection`, `selection_model`, `selection_universe`, `selection_pooling`, `frame` |
 | [6. Treatment adjustment](#guide-6) | Refit IPW, OR, and DR on the same draw with distinct `selection_xformla` | `est_method`, `xformla`, `selection_xformla` |
 | [7. Pooling, rotation, and support](#guide-7) | Shared slopes, date independence vs study-unit retention, rotating windows, and fitted `tidy()` support | `selection_pooling`, `selection_universe`, `tidy()`, `chained$frame` |
-| [8. Reconstruct changes](#guide-8) | Compare observation weighting, change imputation, and augmented double-DR | `selection_est_method`, `imputation_pooling` |
+| [8. Reconstruct changes](#guide-8) | Compare observation weighting, change imputation, and augmentation with treatment IPW, OR or DR | `selection_est_method`, `imputation_pooling` |
 | [9. Controls and PT](#guide-9) | NT/NYT, preperiod reporting, `PT-all`, and ordinary `did` delegation | `control_group`, `base_period`, `pt_assumption`, `pt_start`, `mode` |
 | [10. Inference](#guide-10) | Pointwise intervals, multiplier bands, and actual clustering | `bstrap`, `cband`, `biters`, `clustervars` |
 | [11. Pretrends](#guide-11) | Full Wald and conditional CvM pretrend records | `chained$pretest`, `conditional_did_pretest()` |

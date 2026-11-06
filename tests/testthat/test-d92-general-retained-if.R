@@ -76,8 +76,15 @@ d92_expect_match <- function(a, b, tol = 1e-12, info = NULL) {
 
 d92_rebind <- function(env, nm, value) {
   old <- get(nm, envir = env, inherits = FALSE)
-  unlockBinding(nm, env); assign(nm, value, envir = env); lockBinding(nm, env)
-  function() { unlockBinding(nm, env); assign(nm, old, envir = env); lockBinding(nm, env) }
+  locked <- bindingIsLocked(nm, env)
+  if (locked) unlockBinding(nm, env)
+  assign(nm, value, envir = env)
+  if (locked) lockBinding(nm, env)
+  function() {
+    if (locked) unlockBinding(nm, env)
+    assign(nm, old, envir = env)
+    if (locked) lockBinding(nm, env)
+  }
 }
 
 d92_panel <- function(N = 41L, T = 6L, pattern = "half", multi_cohort = TRUE,
@@ -342,11 +349,17 @@ test_that("direct general retained IF carrier matches standalone replay and 4-te
   }
   expect_identical(carrier_cov$producer_passes, 1L)
   expect_identical(carrier_cov$slice_passes, 1L)
+  raw_holder <- carrier_cov$raw_ref
   rel <- api$ipw_point_if_retained_release(carrier_cov, plan)
   expect_identical(rel$status, "retained")
   expect_identical(carrier_cov$state, "released")
-  expect_false(any(c("phi", "raw_ref", "seal", "plan_snapshot", "plan_ref", "frame_ref", "panel_ref") %in%
+  expect_false(any(c("phi", "raw_ref", "plan_snapshot", "plan_ref", "frame_ref", "panel_ref") %in%
     ls(carrier_cov, all.names = TRUE)))
+  # The immutable seal contains only small configuration; neither it nor a
+  # separately retained raw holder can reach the released matrix or owners.
+  expect_null(raw_holder$phi)
+  expect_false(any(c("phi", "raw_ref", "plan_snapshot", "plan_ref", "frame_ref", "panel_ref",
+    "fitted_ref", "fitted_refs", "nuisance_refs") %in% ls(carrier_cov$seal)))
   api$ipw_point_if_retained_release(carrier, plan)
 })
 
@@ -582,7 +595,7 @@ test_that("typed capacity bounds decline cleanly while malformed inputs, overflo
   expect_identical(c_slice$state, "released")
   expect_false(exists("phi", c_slice, inherits = FALSE))
 
-  # Tampering with the carrier's locked raw matrix on the LAST slice callback is refused:
+  # Tampering with the carrier's raw matrix on the LAST slice callback is refused:
   c_raw <- api$ipw_point_if_retained_reserve(plan, pc, live = 0, work = 0, envelope_control = oc)
   api$ipw_point_if_retained_fill(c_raw, plan, pc, callback = function(b) NULL)
   seen <- 0L
@@ -590,9 +603,8 @@ test_that("typed capacity bounds decline cleanly while malformed inputs, overflo
     api$replay_ipw_point_if_retained(c_raw, plan, pc, callback = function(b) {
       seen <<- seen + 1L
       if (seen == n_chunks) {
-        unlockBinding("phi", c_raw)
+        # Lifetime bindings are mutable; the independent raw alias catches COW.
         c_raw$phi[1L, 1L] <- c_raw$phi[1L, 1L] + 1
-        lockBinding("phi", c_raw)
       }
     }),
     class = "cdid_ipw_point_view_batch_error"

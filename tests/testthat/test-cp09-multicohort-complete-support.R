@@ -1,6 +1,7 @@
 # D90 multi-cohort baseline OR/DR. UNEXECUTED here: root must run these on the
 # exact installed revision. References are the unchanged general route and the
-# existing pure-table backend; no candidate formula supplies expected IFs.
+# existing pure-table backend and independent raw stacked WLS; no candidate
+# formula supplies expected IFs.
 library(testthat)
 if (!requireNamespace("cdid", quietly = TRUE)) stop("Actual installed cdid required; no source fallback.", call. = FALSE)
 cp09_api <- asNamespace("cdid")
@@ -234,11 +235,11 @@ test_that("multi-cohort NT/NYT native full IFs include all pooled regression blo
       expect_true(any(vapply(fit$regression_specs, function(s) late %in% s$cohorts, logical(1))))
     }
   }
-  # OR's new scope is multi-target NT only; NYT retains its general fallback.
+  # Pooled OR now uses the same actual multi-target NT/NYT support sets.
   for (cg in c("nevertreated", "notyettreated")) {
     fx <- cp09_fixture(cg, est = "or", perm = TRUE)
     a <- cp09_fit(fx); g <- cp09_fit(fx, cp09_ns(general = TRUE))
-    expect_identical(is.null(a$complete_support), cg == "notyettreated")
+    expect_false(is.null(a$complete_support))
     expect_equal(cp09_phi(a), cp09_phi(g), tolerance = 1e-12)
     expect_equal(cp09_phi(a), cp09_phi(a, details = TRUE), tolerance = 1e-12)
   }
@@ -246,7 +247,7 @@ test_that("multi-cohort NT/NYT native full IFs include all pooled regression blo
 
 test_that("multi-cohort full inference preserves the full Gram, active ridge, auxiliary reports and aggregations", {
   for (case in list(list(est = "dr", cg = "nevertreated"), list(est = "dr", cg = "notyettreated"),
-                    list(est = "reg", cg = "nevertreated"))) for (clustered in c(TRUE, FALSE)) {
+                    list(est = "reg", cg = "nevertreated"), list(est = "reg", cg = "notyettreated"))) for (clustered in c(TRUE, FALSE)) {
     # Preserve the original clustered full-inference comparisons separately.
     # Only the unclustered request can admit the optional store; an explicit
     # 256 also admits all links in one block under the private owner row cap.
@@ -421,4 +422,176 @@ test_that("group replay identity, buffer reservations, aliases and no-intercept 
     if (isTRUE(args$alias)) expect_true("x_alias" %in% aa$shared$basis$aliased_columns)
     expect_equal(cp09_phi(aa), cp09_phi(gg), tolerance = 1e-12)
   }
+})
+
+
+# V20 references use raw rows and an independent, fully stacked weighted
+# regression: one intercept for every comparison and the original shared slope.
+# The score derivative is computed from that raw objective, without a package
+# QR, score, fitted mean or native descriptor supplying expected values.
+cp20_or_reference <- function(fx, fit, omit = NULL) {
+  st <- fx$reader$state; N <- nrow(fx$Y); G <- length(fit$regression_specs)
+  p <- fit$shared$p
+  Z <- fx$X[, fx$recipe$slope_index[fit$shared$keep], drop = FALSE]
+  blocks <- lapply(seq_len(G), function(b) {
+    sids <- fit$regression_specs[[b]]$support_ids
+    cohorts <- vapply(fit$support_specs[sids], `[[`, integer(1), "cohort")
+    ix <- which(st$cohort_index %in% cohorts)
+    pr <- fit$support_specs[[sids[1L]]]$pair
+    L <- fit$regression_specs[[b]]$transitions
+    D <- L * Z[ix, , drop = FALSE]
+    dummy <- matrix(0, length(ix), G); dummy[, b] <- 1
+    list(ix = ix, sids = sids, D = D,
+      dy = fx$Y[ix, pr$t_calendar_index] - fx$Y[ix, pr$s_calendar_index],
+      X = cbind(dummy, D), w = fx$weights[ix])
+  })
+  dense <- stats::lm.wfit(do.call(rbind, lapply(blocks, `[[`, "X")),
+    unlist(lapply(blocks, `[[`, "dy"), use.names = FALSE),
+    unlist(lapply(blocks, `[[`, "w"), use.names = FALSE), tol = 1e-10)
+  stopifnot(dense$rank == G + p, all(is.finite(dense$coefficients)))
+  alpha <- dense$coefficients[seq_len(G)]
+  beta <- if (p) dense$coefficients[G + seq_len(p)] else numeric(0)
+  h <- matrix(0, N, p); ha <- matrix(0, N, G); H <- matrix(0, p, p)
+  md <- matrix(0, G, p); mass <- numeric(G)
+  for (b in seq_len(G)) {
+    a <- blocks[[b]]; ix <- a$ix; mass[b] <- sum(a$w)
+    if (p) md[b, ] <- colSums(a$w * a$D) / mass[b]
+    Dc <- if (p) sweep(a$D, 2L, md[b, ]) else a$D
+    if (p) H <- H + crossprod(Dc, a$w * Dc)
+    r <- a$dy - alpha[b] - as.vector(a$D %*% beta)
+    used <- rep(TRUE, length(ix))
+    if (!is.null(omit) && b == omit[1L]) {
+      cohort <- fit$support_specs[[omit[2L]]]$cohort
+      used <- st$cohort_index[ix] != cohort
+    }
+    ha[ix[used], b] <- a$w[used] * r[used]
+    if (p) h[ix[used], ] <- h[ix[used], , drop = FALSE] +
+      (a$w[used] * r[used]) * Dc[used, , drop = FALSE]
+  }
+  xb <- if (p) N * t(solve(H, t(h))) else matrix(0, N, 0L)
+  xa <- sweep(N * ha, 2L, mass, "/") - xb %*% t(md)
+  mu <- numeric(length(fit$links)); phi <- matrix(0, N, length(mu))
+  for (j in seq_along(fit$links)) {
+    l <- fit$links[[j]]; b <- l$regression; sp <- fit$support_specs[[l$support_id]]
+    ix <- which(st$cohort_index == sp$cohort)
+    D <- fit$regression_specs[[b]]$transitions * Z[ix, , drop = FALSE]
+    r <- fx$Y[ix, sp$pair$t_calendar_index] - fx$Y[ix, sp$pair$s_calendar_index] -
+      alpha[b] - as.vector(D %*% beta)
+    w <- fx$weights[ix]; mu[j] <- sum(w * r) / sum(w)
+    cbar <- if (p) colSums(w * D) / sum(w) else numeric(0)
+    phi[, j] <- -xa[, b] - as.vector(xb %*% cbar)
+    phi[ix, j] <- phi[ix, j] + N * w * (r - mu[j]) / sum(w)
+  }
+  list(alpha = alpha, beta = beta, beta_if = xb, alpha_if = xa, mu = mu, phi = phi)
+}
+
+cp20_intercept_fixture <- function(fx) {
+  # A real new frame/reader/view set is needed; the sealed old frame has slopes.
+  Z <- matrix(1, nrow(fx$u), 1L, dimnames = list(NULL, "(Intercept)"))
+  fx$fo <- cp09_api$construct_ipw_frame_owner(fx$po, fx$u$id, Z, weights = fx$weights,
+    control = fx$ctrl, frame_g = fx$u$G, allow_frame_only = FALSE, design_on_A_only = TRUE)
+  fx$reader <- cp09_api$construct_cp04_frame_reader(fx$fo, fx$u$id, Z, fx$u$G,
+    fx$weights, fx$ctrl, allow_unknown_off_A = TRUE)
+  fx$views <- lapply(fx$links, function(l) cp09_api$construct_ipw_link_view(fx$fo, l$s, l$t,
+    g = l$g, K = l$K, control = fx$ctrl, link_id = l$link_id,
+    functional_key = paste0("cmpcat:cp20:", l$link_id)))
+  fx$X <- fx$V <- Z; fx$recipe <- cp09_recipe("(Intercept)")
+  fx
+}
+
+cp20_native_call <- function(fit, plan, rows, blk = plan$blk, cap = fit$control$max_matrix_entries) {
+  reader <- get("cp04_reader", fit$reader_ref, inherits = FALSE); st <- reader$state
+  po <- cp09_api$or_baseline_complete_panel(reader, fit$complete_support); post <- po$postings
+  dn <- plan$dimnames
+  if (!is.null(dn[[1L]])) {
+    frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+    dn[[1L]][[1L]][[1L]] <- frame$Z_a
+  }
+  cp09_api$or_baseline_native_kernel("C_gmm_cp08_or_if_chunk")(po$observations$y,
+    post$date_start, post$post_a_index, post$post_obs_index, as.integer(rows), st$cohort_index,
+    st$a_index, st$w, plan$dates, plan$sup, plan$sup_par, blk, plan$blk_par,
+    plan$lnk, plan$lnk_par, dn, cap)
+}
+
+test_that("pooled NYT OR uses ragged native intercepts with the raw stacked WLS score", {
+  for (shape in c("slope", "intercept", "alias")) {
+    fx <- cp09_fixture(est = "or", chunk = 13L, perm = TRUE, wt = 2.5,
+      alias = identical(shape, "alias"))
+    if (shape == "intercept") fx <- cp20_intercept_fixture(fx)
+    fit <- cp09_fit(fx); general <- cp09_fit(fx, cp09_ns(general = TRUE))
+    expect_false(is.null(fit$complete_support))
+    if (shape == "alias") expect_true("x_alias" %in% fit$shared$basis$aliased_columns)
+    ref <- cp20_or_reference(fx, fit)
+    expect_equal(unname(fit$shared$beta), unname(ref$beta), tolerance = 1e-12)
+    expect_equal(vapply(fit$regressions, `[[`, numeric(1), "alpha"), unname(ref$alpha), tolerance = 1e-12)
+    expect_equal(vapply(fit$links, `[[`, numeric(1), "mu"), ref$mu, tolerance = 1e-12)
+    ll <- seq_along(fit$links)
+    plan <- cp09_api$or_baseline_native_plan(fit, ll, 13L)
+    expect_true(cp09_api$ipw_owner_seal_ok(plan, "or_baseline_native_plan"))
+    expect_true(is.list(plan$blk))
+    expect_identical(diff(plan$blk[[1L]]), vapply(fit$regression_specs[plan$gids],
+      function(s) length(s$support_ids), integer(1)))
+    expect_identical(plan$sids[plan$blk[[2L]]], as.integer(unlist(lapply(
+      fit$regression_specs[plan$gids], `[[`, "support_ids"), use.names = FALSE)))
+    expect_identical(plan$blk[[3L]], as.double(unlist(lapply(fit$regressions[plan$gids],
+      `[[`, "forcing_alpha"), use.names = FALSE)))
+    H <- matrix(0, nrow(fx$Y), length(ll))
+    for (first in seq.int(1L, nrow(H), by = 13L)) {
+      rows <- seq.int(first, min(nrow(H), first + 12L))
+      native <- cp20_native_call(fit, plan, rows)
+      expect_identical(native$status[1L], 0L)
+      out <- cp09_chunk(fit, rows, ll, plan = plan)
+      expect_equal(out$phi, native$phi, tolerance = 1e-12)
+      H[rows, ] <- out$phi
+    }
+    expect_identical(length(rows), 1L)
+    expect_equal(unname(H), ref$phi, tolerance = 1e-12)
+    expect_equal(H, cp09_phi(general, chunk = 13L), tolerance = 1e-12)
+    expect_equal(H, cp09_phi(fit, chunk = 13L, details = TRUE), tolerance = 1e-12)
+    # Requested subsets still contract the shared score of every original block.
+    mixed <- which(vapply(fit$regression_specs, function(s) length(s$support_ids) > 1L, logical(1)))
+    sub <- c(which(vapply(fit$links, function(l) l$regression == mixed[1L], logical(1)))[1L],
+      length(ll), 7L)
+    sub <- unique(sub); sub <- rev(sub)
+    small <- cp09_api$or_baseline_native_plan(fit, sub, 13L)
+    pre <- cp09_api$or_baseline_if_budget(fit, 13L, sub)
+    if (fit$shared$p) {
+      expect_gt(length(setdiff(pre$beta_gids, pre$gids)), 0L)
+      expect_length(small$dimnames[[1L]][[6L]], sum(vapply(
+        fit$regression_specs, function(s) length(s$support_ids), integer(1))))
+    } else expect_length(pre$beta_gids, 0L)
+    rows <- c(9L, 1L, 15L, 2L, 40L)
+    expect_equal(unname(cp09_chunk(fit, rows, sub, plan = small)$phi),
+      ref$phi[rows, sub, drop = FALSE], tolerance = 1e-12)
+    expect_equal(cp09_chunk(fit, rows, sub, scale = "core", plan = small)$phi,
+      fx$reader$state$lambda * cp09_chunk(fit, rows, sub, plan = small)$phi, tolerance = 1e-12)
+    # An omitted actual support score must be detectable by this raw reference.
+    broken <- cp20_or_reference(fx, fit, c(mixed[1L], fit$regression_specs[[mixed[1L]]]$support_ids[1L]))
+    expect_gt(max(abs(ref$phi - broken$phi)), 1e-6)
+  }
+})
+
+test_that("ragged native OR descriptors retain resource and source integrity guards", {
+  fx <- cp09_fixture(est = "or", chunk = 13L, perm = TRUE)
+  fit <- cp09_fit(fx); ll <- seq_along(fit$links)
+  plan <- cp09_api$or_baseline_native_plan(fit, ll, 13L)
+  pre <- cp09_api$or_baseline_if_budget(fit, 13L, ll)
+  live <- cp09_api$or_baseline_native_live(13L, length(ll), length(plan$gids), length(plan$dates), fit$shared$p)
+  expect_lte(plan$entries + live, pre$scratch)
+  # Refuse before allocating the ragged descriptors when their admitted slice
+  # cannot hold even their actual retained payload plus native row buffers.
+  narrow <- pre; narrow$scratch <- plan$entries + live - 1
+  expect_error(cp09_api$or_baseline_native_plan(fit, ll, 13L, narrow), class = "cdid_ipw_owner_bound_error")
+  changed <- plan; changed$blk[[3L]][1L] <- changed$blk[[3L]][1L] + 0.1
+  expect_error(cp09_chunk(fit, 1:13, ll, plan = changed), class = "cdid_or_baseline_integrity_error")
+  expect_error(cp09_chunk(fit, 1:13, rev(ll), plan = plan), class = "cdid_or_baseline_integrity_error")
+  foreign <- cp09_fit(cp09_fixture(est = "or", chunk = 13L))
+  expect_error(cp09_chunk(foreign, 1:13, ll, plan = plan), class = "cdid_or_baseline_integrity_error")
+  invalid <- plan$blk; invalid[[1L]][2L] <- invalid[[1L]][1L]
+  expect_error(cp20_native_call(fit, plan, 1:13, invalid), class = "cdid_gmm_bound_error")
+  invalid <- plan$blk; invalid[[2L]][1L] <- as.integer(length(plan$sids) + 1L)
+  expect_error(cp20_native_call(fit, plan, 1:13, invalid), class = "cdid_gmm_bound_error")
+  invalid <- plan$blk; invalid[[3L]] <- invalid[[3L]][-1L]
+  expect_error(cp20_native_call(fit, plan, 1:13, invalid), class = "cdid_gmm_bound_error")
+  expect_error(cp20_native_call(fit, plan, 1:13, cap = 13 * length(ll) - 1), class = "cdid_gmm_bound_error")
 })

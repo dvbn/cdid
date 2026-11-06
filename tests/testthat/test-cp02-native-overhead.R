@@ -115,18 +115,30 @@ noh_make_exec_dir <- function(prefix = "noh_build_") {
   stop("Unable to create an executable temporary directory for R CMD SHLIB.", call. = FALSE)
 }
 
-noh_compile_dll <- function(c_lines, dll_name, parent_dir) {
+noh_compile_dll <- function(c_lines, dll_name, parent_dir, source_dir = NULL) {
   sub_dir <- tempfile(pattern = paste0("dll_", dll_name, "_"), tmpdir = parent_dir)
   dir.create(sub_dir, recursive = TRUE, showWarnings = FALSE)
   src <- file.path(sub_dir, paste0(dll_name, ".c"))
   writeLines(c_lines, src)
+  companions <- character(0L)
+  # Current cdid mutants retain the actual registered implementation bundle.
+  # Standalone probes and the immutable original use only their supplied C.
+  if (!is.null(source_dir)) {
+    companions <- c("chained_zero_template.c", "chained_legacy_ipw_chunk.c",
+      "chained_score_pullback.c", "chained_coarse_pullback.c", "chained_pair_operation.c")
+    bundle <- file.path(source_dir, c("cdid_r_api.h", companions))
+    if (!all(file.exists(bundle)) || !all(file.copy(bundle, sub_dir)))
+      stop("Incomplete current native source bundle for CP02 test build.", call. = FALSE)
+  }
   old <- setwd(sub_dir)
   on.exit(setwd(old), add = TRUE)
-  out <- system2(
+  # Preserve compiler/linker diagnostics even when the test runner uses warn=2.
+  out <- suppressWarnings(system2(
     file.path(R.home("bin"), "R"),
-    c("CMD", "SHLIB", shQuote(basename(src))),
+    c("CMD", "SHLIB", "-o", shQuote(paste0(dll_name, .Platform$dynlib.ext)),
+      shQuote(c(basename(src), companions))),
     stdout = TRUE, stderr = TRUE
-  )
+  ))
   so <- file.path(sub_dir, paste0(dll_name, .Platform$dynlib.ext))
   if (!is.null(attr(out, "status")) || !file.exists(so)) {
     stop("R CMD SHLIB failed for ", dll_name, ":\n", paste(out, collapse = "\n"), call. = FALSE)
@@ -136,6 +148,9 @@ noh_compile_dll <- function(c_lines, dll_name, parent_dir) {
 
 noh_populate_env_from_pkg <- function(env, pkg_root = NULL, keep.source = FALSE) {
   if (!is.null(pkg_root)) {
+    # Match the real namespace's importFrom(stats, setNames) before factories
+    # are evaluated in this otherwise base-parented synthetic owner.
+    env$setNames <- stats::setNames
     r_files <- sort(list.files(file.path(pkg_root, "R"), pattern = "\\.[rR]$", full.names = TRUE))
     for (p in r_files) {
       sys.source(p, envir = env, keep.source = keep.source)
@@ -224,8 +239,8 @@ test_that("1. Native symbol table cache follows current owner across same-basena
   noh_unload_all_cdid_dlls()
 
   c_lines <- readLines(c_src)
-  so_a <- noh_compile_dll(c_lines, "cdid", work_dir)
-  so_b <- noh_compile_dll(c_lines, "cdid", work_dir)
+  so_a <- noh_compile_dll(c_lines, "cdid", work_dir, source_dir = dirname(c_src))
+  so_b <- noh_compile_dll(c_lines, "cdid", work_dir, source_dir = dirname(c_src))
   expect_false(identical(so_a, so_b))
 
   dll_a <- dyn.load(so_a)
@@ -275,6 +290,15 @@ test_that("1. Native symbol table cache follows current owner across same-basena
     expect_identical(syms_b1[[nm]], addrs_b[[nm]], info = nm)
     expect_identical(syms_b2[[nm]], addrs_b[[nm]], info = nm)
     expect_false(identical(syms_a2[[nm]], syms_b2[[nm]]), info = nm)
+    # The actual fixed-name dispatch closures use these owners' admitted
+    # addresses even when both loaded DLLs have the same cdid basename.
+    for (item in list(list(syms = syms_a2, address = addrs_a[[nm]]),
+                      list(syms = syms_b2, address = addrs_b[[nm]]))) {
+      call <- attr(item$syms, "calls")[[nm]]
+      expect_true(is.function(call), info = nm)
+      expect_identical(body(call)[[2L]], as.name(nm), info = nm)
+      expect_identical(get(nm, environment(call), inherits = FALSE), item$address, info = nm)
+    }
   }
   expect_identical(ns_a$gmm_native_backend_info()$dll_path, dll_a[["path"]])
   expect_identical(ns_b$gmm_native_backend_info()$dll_path, dll_b[["path"]])
@@ -348,8 +372,8 @@ test_that("2. Unload/reload, missing-DLL, deparsed standalone probe, and invalid
 
   # 2c. Load two valid DLLs, warm namespace ns_a on dll_a, then unload dll_a while dll_b stays loaded
   c_lines <- readLines(c_src)
-  so_a <- noh_compile_dll(c_lines, "cdid", work_dir)
-  so_b <- noh_compile_dll(c_lines, "cdid", work_dir)
+  so_a <- noh_compile_dll(c_lines, "cdid", work_dir, source_dir = dirname(c_src))
+  so_b <- noh_compile_dll(c_lines, "cdid", work_dir, source_dir = dirname(c_src))
   dll_a <- dyn.load(so_a)
   dll_b <- dyn.load(so_b)
 
@@ -382,7 +406,7 @@ test_that("2. Unload/reload, missing-DLL, deparsed standalone probe, and invalid
 
   # 2d. Mutant A: missing `C_gmm_iv_mat_product` registration
   mut_missing <- c_lines[!grepl("\\{\"C_gmm_iv_mat_product\"", c_lines)]
-  so_missing <- noh_compile_dll(mut_missing, "cdid", work_dir)
+  so_missing <- noh_compile_dll(mut_missing, "cdid", work_dir, source_dir = dirname(c_src))
   dll_missing <- dyn.load(so_missing)
   err_m1 <- expect_error(src_env$gmm_require_native_dll(), class = "cdid_gmm_native_error")
   expect_match(conditionMessage(err_m1), "missing required registered `.Call` routines")
@@ -394,7 +418,7 @@ test_that("2. Unload/reload, missing-DLL, deparsed standalone probe, and invalid
     "{\"C_gmm_iv_dot\", (DL_FUNC) &C_gmm_iv_dot, 2},",
     c_lines, fixed = TRUE
   )
-  so_arity <- noh_compile_dll(mut_arity, "cdid", work_dir)
+  so_arity <- noh_compile_dll(mut_arity, "cdid", work_dir, source_dir = dirname(c_src))
   dll_arity <- dyn.load(so_arity)
   err_m2 <- expect_error(src_env$gmm_require_native_dll(), class = "cdid_gmm_native_error")
   expect_match(conditionMessage(err_m2), "Native symbol registration/forcing verification failed for `C_gmm_iv_dot`")
@@ -406,7 +430,7 @@ test_that("2. Unload/reload, missing-DLL, deparsed standalone probe, and invalid
     "SET_STRING_ELT(names, 2, Rf_mkChar(\"force_symbols\"));\n  SET_VECTOR_ELT(out, 2, Rf_ScalarLogical(0));",
     paste(c_lines, collapse = "\n"), fixed = TRUE
   )
-  so_status <- noh_compile_dll(strsplit(mut_status, "\n", fixed = TRUE)[[1L]], "cdid", work_dir)
+  so_status <- noh_compile_dll(strsplit(mut_status, "\n", fixed = TRUE)[[1L]], "cdid", work_dir, source_dir = dirname(c_src))
   dll_status <- dyn.load(so_status)
   err_m3 <- expect_error(src_env$gmm_require_native_dll(), class = "cdid_gmm_native_error")
   expect_match(conditionMessage(err_m3), "Native C backend arithmetic/registration status check failed")
@@ -431,7 +455,7 @@ test_that("3. Live hardware FP rounding and subnormal-flush changes are caught o
   }, add = TRUE)
 
   noh_unload_all_cdid_dlls()
-  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir)
+  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir, source_dir = dirname(c_src))
   dll_prod <- dyn.load(so_prod)
   src_env <- noh_load_source_owner_env(pkg_root)
 
@@ -569,7 +593,7 @@ test_that("4. Owner seal identity, mutated/mismatched owner refusals, ALTREP com
   }, add = TRUE)
 
   noh_unload_all_cdid_dlls()
-  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir)
+  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir, source_dir = dirname(c_src))
   dll_prod <- dyn.load(so_prod)
   ns <- noh_make_mock_namespace("cdid", dll_info = dll_prod, pkg_root = pkg_root)
   lockEnvironment(ns, bindings = TRUE)
@@ -674,7 +698,7 @@ test_that("5. Actual OS SIGINT in throwaway child processes is caught by C-backe
     unlink(work_dir, recursive = TRUE, force = TRUE)
   }, add = TRUE)
 
-  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir)
+  so_prod <- noh_compile_dll(readLines(c_src), "cdid", work_dir, source_dir = dirname(c_src))
   rscript_bin <- file.path(R.home("bin"), "Rscript")
 
   run_child_sigint_probe <- function(mode_label, loop_lines) {
@@ -855,6 +879,11 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # eligible unweighted unit replays through the two-pass native accumulator.
     # The exact changed-body set is unchanged; the current pin binds both deltas.
     cp08_changed_bodies <- "project_gmm_if_stream"
+    # PR11 changes only dispatch in these existing bodies. C registration,
+    # kernels, immutable original references and scientific checks are intact.
+    registered_call_changed_bodies <- c("certify_symmetric_eigen_bounds", "gmm_iv_dot",
+      "gmm_iv_mat_product", "gmm_iv_mat_residual", "gmm_iv_norm",
+      "gmm_native_backend_info", "gmm_sexp_aliases")
     actual_changed_formals <- orig_core_names[vapply(orig_core_names, function(nm)
       !identical(formals(get(nm, e_cand_core)), formals(get(nm, e_orig_core))), logical(1))]
     actual_changed_bodies <- orig_core_names[vapply(orig_core_names, function(nm)
@@ -862,7 +891,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
         body(utils::removeSource(get(nm, e_orig_core)))), logical(1))]
     expect_identical(actual_changed_formals, names(d28_formal_additions))
     expect_identical(actual_changed_bodies,
-      sort(c("gmm_require_native_dll", d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies)))
+      sort(c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies)))
     # Historical D28-only core SHA256 (before the accepted CP03 gauge delta):
     # 5f1fd263e702fecfe8ccc04e9005d83a3e67ce265bc5be418df7fe38e0e23b7e
     # Historical CP08 cache-stage whole-core pin (not the current source):
@@ -870,9 +899,10 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # Earlier CP03 acceptance remains in cp03_backend_acceptance.json.
     # Historical sharedX_unit_integration.json pin:
     # 93adc0e289ba55f84b4cd8c1c79d8127f0d5f95d58f423cc6f61146cbaa02a38.
-    # Current accepted pin (post_validation_fixes_20261029/CONFIRMED_PINS.json):
+    # PR11 candidate pin: owner-bound fixed registered dispatch only beyond
+    # the accepted core; independent installed acceptance remains required.
     expect_identical(digest::digest(file = file.path(pkg_root, "R", "chained_gmm_core.R"), algo = "sha256"),
-      "c1b5f022ac8d7771c5ef6eb8c1e0b1148182ab244668408cb124090ffe74ea3f")
+      "2ca9f1b2dba7b82e8153d9de2970140d32b3db30e133c8b14526b977e57f4e01")
     for (nm in orig_core_names) {
       vo <- get(nm, envir = e_orig_core, inherits = FALSE)
       vc <- get(nm, envir = e_cand_core, inherits = FALSE)
@@ -887,7 +917,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
         expect_identical(formals(vc)[names(additions)], additions,
           info = paste0("core_added_defaults_", ks, "_", nm))
       }
-      if (!(nm %in% c("gmm_require_native_dll", d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies))) {
+      if (!(nm %in% c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies))) {
         expect_identical(body(vc), body(vo), info = paste0("core_body_", ks, "_", nm))
       }
     }
@@ -1000,9 +1030,13 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # accepted CP04 owner SHA: 518a9b09057389dbdb03f0be5f01f97b07630595ce66cd1612ffd8aaa05071c8.
     # Historical common_context_integration.json owner SHA:
     # 8b27a3b1ceac5643731803f657943d45ae9e1112d8141247102ca9741e57fa63.
-    # Current accepted owner pin including the complete-support exact rate = 1 delta:
+    # Issue 8 candidate: the only further owner delta is the already allowed
+    # construct_ipw_link_view body, dispatching to the admitted private CP04
+    # incomplete-pair support cache. The original scanner and reference stay
+    # byte-identical; test-cp04-pair-support-cache.R checks uncached parity.
+    # This exact candidate pin requires independent acceptance before integration.
     expect_identical(digest::digest(file = file.path(pkg_root, "R", "chained_ipw_owner.R"), algo = "sha256"),
-      "b68487d7d16cc3546e6a4beb4b2f0cdf9e53cee6526691ba46405e4db1260e78")
+      "a75c743194168caad38cb0ef3285afb9fe1c383370d1eeadcf5566316e390a63")
     for (nm in orig_own_names) {
       vo <- get(nm, envir = e_orig_own, inherits = FALSE)
       vc <- get(nm, envir = e_cand_own, inherits = FALSE)
@@ -1050,7 +1084,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
   # 6b. Bit-for-bit numerical equivalence between original and candidate C + R implementations
   noh_unload_all_cdid_dlls()
   so_orig <- noh_compile_dll(readLines(file.path(ref_root, "src", "cdid.c")), "cdid", work_dir)
-  so_cand <- noh_compile_dll(readLines(c_src), "cdid", work_dir)
+  so_cand <- noh_compile_dll(readLines(c_src), "cdid", work_dir, source_dir = dirname(c_src))
   dll_orig <- dyn.load(so_orig)
   dll_cand <- dyn.load(so_cand)
 

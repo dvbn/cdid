@@ -8,15 +8,15 @@ import argparse, csv, datetime, fractions, hashlib, itertools, json, math, os, p
 CDID_ATT_GT_FORMALS = ("yname", "tname", "idname", "gname", "xformla", "data", "panel", "allow_unbalanced_panel", "control_group",
     "anticipation", "weightsname", "fix_weights", "alp", "bstrap", "cband", "biters", "clustervars", "est_method", "base_period", "faster_mode", "print_details", "pl", "cores", "compute_inffunc", "mode", "frame", "selection",
     "selection_model", "selection_pooling", "selection_xformla", "selection_universe", "selection_rho",
-    "selection_justification", "selection_est_method", "imputation_pooling", "gmm_weighting", "gmm_covariance", "pt_assumption", "pt_start", "control")
+    "selection_justification", "selection_est_method", "imputation_pooling", "gmm_weighting", "gmm_covariance", "pt_assumption", "pt_start", "control", "outcome_pooling")
 DID_ATT_GT_FORMALS = ("yname", "tname", "idname", "gname", "xformla", "data", "panel", "allow_unbalanced_panel", "control_group",
     "anticipation", "weightsname", "fix_weights", "alp", "bstrap", "cband", "biters", "clustervars", "est_method", "base_period", "faster_mode", "print_details", "pl", "cores", "compute_inffunc")
 CDID_AGGTE_FORMALS = ("MP", "type", "balance_e", "min_e", "max_e", "na.rm", "bstrap", "biters", "cband", "alp", "clustervars")
 CDID_PRETEST_FORMALS = ("yname", "tname", "idname", "gname", "xformla", "data", "panel", "allow_unbalanced_panel", "control_group", "weightsname", "alp", "bstrap", "cband", "biters", "clustervars", "est_method", "print_details", "pl",
     "cores", "anticipation", "base_period", "fix_weights", "mode", "frame", "selection", "selection_model", "selection_pooling", "selection_xformla", "selection_universe", "selection_rho", "selection_justification",
-    "selection_est_method", "imputation_pooling", "control")
+    "selection_est_method", "imputation_pooling", "control", "outcome_pooling")
 CHAINED_ONLY_ARGS = ("frame", "selection", "selection_model", "selection_pooling", "selection_xformla", "selection_universe", "selection_rho", "selection_justification", "selection_est_method", "imputation_pooling", "gmm_weighting",
-    "gmm_covariance", "pt_assumption", "pt_start", "control")
+    "gmm_covariance", "pt_assumption", "pt_start", "control", "outcome_pooling")
 PRETEST_EXCLUDED_ARGS = ("pt_assumption", "pt_start", "gmm_weighting", "gmm_covariance", "compute_inffunc", "allow_unbalanced_panel")
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -82,6 +82,9 @@ def build_effective_fit_args(recipe_row: dict, cell_arg_str: str):
     for k, v in sweep_kv.items():
         args[k] = v
     flags, cell_kv = parse_r_args_string(cell_arg_str)
+    # This existing campaign tests the historical shared-slope specification.
+    # Pin it explicitly now that public OR/DR defaults to separate fits.
+    args["outcome_pooling"] = '"pooled"'
     if "UPSTREAM_ONLY" in flags:
         for drop_k in ("allow_unbalanced_panel",) + CHAINED_ONLY_ARGS:
             args.pop(drop_k, None)

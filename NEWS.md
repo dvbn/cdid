@@ -1,3 +1,21 @@
+# cdid 1.2.0.0
+
+* Extend the augmented missing-outcome correction (`selection_est_method = "dr"`) to treatment IPW and OR, alongside treatment DR. Each method fits only its active treatment models and carries the complete observation, imputation and active treatment-model uncertainty through inference. The two method choices remain independent.
+* Extend bounded comparison and score reuse to augmented treatment IPW and both outcome-regression specifications, retaining each fitted model and all original-unit inference contributions.
+
+* Add `outcome_pooling` to chained `att_gt()` and `conditional_did_pretest()`. The default, `"separate"`, fits the untreated outcome-change regression separately for each distinct comparison. Identical comparisons reuse their fitted regression. This changes the default working outcome model for treatment OR and DR and can change estimates and inference. Set `outcome_pooling = "pooled"` to retain the shared-slope specification of version 1.1.0.1.
+* Apply the same outcome choice to observation-weighted, imputed and augmented changes. `selection_pooling` continues to control observation probabilities; `imputation_pooling` continues to control actual-change imputation. Neither is changed by `outcome_pooling`.
+* Carry comparison-specific regression uncertainty through the original-unit influence functions, aggregation and conditional pretrend test. Separate regressions retain prediction-preserving alias handling and report insufficient control support without switching to pooling.
+* Batch eligible complete and incomplete panel calculations for IPW, OR and DR, reusing fixed operators and sparse data reads while preserving comparison-specific coefficients and original-unit inference.
+* Reuse identical treatment propensity fits and their inference calculations across comparisons with the same fitting inputs, including imputed and augmented changes. Comparison-specific models and reported records are retained.
+* Reuse already computed original-unit influence-function rows between covariance and GMM calculations when workspace permits, and store observed-change and cohort inputs in bounded blocks for augmented estimation. Estimates, covariance and inference are unchanged by this reuse.
+* Account for workspace by fitting, covariance and reporting phase, retaining configured limits and releasing temporary inference buffers before later phases. Correct the final diagnostic memory check so released buffers contribute to the historical peak rather than current memory use.
+* Reduce repeated diagnostic counting for modeled missingness while retaining the same reported records and resource bounds.
+* Update native object, attribute and binding access for newer R releases while retaining version-specific code for older R versions.
+* Use registered native entry points bound to the owning library, and release temporary inference buffers through private mutable storage without unlocking R bindings.
+* Update help and the practical guide to explain the two outcome specifications. Historical article outputs retain their recorded versions and explicitly request the pooled specification where used.
+* Clarify direct GitHub installation, source-build tools and local R troubleshooting, with the current dependency requirements.
+
 # cdid 1.1.0.1
 
 * Require DRDID 1.4.0 or later. Its upstream correction fixes the pre-period outcome-regression contribution to ordinary DR repeated-cross-section inference, including ordinary unbalanced-panel paths. Point estimates are unchanged by that sign correction. Ordinary mode continues to delegate to did; chained estimation is unchanged.

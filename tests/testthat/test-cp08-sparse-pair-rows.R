@@ -127,7 +127,8 @@ sp_counting <- function() {
   e <- new.env(parent = api)
   f <- api$cp04_pair_rows; environment(f) <- e; assign("cp04_pair_rows", f, e)
   n <- new.env(parent = emptyenv()); n$calls <- 0L
-  addr <- api$cp04_pair_rows_native_kernel()
+  addr <- cdid_test_native_address(api$cp04_pair_rows_native_kernel())
+  e$cp04_pair_rows_native_kernel <- cdid_test_native_calls_in(api$cp04_pair_rows_native_kernel, e)
   e$.Call <- function(.NAME, ...) {
     if (identical(.NAME, addr)) n$calls <- n$calls + 1L
     base::.Call(.NAME, ...)
@@ -226,7 +227,7 @@ test_that("the native join equals the frozen helper and an independent keyed joi
 
 test_that("kernel positions follow the scalar search path and malformed arguments refuse before any read", {
   k <- api$cp04_pair_rows_native_kernel()
-  call <- function(a, pa, po, bounds, read = TRUE, max = 1e7) .Call(k, a, pa, po, bounds, read, max)
+  call <- function(a, pa, po, bounds, read = TRUE, max = 1e7) k(a, pa, po, bounds, read, max)
   # Date 1 occupies postings 1..4, date 2 postings 5..9 with a duplicated A-unit 6.
   pa <- c(1L, 3L, 4L, 6L, 2L, 3L, 6L, 6L, 7L); po <- 101:109; bd <- c(1L, 4L, 5L, 9L)
   a <- c(6L, 0L, 3L, 5L, 6L, 1L, 7L)
@@ -276,7 +277,7 @@ test_that("kernel positions follow the scalar search path and malformed argument
   dll <- getLoadedDLLs()[["cdid"]]
   reg <- getDLLRegisteredRoutines(dll, addNames = TRUE)[[".Call"]]
   expect_identical(reg[["C_gmm_cp08_sparse_pair_rows"]]$numParameters, 6L)
-  expect_identical(k, getNativeSymbolInfo("C_gmm_cp08_sparse_pair_rows", PACKAGE = dll)$address)
+  expect_identical(cdid_test_native_address(k), getNativeSymbolInfo("C_gmm_cp08_sparse_pair_rows", PACKAGE = dll)$address)
   expect_identical(api$cp04_pair_rows_native_kernel(), k)
   cloned <- api$cp04_pair_rows_native_kernel; environment(cloned) <- new.env(parent = api)
   expect_identical(cloned(), k)
@@ -399,9 +400,9 @@ test_that("sparse admission preserves no-A short circuit, negative legacy rows a
   k <- api$cp04_pair_rows_native_kernel()
   # Both tables are compact sequences; a tiny query reads only search paths.
   a <- seq_len(1000000L)
-  got <- .Call(k, 17L, a, a, c(1L, 1000000L, 1L, 1000000L), TRUE, 6)
+  got <- k(17L, a, a, c(1L, 1000000L, 1L, 1000000L), TRUE, 6)
   expect_identical(got, list(obs = 1L, pos_s = 17L, pos_t = 17L))
-  expect_error(.Call(k, 17L, a, a, c(1L, 1000000L, 1L, 1000000L), TRUE, 5), class = "cdid_gmm_bound_error")
+  expect_error(k(17L, a, a, c(1L, 1000000L, 1L, 1000000L), TRUE, 5), class = "cdid_gmm_bound_error")
   long <- seq_len(2^31)
   expect_false(api$cp04_pair_rows_native_ok(1L, list(post_a_index = long, post_obs_index = long), c(1L, 1L, 1L, 1L), FALSE))
 })
@@ -411,7 +412,7 @@ test_that("NULL native entry bound is unbounded while finite live-output boundar
   k <- api$cp04_pair_rows_native_kernel()
   pa <- c(1L, 3L, 4L, 6L, 2L, 3L, 6L, 6L, 7L); po <- 101:109
   bd <- c(1L, 4L, 5L, 9L); a <- c(6L, 0L, 3L, 5L, 6L, 1L, 7L)
-  call <- function(read, bound) .Call(k, a, pa, po, bd, read, bound)
+  call <- function(read, bound) k(a, pa, po, bd, read, bound)
   for (read in c(FALSE, TRUE)) {
     expected <- list(obs = c(1L, 3L, 5L),
       pos_s = if (read) c(104L, 102L, 104L) else NULL,
@@ -421,6 +422,45 @@ test_that("NULL native entry bound is unbounded while finite live-output boundar
   }
   expect_error(call(TRUE, 29), class = "cdid_gmm_bound_error")
   expect_identical(call(TRUE, 30)$obs, c(1L, 3L, 5L))
-  expect_error(.Call(k, 6L, pa, po, bd, TRUE, 5), class = "cdid_gmm_bound_error")
-  expect_identical(.Call(k, 6L, pa, po, bd, TRUE, 6), list(obs = 1L, pos_s = 104L, pos_t = 107L))
+  expect_error(k(6L, pa, po, bd, TRUE, 5), class = "cdid_gmm_bound_error")
+  expect_identical(k(6L, pa, po, bd, TRUE, 6), list(obs = 1L, pos_s = 104L, pos_t = 107L))
+})
+
+test_that("sparse pair kernel verifies the DLL once and uses its already checked alias symbol", {
+  require_dll <- api$gmm_require_native_dll
+  cache <- new.env(parent = emptyenv())
+  checked <- 0L
+  local_mocked_bindings(cp04_pair_rows_native_cache = cache,
+    gmm_require_native_dll = function() {
+      checked <<- checked + 1L
+      require_dll()
+    },
+    gmm_sexp_aliases = function(...) stop("Redundant native-DLL lookup through the alias wrapper."),
+    .package = "cdid")
+  first <- api$cp04_pair_rows_native_kernel()
+  second <- api$cp04_pair_rows_native_kernel()
+  expect_identical(first, second)
+  expect_identical(checked, 2L)
+  # A different symbol-list object cannot reuse the cached binding merely
+  # because its values resemble the current DLL's symbols.
+  hit <- get("C_gmm_cp08_sparse_pair_rows", cache, inherits = FALSE)
+  hit$syms <- c(hit$syms, list(foreign = NULL))
+  assign("C_gmm_cp08_sparse_pair_rows", hit, cache)
+  third <- api$cp04_pair_rows_native_kernel()
+  expect_identical(third, first)
+  expect_identical(checked, 3L)
+  syms <- require_dll()
+  refreshed <- get("C_gmm_cp08_sparse_pair_rows", cache, inherits = FALSE)
+  expect_true(.Call(syms$C_gmm_sexp_aliases, refreshed$syms, syms))
+  query <- c(2L, 0L, 1L); posting <- c(1L, 2L, 1L, 2L)
+  positions <- 101:104; bounds <- c(1L, 2L, 3L, 4L)
+  expect_identical(third(query, posting, positions, bounds, TRUE, 15),
+    list(obs = c(1L, 3L), pos_s = c(102L, 101L), pos_t = c(104L, 103L)))
+  expect_error(third(query, posting, positions, bounds, TRUE, 14), class = "cdid_gmm_bound_error")
+  # A live verification failure propagates even when a cache hit exists.
+  fails_live_check <- function() {
+    local_mocked_bindings(gmm_require_native_dll = function() stop("live DLL verification failure"), .package = "cdid")
+    expect_error(api$cp04_pair_rows_native_kernel(), "live DLL verification failure", fixed = TRUE)
+  }
+  fails_live_check()
 })

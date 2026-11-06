@@ -62,7 +62,8 @@ att_gt(
   gmm_covariance = "tikhonov",
   pt_assumption = c("post", "all"),
   pt_start = NULL,
-  control = NULL
+  control = NULL,
+  outcome_pooling = "separate"
 )
 }
 \arguments{
@@ -148,8 +149,8 @@ both \code{"pair_logit"} and \code{"independent_period_logit"}:
 cell-specific intercepts when the selection formula includes an intercept), or
 \code{"across_cohorts"} (one shared slope vector across all active cells, with
 cell-specific intercepts when the selection formula includes an intercept).
-Pooling restricts selection slopes only; shared outcome-regression slopes and
-local scientific-block intercepts are unchanged. Inactive and never evaluated
+Pooling restricts selection slopes only; \code{outcome_pooling} independently
+controls counterfactual outcome-regression slopes. Inactive and never evaluated
 under \code{selection_est_method = "imputation"}, which uses
 \code{imputation_pooling} instead. Under \code{selection_est_method = "dr"} it
 pools the observation-probability slopes and is independent of
@@ -165,11 +166,23 @@ with \code{selection_rho = NULL}, known cohorts and complete \code{xformla}
 covariates on every F row, and a built-in \code{est_method}; it fits no
 observation-probability model, so \code{selection_model},
 \code{selection_pooling} and \code{selection_xformla} are inactive and never
-evaluated. \code{"dr"} has the same declaration requirements, is implemented
-with \code{est_method = "dr"} only (\code{"ipw"}, \code{"reg"} and custom
-callbacks are refused before the data are evaluated; nothing is substituted)
-and uses every probability-model and imputation argument. Ordinary mode neither
+evaluated. \code{"dr"} has the same declaration requirements, supports built-in
+\code{est_method = "ipw"}, \code{"reg"} or \code{"dr"}; custom callbacks
+remain unavailable. It uses every probability-model and imputation argument.
+Treatment IPW fits no counterfactual regression; treatment OR fits no treatment
+propensity; treatment DR fits both. Ordinary mode neither
 evaluates nor forwards it.}
+\item{outcome_pooling}{Chained counterfactual outcome regression for
+\code{est_method = "reg"} or \code{"dr"}: \code{"separate"} (default)
+fits coefficients for each distinct date-pair/control-group comparison;
+\code{"pooled"} shares slopes per stored-calendar step across comparisons,
+with local intercepts when \code{xformla} includes an intercept. Reference
+covariates and sampling weights are part of the comparison's fit identity.
+Identical fits are reused. This setting is independent of
+\code{selection_pooling} and \code{imputation_pooling}; it changes neither
+treatment IPW nor ordinary mode. See \sQuote{Control-mean outcome regression
+and doubly robust estimation}.}
+
 \item{imputation_pooling}{Slope pooling of the actual-change imputation model,
 used only when \code{selection_est_method = "imputation"} or \code{"dr"}
 (otherwise it is never evaluated): \code{"separate"} (default; one slope vector per actual cohort/pair
@@ -302,9 +315,9 @@ Refusals are explicit errors inheriting \code{"cdid_error"}:
 \itemize{
   \item \code{"cdid_chained_unavailable"}, also inheriting
     \code{"cdid_chained_request_est_method"}, for unsupported string chained requests.
-  \item \code{"cdid_chained_unavailable"}, also inheriting
-    \code{"cdid_chained_request_unsupported_selection"}, for the not implemented
-    \code{selection_est_method = "dr"} with \code{est_method = "ipw"} or \code{"reg"}.
+  \item \code{"cdid_chained_request_unsupported_selection"} for unsupported
+    missing-outcome correction requests, including custom callbacks with
+    imputation or the augmented correction.
   \item \code{"cdid_custom_ipw_error"} for malformed or nonfinite custom callback outputs.
   \item \code{"cdid_chained_panel"} if \code{panel} is not \code{TRUE}.
   \item \code{"cdid_chained_balanced"} for an explicit
@@ -457,9 +470,10 @@ missing required value is refused with its id, date, variable and support
 transform state are evaluated once on the canonical required (date, id) rows
 of all post and both auxiliary report families; \code{selection_xformla} keeps
 its own design. Rates, repeat rates, selection cells, treatment logits,
-imputation cells and shared-OR blocks are keyed by recipe (design date,
-weight anchor) and fitted once; the shared OR keeps one global slope on
-\eqn{L_e z}, and selection or imputation pooling never crosses recipes. Custom
+imputation cells and counterfactual regression blocks are keyed by recipe
+(design date, weight anchor) and fitted once. Separate outcome regressions
+keep block-specific slopes; \code{outcome_pooling="pooled"} shares a global
+slope on \eqn{L_e z}. Selection or imputation pooling never crosses recipes. Custom
 callbacks receive the recipe design and \eqn{W_g / r_G}. Every influence
 function has one row per original unit with all rate, selection, imputation,
 treatment and outcome-regression channels. A frame value cannot override data
@@ -620,75 +634,74 @@ for this branch. Finite tests and the demo do not establish inference coverage.
 }
 
 \section{Control-mean outcome regression and doubly robust estimation}{
-Explicit \code{est_method="reg"} uses the built-in panel shared one-period
-outcome-change control-mean regression with \code{selection="none"} or explicit
-conditional-MTAR (\code{selection="conditional_mtar"} / legacy \code{"corollary1"})
-selection. Default or explicit \code{est_method="dr"} composes the treatment-DR
-extension of this shared one-period outcome-change control-mean regression and
-residualized Hajek IPW over deduplicated risk-set treatment propensity logits
-from the same public \code{xformla}, keeping the full un-reduced treatment and
-selection designs while applying OR alias preprocessing only to the outcome
-regression recipe. For \code{est_method="reg"}, no treatment propensity or treated outcome
-regression is fitted. Across all qualified catalog and auxiliary comparison
-links, a single joint weighted least-squares regression (\code{n_regression_fits = 1})
-fits one shared slope vector \eqn{\beta} on the duration-scaled covariate design
-\eqn{d_{e,i} = L_e z_i} together with one local intercept \eqn{\alpha_b} per
-unique pair/control-pool block \eqn{b} (\code{n_regression_blocks}) when
-\code{xformla} includes an intercept. Here \eqn{L_e = i_t - i_s} is the
-stored-calendar transition count between ordered calendar positions
-\eqn{i_s < i_t}, never raw subtraction \eqn{t - s} of arbitrary numeric date
-labels. Baseline weights are the fixed unit weight divided by that cohort's
-actual-pair response rate among repeat observers; Corollary1 uses the same
-reader, logit and known transport declaration described above. Each target link
-is the normalized weighted target-cohort residual mean
-\eqn{\hat{\mu}_\ell = \sum_{i \in S_\ell} q_{\ell,i}(\Delta Y_{e,i} - \hat{\alpha}_{b(\ell)} - L_{e(\ell)} z_i'\hat{\beta}) / \sum_{i \in S_\ell} q_{\ell,i}}.
-All original comparisons and fixed-horizon moments enter the existing GMM,
-sandwich, aggregation, multiplier and unrestricted pretest paths.
+Explicit \code{est_method="reg"} uses control-mean outcome-change regression.
+Default or explicit \code{est_method="dr"} combines that regression with
+residualized Hajek IPW using the risk-set treatment logits from
+\code{xformla}. Treatment and selection designs retain their own columns;
+outcome alias preprocessing applies only to the outcome regression. Treatment
+OR fits no treatment propensity or treated outcome regression.
 
-Actual \code{stats::terms} and \code{assign} metadata determine whether the
-outcome formula includes an intercept and map retained columns into the outcome
-recipe. Intercept-only (\code{~1}) fits local block intercepts with zero shared
-slopes; no-intercept (\code{~0 + x}) fits raw uncentered shared slopes without
-local block intercepts (\code{n_local_intercepts = 0}); an explicitly named
-\code{`(Intercept)`} variable is preserved as an ordinary shared slope when the
-formula has no intercept. When a constant slope column is aliased with a
-formula intercept, the intercept is retained so the model preserves local block
-intercepts plus duration-scaled slopes.
+With \code{outcome_pooling="separate"} (default), each unique comparison
+block \eqn{b} has its own slope vector \eqn{\beta_b} and, when the formula
+includes an intercept, its own intercept \eqn{\alpha_b}. A block is a date
+pair and control group with its reference covariates, weights and nuisance
+context. Repeated requests for the same fit reuse it. Explicit
+\code{outcome_pooling="pooled"} fits one shared slope vector \eqn{\beta}
+with local block intercepts, preserving the earlier outcome model. Both fits
+use the qualified catalog and auxiliary comparisons.
 
-A common outcome-design basis is frozen before fitting or differentiation.
-Standard R \code{lm.fit} pivoted QR (default tolerance \code{1e-7}) proposes
-aliases. Each proposal is checked on every repeat-observer control and treated
-prediction row. The maximum absolute reconstruction discrepancy is recorded;
-the maximum scaled discrepancy is checked at arithmetic roundoff
-(\code{64 * .Machine$double.eps} times the original column count).
-This is a numerical diagnostic, not an exact-arithmetic or effect-error
-certificate. A proposal with nontrivial reconstruction discrepancy retains that
-original column. Selection predictor columns are unchanged. In the joint
-pooled control fit, any remaining pooled-control null direction is accepted
-only if it reconstructs all active control and treated prediction rows to
-arithmetic roundoff; a locally rank-deficient control block remains supported
-when the pooled control design across blocks identifies the shared slopes. The
-compact pooled control fit separately checks its final reduced QR relative
-diagonal against the recorded R regression tolerance. This criterion refuses
-globally rank-deficient or near-collinear reduced fits without dropping further
-columns, observations or moments. Original, retained and aliased names and the
-frozen reconstruction maps are recorded in \code{chained$outcome_design} and
-\code{chained$nuisance_diagnostics$basis}; source formula and its environment
-remain in \code{DIDparams$xformla}. A dropped coordinate is not an identifying
-assumption that its original coefficient is zero.
+The design is \eqn{d_{e,i}=L_e z_i}, where \eqn{L_e=i_t-i_s} counts transitions
+between stored-calendar positions, never raw subtraction of numeric date
+labels. In separate mode \eqn{L_e} is constant within a fit, so it only rescales
+that block's coefficients. Pooled mode instead restricts covariate slopes to
+be proportional to this duration. Pooling is an outcome-model restriction,
+not an additional parallel-trends assumption.
 
-Outcome covariates need only be complete on repeat observers. Baseline uses a
-reader for all study units without fitting any selection model; Corollary1 retains
-all F identities, including off-A nuisance effects. Every streamed IF link
-batch includes global shared-slope dependencies on all F rows, and cluster
-inference sums original unit rows. Public diagnostics (\code{chained$nuisance_diagnostics})
-report the shared slopes, block local intercepts, fitted catalog, duration
-convention, global QR factor (retained once) and compact per-block records
-(describing local intercept blocks of the single joint fit, not independent
-regression fits), charging the complete diagnostic copy against the existing
-finite resource limits. Control-only support/rank and conditioning failures are
-computation failures, not population ATT nonidentification claims. No public OR
-tolerance override, automatic fallback or numerical accuracy certificate is supplied.
+For baseline and observation-weighted OR, the target link is the normalized
+weighted target-cohort residual mean
+\eqn{\hat\mu_\ell=\sum_{i\in S_\ell}q_{\ell,i}(\Delta Y_{e,i}-\hat\alpha_{b(\ell)}-L_{e(\ell)}z_i'\hat\beta_{b(\ell)})/\sum_{i\in S_\ell}q_{\ell,i}},
+with a common \eqn{\hat\beta} in pooled mode. Baseline weights divide fixed
+unit weights by each cohort's pair response rate among repeat observers.
+Conditional observation weighting retains the declared probability model,
+fitting population and known transport information. Imputation and augmented
+correction apply the same counterfactual regression choice to reconstructed
+actual changes; their actual-change models remain controlled independently by
+\code{imputation_pooling}.
+
+Actual \code{stats::terms} and \code{assign} metadata determine intercepts
+and retained columns. Intercept-only \code{~1} uses block means without slopes;
+\code{~0+x} uses uncentered slopes without intercepts. An explicitly named
+\code{`(Intercept)`} variable is a slope column when the formula has no
+intercept. No intercept is silently added.
+
+Standard pivoted QR (default tolerance \code{1e-7}) proposes aliased columns.
+Each proposal must reconstruct every required control and treated prediction
+row at arithmetic roundoff (\code{64*.Machine$double.eps} times the original
+column count). A nontrivial discrepancy retains the original column. The
+reduced regression still must pass its rank and conditioning checks. Separate
+fits check each block's prediction support; pooled fits can identify a shared
+slope across blocks. There is no automatic switch from separate to pooled,
+regularization of the outcome regression, or removal of observations or
+moments to obtain a fit. Removing a redundant column changes the
+parameterization, not an assumption about its original coefficient.
+
+Static outcome covariates are needed on repeat observers for baseline and
+observation-weighted routes. Dated designs use the required reference rows.
+Imputation and augmented correction require their designs over the relevant
+complete unit table. Every original unit retains all its nuisance contributions,
+including units with zero or one observed outcome. Cluster inference sums these
+original-unit influence functions. Separate coefficients do not make fits on
+overlapping units statistically independent.
+
+The fitted mode and compact regression records are reported in
+\code{chained$selection} and \code{chained$nuisance_diagnostics}, with
+retained bases and duration conventions. OR/DR influence functions include the
+estimated outcome coefficients and all active observation, imputation, rate
+and treatment nuisance paths. All original comparisons, GMM, aggregation,
+multiplier inference and pretrend reporting remain. Support or conditioning
+failures of an active regression are computation failures; they do not by
+themselves prove population ATT nonidentification. No numerical accuracy
+certificate or additional public outcome-regression tolerance is introduced.
 }
 
 \section{Pure actual-change imputation}{
@@ -707,16 +720,16 @@ unobserved changes only), with the empirical repeat rates \eqn{a_k} on F.
 The treatment method then uses these reconstructions: \code{est_method = "ipw"}
 fits the risk-set treatment propensity logits with synthetic weights
 \eqn{w a_k} and no counterfactual outcome regression; \code{est_method = "reg"}
-fits the shared one-period counterfactual control outcome-change regression
-(local block intercepts when declared by \code{xformla}, with slopes shared
-across blocks on the retained basis) to the imputed synthetic control
-changes and no treatment logit; \code{est_method = "dr"} fits both. The
+fits the counterfactual control outcome-change regression to the imputed
+synthetic control changes, with separate or shared slopes according to
+\code{outcome_pooling} and local intercepts when declared by \code{xformla},
+and no treatment logit; \code{est_method = "dr"} fits both. The
 counterfactual regression is a second model, distinct from the actual-change
 imputation model, although both use \code{xformla}.
 
 \code{xformla} is evaluated on every F row, including frame-only, singleton and
 zero-observation units; no common repeat-observer alias reduction is applied.
-Each imputation pooling group and the shared counterfactual regression apply
+Each imputation pooling group and each counterfactual regression group apply
 their own QR alias/support preprocessing on their fitting rows with
 prediction-row alias verification; the treatment logit keeps the raw columns
 with the existing rank and separation refusals. Intercept-only and no-intercept
@@ -726,9 +739,11 @@ group refuses; nothing is pooled automatically.
 Sufficient (not necessary) conditions: actual-pair conditional mean trend-MAR
 on F for every needed cell, positive cohort and cell masses, a correct linear
 actual-change mean within each pooling group, and in addition a correct
-synthetic treatment logit (\code{"ipw"}), a correct shared counterfactual
-control-mean regression across all blocks (\code{"reg"}) or either of the two
+synthetic treatment logit (\code{"ipw"}), a correct counterfactual control-mean
+regression in the relevant block (\code{"reg"}) or either of the two
 (\code{"dr"}), with PT/no anticipation and the fixed-weight population law.
+When \code{outcome_pooling="pooled"}, the counterfactual model must be correct
+across its shared blocks. For actual-change \code{imputation_pooling},
 \code{"separate"} is the flexible default; \code{"within_cohort"} and
 \code{"across_cohorts"} are explicit restrictions that can be misspecified, for
 example under heterogeneous treated dynamics. No observation-probability model,
@@ -754,7 +769,7 @@ the next section. No numerical certificate or coverage claim is made.
 \section{Augmented observation correction}{
 With \code{selection = "conditional_mtar"} (or the legacy direct-pair alias
 \code{"corollary1"}), \code{selection_est_method = "dr"} and
-\code{est_method = "dr"}, every needed actual cohort/pair cell \eqn{c = (k, e)}
+built-in \code{est_method = "ipw"}, \code{"reg"} or \code{"dr"}, every needed actual cohort/pair cell \eqn{c = (k, e)}
 is reconstructed by
 \deqn{\widehat Z_c = \widehat j_c(X) + S_e \{\Delta_e - \widehat j_c(X)\} / \widehat q_c(W),}{Zhat_c = jhat_c(X) + S_e (Delta_e - jhat_c(X)) / qhat_c(W),}
 combining the actual-change imputation \eqn{\widehat j_c}{jhat_c} of the previous section
@@ -764,11 +779,12 @@ observation probability \eqn{\widehat q_c}{qhat_c} of the conditional-MTAR secti
 cohort). \eqn{\Delta_e} and \eqn{1/\widehat q_c}{1/qhat_c} are evaluated only on observed
 pairs (\eqn{S_e = 1}); the residual term is not renormalized, \eqn{\widehat q}{qhat} enters
 only through the floored inverse \eqn{1/\max(\widehat q, 10^{-6})}{1/max(qhat, 1e-6)}
-(see Probability clipping), and no fill-only rule is used. The repeat rates \eqn{a_k}, the risk-set
-treatment propensity logits on the unit masses \eqn{w a_k}, the shared
-counterfactual control-mean regression (now fitted to \eqn{\widehat Z}{Zhat} over every
-deduplicated block) and both normalizers are those of the pure-imputation DR
-route. It is one estimator, not an average of the weighted and imputed estimates,
+(see Probability clipping), and no fill-only rule is used. The repeat rates \eqn{a_k}, synthetic unit masses \eqn{w a_k},
+and normalizers retain the pure-imputation conventions. Treatment IPW uses
+risk-set treatment propensity logits and no counterfactual regression; OR uses
+a counterfactual control-mean regression fitted to \eqn{\widehat Z}{Zhat}
+with the requested \code{outcome_pooling}, and no treatment propensity;
+DR uses both. It is one estimator, not an average of the weighted and imputed estimates,
 and it has no general finite equality with either.
 
 Two formulas, two designs: \code{xformla} builds the imputation, counterfactual
@@ -777,10 +793,12 @@ builds the observation-probability design only (\code{NULL} inherits
 \code{xformla}), also on every F row. A variable that appears only in
 \code{selection_xformla} never enters the outcome or treatment models. Known
 cohorts and complete covariates of both formulas are required on every F row,
-including frame-only, singleton and zero-observation units. The two pooling
-arguments are independent; pair and date models, all three poolings of each
-arm, intercept-only and no-intercept formulas are supported with the existing
-alias and rank policies.
+including frame-only, singleton and zero-observation units. The three pooling
+arguments are independent: \code{selection_pooling} and
+\code{imputation_pooling} each offer separate, within-cohort and across-cohort
+slopes; \code{outcome_pooling} offers separate or pooled counterfactual slopes.
+Pair and date observation models, intercept-only and no-intercept formulas
+retain their existing alias and rank policies.
 
 Every active fit must meet its existing regularity, even where a correctness
 branch below would make it redundant: a cell whose pairs (pair model) or dates
@@ -800,17 +818,21 @@ pooling group) OR the observation arm (a correct observation model given
 \eqn{W} for every cell of its selection block; for \code{"independent_period_logit"}
 correct date logits at both endpoint blocks and conditional independence of
 the two used dates given cohort and \eqn{W}); the arms may differ across
-cells; and in addition EITHER a correct synthetic treatment propensity logit OR
-a correct shared counterfactual control-mean regression across all deduplicated
-blocks (each of whose cells then needs one arm), with PT/no anticipation and the
-fixed-weight population law. Pooling, date endpoints and the shared regression
-couple cells, so a reconstruction error in another group, block or regression
-block can move a shared coefficient. Correctness of an \code{xformla}-only
+cells; and in addition a correct synthetic treatment propensity logit for
+treatment IPW, a correct counterfactual control-mean regression for treatment
+OR, or either for treatment DR. Regression correctness concerns the relevant
+block (all shared blocks when \code{outcome_pooling="pooled"}), each of whose
+cells needs one valid reconstruction arm, with PT/no anticipation and the
+fixed-weight population law. Observation-layer robustness does not make
+treatment IPW or OR doubly robust in the treatment layer. Shared coefficients and the two endpoints of a
+date model couple cells, so a reconstruction error elsewhere in a shared
+group can affect its other predictions. Correctness of an \code{xformla}-only
 imputer alone does not establish reconstruction when variables only in
 \code{selection_xformla} shift the outcome-change mean; a correct observation
 model given \eqn{W} does. Adding selection covariates is therefore not
-automatically harmless. When both arms of a needed cell are wrong, or both the
-propensity and the regression are wrong, the link is generally biased.
+automatically harmless. When both reconstruction arms of a needed cell are
+wrong, or the selected treatment adjustment lacks its required correct model,
+the link is generally biased.
 Recovered joint ATT/GMM coordinates additionally need valid catalog moments for
 every used link and the accepted identification premises; with incompatible
 per-link pseudo-targets the limit depends on the weighting. There is no
@@ -818,7 +840,7 @@ finite-sample unbiasedness; small fitted probabilities inflate the variance.
 
 Complete original-unit influence functions on all F rows carry the
 observation-probability, imputation, repeat-rate, treatment-propensity and
-shared-regression paths and both normalizers into the existing GMM, aggregation,
+counterfactual-regression paths when active, and both normalizers into the existing GMM, aggregation,
 clustering, multiplier-band and pretest consumers with core scaling
 \eqn{\psi = (n_A/N)\phi_F}. \code{chained$selection} reports
 \code{method = "augmented"}, both method axes, \code{selection_model},

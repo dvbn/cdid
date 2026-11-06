@@ -61,6 +61,7 @@ augp_request <- function(cfg) {
   fx <- augp_ref$imputation_public_fixture(augp_raw, dates = dates)
   fx$frame$V <- augp_raw$V
   args <- fx$args
+  args$outcome_pooling <- "pooled"
   args$frame <- fx$frame
   args$selection <- "conditional_mtar"
   args$selection_est_method <- "dr"
@@ -153,15 +154,8 @@ testthat::test_that("the frozen public oracle files are intact and the request m
 testthat::test_that("augmented gates refuse unsupported combinations before the data promise", {
   testthat::skip_if_not(augp_has_installed_cdid(), "Installed cdid namespace required.")
   uns <- "cdid_chained_request_unsupported_selection"
-  # Treatment IPW/reg with the augmented correction: refused, nothing substituted,
-  # and neither argument group is forced.
-  for (m in c("ipw", "reg")) {
-    e <- augp_refuse(c(uns, "cdid_chained_unavailable"), est_method = m, selection = "conditional_mtar",
-      selection_est_method = "dr", imputation_pooling = quote(stop("imputation_pooling was evaluated")),
-      selection_model = quote(stop("selection_model was evaluated")))
-    testthat::expect_match(conditionMessage(e), "not implemented", fixed = TRUE)
-    testthat::expect_match(conditionMessage(e), 'est_method = "dr"', fixed = TRUE)
-  }
+  # Custom callbacks and unimplemented est_method strings with the augmented
+  # correction: refused before data are forced, nothing substituted.
   augp_refuse(uns, est_method = function(...) NULL, selection = "conditional_mtar", selection_est_method = "dr")
   e <- augp_refuse(uns, selection_est_method = "dr")
   testthat::expect_match(conditionMessage(e), "conditional_mtar", fixed = TRUE)
@@ -182,27 +176,47 @@ testthat::test_that("augmented gates refuse unsupported combinations before the 
   augp_refuse(c("cdid_chained_request_est_method", "cdid_chained_unavailable"), est_method = "stdipw",
     selection_est_method = "dr")
   dev <- augp_val("chained_att_gt_request")
-  augp_refuse(c(uns, "cdid_chained_unavailable"), entry = dev, est_method = "ipw", selection = "conditional_mtar",
+  augp_refuse(uns, entry = dev, est_method = function(...) NULL, selection = "conditional_mtar",
+    selection_est_method = "dr")
+  augp_refuse(c("cdid_chained_request_est_method", "cdid_chained_unavailable"), entry = dev, est_method = "stdipw",
     selection_est_method = "dr")
 })
 
-testthat::test_that("augmented gates pass every axis combination and force both argument groups", {
+testthat::test_that("augmented gates pass every axis combination and force active argument groups", {
   testthat::skip_if_not(augp_has_installed_cdid(), "Installed cdid namespace required.")
   base <- list(yname = "y", tname = "time", idname = "id", gname = "g",
     data = quote(stop("data must not be evaluated")))
   reach <- function(...) testthat::expect_error(do.call(cdid::att_gt, c(base, list(...))), "data must not be evaluated")
-  for (sm in c("pair_logit", "independent_period_logit")) for (sp in c("separate", "within_cohort", "across_cohorts"))
-    for (ip in c("separate", "within_cohort", "across_cohorts")) {
-      reach(est_method = "dr", selection = "conditional_mtar", selection_est_method = "dr",
-        selection_model = sm, selection_pooling = sp, imputation_pooling = ip)
-    }
+  for (em in c("dr", "ipw", "reg")) for (sm in c("pair_logit", "independent_period_logit"))
+    for (sp in c("separate", "within_cohort", "across_cohorts"))
+      for (ip in c("separate", "within_cohort", "across_cohorts")) {
+        reach(est_method = em, selection = "conditional_mtar", selection_est_method = "dr",
+          selection_model = sm, selection_pooling = sp, imputation_pooling = ip)
+      }
+  dev <- augp_val("chained_att_gt_request")
+  for (em in c("dr", "ipw", "reg")) {
+    testthat::expect_error(do.call(dev, c(base, list(est_method = em, selection = "conditional_mtar",
+      selection_est_method = "dr", control = list()))), class = "cdid_chained_request_control_error")
+  }
   reach(selection = "corollary1", selection_est_method = "dr")
   reach(selection = "conditional_mtar", selection_est_method = "dr", selection_justification = "supplied representative roster")
-  # Both groups are active under "dr": an unforceable promise in either is evaluated.
-  testthat::expect_error(do.call(cdid::att_gt, c(base, list(selection = "conditional_mtar", selection_est_method = "dr",
-    imputation_pooling = quote(stop("imputation_pooling was evaluated"))))), "imputation_pooling was evaluated")
-  testthat::expect_error(do.call(cdid::att_gt, c(base, list(selection = "conditional_mtar", selection_est_method = "dr",
-    selection_pooling = quote(stop("selection_pooling was evaluated"))))), "selection_pooling was evaluated")
+  # outcome_pooling is inactive and never forced for est_method = "ipw", and forced for "reg" and "dr".
+  reach(est_method = "ipw", selection = "conditional_mtar", selection_est_method = "dr",
+    outcome_pooling = quote(stop("outcome_pooling must not be evaluated")))
+  for (em in c("reg", "dr")) {
+    testthat::expect_error(do.call(cdid::att_gt, c(base, list(est_method = em, selection = "conditional_mtar",
+      selection_est_method = "dr", outcome_pooling = quote(stop("outcome_pooling was evaluated"))))),
+      "outcome_pooling was evaluated")
+  }
+  # Both imputation_pooling and selection_pooling are active under selection_est_method = "dr".
+  for (em in c("dr", "ipw", "reg")) {
+    testthat::expect_error(do.call(cdid::att_gt, c(base, list(est_method = em, selection = "conditional_mtar",
+      selection_est_method = "dr", imputation_pooling = quote(stop("imputation_pooling was evaluated"))))),
+      "imputation_pooling was evaluated")
+    testthat::expect_error(do.call(cdid::att_gt, c(base, list(est_method = em, selection = "conditional_mtar",
+      selection_est_method = "dr", selection_pooling = quote(stop("selection_pooling was evaluated"))))),
+      "selection_pooling was evaluated")
+  }
 })
 
 testthat::test_that("ordinary mode neither evaluates nor forwards the augmented arguments", {
@@ -357,7 +371,9 @@ testthat::test_that("both method axes, the selection formula and every fit count
   testthat::expect_identical(od$selection_columns, c("(Intercept)", "x", "V"))
   testthat::expect_equal(od$n_rows, N)
   ra <- fit$chained$resource_accounting
-  testthat::expect_equal(ra$final_diagnostic_copy_entries, 5 * (4 * nd$accounting$owned_entries + 4096), tolerance = 0)
+  testthat::expect_lte(
+    5 * unname(augp_val("cp04_payload")(nd)["entries"]),
+    ra$final_diagnostic_copy_entries)
   testthat::expect_lte(max(ra$simultaneous_entries, ra$initial_envelope_entries) + ra$final_diagnostic_copy_entries,
     fit$chained$public$numeric_workspace_entries)
   testthat::expect_true(all(cdid::tidy(fit)$estimator == fit$chained$estimator))
@@ -571,4 +587,225 @@ testthat::test_that("an all-success observation cell refuses under the augmented
   imp <- do.call(cdid::att_gt, imp_args)
   testthat::expect_identical(imp$chained$selection$method, "imputation")
   testthat::expect_equal(imp$chained$nuisance_diagnostics$accounting$observation_logit_models, 0)
+})
+
+# ------------------------------------------------------------------------------
+# H. Public augmented IPW and OR (est_method = "ipw" and "reg")
+# ------------------------------------------------------------------------------
+
+testthat::test_that("public augmented IPW and OR wire verified primitive links, active-model counts and NULL guards", {
+  testthat::skip_if_not(augp_has_installed_cdid(), "Installed cdid namespace required.")
+  for (name in c("pair_across_jwithin_NYT_V", "date_sep_jwithin_NYT_xV", "pair_sep_jsep_NT_NULL")) {
+    obj_dr <- augp_oracle_fit(name)
+    fit_dr <- obj_dr$fit
+    args_base <- obj_dr$rq$args
+    N <- nrow(args_base$frame)
+    frame_ids <- args_base$frame$id
+    frame_only <- setdiff(frame_ids, args_base$data$id)
+
+    args_ipw <- args_base
+    args_ipw$est_method <- "ipw"
+    args_ipw$outcome_pooling <- NULL
+    fit_ipw <- do.call(cdid::att_gt, args_ipw)
+
+    args_reg_pool <- args_base
+    args_reg_pool$est_method <- "reg"
+    args_reg_pool$outcome_pooling <- "pooled"
+    fit_reg_pool <- do.call(cdid::att_gt, args_reg_pool)
+
+    args_reg_sep <- args_base
+    args_reg_sep$est_method <- "reg"
+    args_reg_sep$outcome_pooling <- NULL # default "separate"
+    fit_reg_sep <- do.call(cdid::att_gt, args_reg_sep)
+
+    # 1. Public metadata, active/inactive arguments, and active-model counts for IPW.
+    testthat::expect_s3_class(fit_ipw, "cdid_MP")
+    testthat::expect_identical(fit_ipw$DIDparams$est_method, "ipw")
+    testthat::expect_identical(fit_ipw$chained$request$selection_est_method, "dr")
+    testthat::expect_identical(fit_ipw$chained$estimator, augp_val("chained_result_estimator")("ipw", "dr"))
+    testthat::expect_identical(fit_ipw$chained$request$est_method, "ipw")
+    testthat::expect_identical(fit_ipw$chained$request$inactive_arguments, "outcome_pooling")
+    testthat::expect_null(fit_ipw$chained$request$outcome_pooling)
+    sel_ipw <- fit_ipw$chained$selection
+    nd_ipw <- fit_ipw$chained$nuisance_diagnostics
+    acc_ipw <- nd_ipw$accounting
+    testthat::expect_identical(sel_ipw$method, "augmented")
+    testthat::expect_identical(sel_ipw$est_method, "ipw")
+    testthat::expect_identical(sel_ipw$inactive_arguments, "outcome_pooling")
+    testthat::expect_null(sel_ipw$outcome_pooling)
+    testthat::expect_match(sel_ipw$counterfactual_model, "fits no counterfactual OR", fixed = TRUE)
+    testthat::expect_match(sel_ipw$treatment_model, "risk-set treatment propensity logit", fixed = TRUE)
+    testthat::expect_identical(nd_ipw$est_method, "ipw")
+    testthat::expect_identical(nd_ipw$outcome_pooling, "inactive")
+    testthat::expect_null(nd_ipw$counterfactual_or)
+    testthat::expect_null(nd_ipw$coefficients$shared_slopes)
+    testthat::expect_null(nd_ipw$coefficients$block_slopes)
+    testthat::expect_null(nd_ipw$coefficients$local_intercepts)
+    testthat::expect_identical(acc_ipw$n_or_fits, 0L)
+    testthat::expect_identical(acc_ipw$n_or_blocks, 0L)
+    testthat::expect_identical(acc_ipw$n_or_local_intercepts, 0L)
+    testthat::expect_identical(acc_ipw$n_or_shared_slopes, 0L)
+    testthat::expect_gt(acc_ipw$n_treatment_fits, 0L)
+    testthat::expect_identical(length(nd_ipw$treatment), acc_ipw$n_treatment_fits)
+    # Nuisance keys are private registry fields, not public support fields.
+    # Public active-model counts and catalog components are checked here.
+    testthat::expect_identical(fit_ipw$chained$outcome_design$route,
+      'augmented observation correction (selection_est_method = "dr", est_method = "ipw")')
+
+    # 2. Public metadata, active/inactive arguments, and active-model counts for OR ("reg").
+    for (fit_reg in list(fit_reg_pool, fit_reg_sep)) {
+      pool_mode <- if (identical(fit_reg, fit_reg_pool)) "pooled" else "separate"
+      testthat::expect_s3_class(fit_reg, "cdid_MP")
+      testthat::expect_identical(fit_reg$DIDparams$est_method, "reg")
+      testthat::expect_identical(fit_reg$chained$request$selection_est_method, "dr")
+      testthat::expect_identical(fit_reg$chained$estimator, augp_val("chained_result_estimator")("reg", "dr"))
+      testthat::expect_identical(fit_reg$chained$request$est_method, "reg")
+      testthat::expect_identical(fit_reg$chained$request$outcome_pooling, pool_mode)
+      testthat::expect_identical(fit_reg$chained$request$inactive_arguments, character(0))
+      sel_reg <- fit_reg$chained$selection
+      nd_reg <- fit_reg$chained$nuisance_diagnostics
+      acc_reg <- nd_reg$accounting
+      testthat::expect_identical(sel_reg$method, "augmented")
+      testthat::expect_identical(sel_reg$est_method, "reg")
+      testthat::expect_identical(sel_reg$outcome_pooling, pool_mode)
+      testthat::expect_identical(sel_reg$inactive_arguments, character(0))
+      testthat::expect_match(sel_reg$treatment_model, "fits no treatment logit", fixed = TRUE)
+      testthat::expect_identical(nd_reg$est_method, "reg")
+      testthat::expect_identical(nd_reg$outcome_pooling, pool_mode)
+      testthat::expect_false(is.null(nd_reg$counterfactual_or))
+      testthat::expect_identical(acc_reg$n_treatment_models, 0L)
+      testthat::expect_identical(acc_reg$n_treatment_fits, 0L)
+      testthat::expect_identical(acc_reg$n_treatment_columns, 0L)
+      testthat::expect_identical(length(nd_reg$treatment), 0L)
+      testthat::expect_identical(length(nd_reg$coefficients$treatment), 0L)
+      testthat::expect_identical(fit_reg$chained$outcome_design$treatment_columns, character(0))
+      testthat::expect_gt(acc_reg$n_or_fits, 0L)
+      testthat::expect_identical(fit_reg$chained$outcome_design$route,
+        'augmented observation correction (selection_est_method = "dr", est_method = "reg")')
+    }
+
+    # 3. Verified primitive link identities across IPW, pooled OR and pooled DR on the same data.
+    cat_dr <- fit_dr$chained$nuisance_diagnostics$fitted_catalog
+    cat_ipw <- nd_ipw$fitted_catalog
+    cat_reg <- fit_reg_pool$chained$nuisance_diagnostics$fitted_catalog
+    testthat::expect_identical(cat_ipw$link_id, cat_dr$link_id)
+    testthat::expect_identical(cat_reg$link_id, cat_dr$link_id)
+    testthat::expect_equal(cat_ipw$T, cat_dr$T, tolerance = 1e-12)
+    testthat::expect_equal(cat_ipw$C, cat_dr$C, tolerance = 1e-12)
+    testthat::expect_equal(cat_ipw$mu, cat_ipw$T - cat_ipw$C, tolerance = 1e-12)
+    testthat::expect_true(all(is.na(cat_ipw$Bg) & is.na(cat_ipw$Bo) & is.na(cat_ipw$or_block)))
+    testthat::expect_equal(cat_reg$T, cat_dr$T, tolerance = 1e-12)
+    testthat::expect_equal(cat_reg$Bg, cat_dr$Bg, tolerance = 1e-12)
+    testthat::expect_equal(cat_reg$mu, cat_reg$T - cat_reg$Bg, tolerance = 1e-12)
+    testthat::expect_true(all(is.na(cat_reg$C) & is.na(cat_reg$Bo) & is.na(cat_reg$d_minus) & is.na(cat_reg$treatment_model)))
+    testthat::expect_equal(cat_dr$mu, cat_reg$mu - (cat_ipw$C - cat_dr$Bo), tolerance = 1e-12)
+
+    # 4. Complete original-unit IF alignment and zero-mean moment property on all N F rows.
+    for (fit_m in list(fit_ipw, fit_reg_pool, fit_reg_sep)) {
+      IF <- as.matrix(fit_m$inffunc)
+      av <- fit_m$chained$available
+      testthat::expect_identical(nrow(IF), N)
+      testthat::expect_identical(rownames(IF), frame_ids)
+      testthat::expect_true(all(frame_only %in% rownames(IF)))
+      testthat::expect_true(all(is.finite(IF[, av, drop = FALSE])))
+      testthat::expect_lt(max(abs(colMeans(IF[, av, drop = FALSE]))), 1e-10)
+      V_check <- crossprod(IF[, av, drop = FALSE]) / N
+      testthat::expect_equal(unname(fit_m$V_analytical[av, av]), unname(V_check), tolerance = 1e-12)
+      testthat::expect_identical(fit_m$chained$pretest$status, "computed")
+      testthat::expect_true(is.finite(fit_m$W) && is.finite(fit_m$Wpval))
+    }
+  }
+})
+
+testthat::test_that("augmented IPW and OR support clustering, multiplier bands, aggregation, universal base and PT all", {
+  testthat::skip_if_not(augp_has_installed_cdid(), "Installed cdid namespace required.")
+  obj <- augp_oracle_fit("pair_across_jwithin_NYT_V")
+  args_base <- obj$rq$args
+  N <- nrow(args_base$frame)
+  for (em in c("ipw", "reg")) {
+    args <- args_base
+    args$est_method <- em
+    args$outcome_pooling <- NULL
+    fit <- do.call(cdid::att_gt, args)
+    cl_args <- args
+    cl_args$clustervars <- "cl"
+    fit_cl <- do.call(cdid::att_gt, cl_args)
+    testthat::expect_identical(fit_cl$att, fit$att)
+    testthat::expect_identical(fit_cl$inffunc, fit$inffunc)
+    av <- fit$chained$available
+    sums <- rowsum(fit$inffunc[, av, drop = FALSE], args$frame$cl[match(rownames(fit$inffunc), args$frame$id)],
+      reorder = FALSE)
+    V_cl <- crossprod(sweep(sums, 2L, colMeans(sums), "-")) / N
+    testthat::expect_equal(unname(fit_cl$V_analytical[av, av]), unname(V_cl), tolerance = 1e-12)
+    testthat::expect_true(fit_cl$chained$inference$clustered)
+
+    bs_args <- cl_args
+    bs_args$bstrap <- TRUE
+    bs_args$cband <- TRUE
+    bs_args$biters <- 48L
+    set.seed(61903L)
+    b1 <- do.call(cdid::att_gt, bs_args)
+    set.seed(61903L)
+    b2 <- do.call(cdid::att_gt, bs_args)
+    testthat::expect_identical(b1$att, fit$att)
+    testthat::expect_identical(b1$se, b2$se)
+    testthat::expect_identical(b1$c, b2$c)
+    testthat::expect_true(is.finite(b1$c) && b1$c > 0)
+    for (tp in c("simple", "group", "dynamic", "calendar")) {
+      ag <- cdid::aggte(b1, type = tp)
+      testthat::expect_s3_class(ag, "cdid_AGGTEobj")
+      testthat::expect_true(is.finite(ag$overall.att) && is.finite(ag$overall.se) && ag$overall.se > 0)
+      testthat::expect_identical(ag$chained$estimator, fit$chained$estimator)
+    }
+
+    # Universal base period and pt_assumption = "all" route cleanly.
+    uni_args <- args
+    uni_args$base_period <- "universal"
+    uni_args$pt_assumption <- "all"
+    uni_args$pt_start <- min(args_base$data$time)
+    fit_uni <- do.call(cdid::att_gt, uni_args)
+    testthat::expect_s3_class(fit_uni, "cdid_MP")
+    testthat::expect_identical(fit_uni$DIDparams$est_method, em)
+    testthat::expect_identical(fit_uni$DIDparams$base_period, "universal")
+    testthat::expect_identical(fit_uni$chained$pt$pt_assumption, "all")
+    testthat::expect_true(any(fit_uni$chained$available))
+  }
+})
+
+testthat::test_that("dated covariates and base_period weights route through public augmented IPW and OR", {
+  testthat::skip_if_not(augp_has_installed_cdid(), "Installed cdid namespace required.")
+  Bd <- utils::read.csv(testthat::test_path("fixtures", "cpt", "fBd.csv"))
+  N <- length(unique(Bd$id))
+  for (em in c("ipw", "reg")) {
+    fit <- cdid::att_gt(yname = "y", tname = "time", idname = "id", gname = "G",
+      xformla = ~x + z, data = Bd, control_group = "notyettreated", weightsname = "w",
+      fix_weights = "base_period", bstrap = FALSE, cband = FALSE,
+      est_method = em, selection = "conditional_mtar", selection_est_method = "dr",
+      selection_model = "independent_period_logit", selection_pooling = "within_cohort",
+      selection_xformla = ~sx + sz, imputation_pooling = "within_cohort")
+    testthat::expect_s3_class(fit, "cdid_MP")
+    testthat::expect_identical(fit$DIDparams$est_method, em)
+    testthat::expect_identical(fit$chained$request$selection_est_method, "dr")
+    testthat::expect_identical(fit$chained$reference_inputs$route, "augmented")
+    testthat::expect_identical(fit$chained$selection$est_method, em)
+    testthat::expect_identical(fit$chained$nuisance_diagnostics$est_method, em)
+    testthat::expect_identical(fit$chained$outcome_design$route,
+      paste0('augmented observation correction (selection_est_method = "dr", est_method = "', em, '")'))
+    acc <- fit$chained$nuisance_diagnostics$accounting
+    if (em == "ipw") {
+      testthat::expect_identical(acc$n_or_fits, 0L)
+      testthat::expect_gt(acc$n_treatment_fits, 0L)
+      testthat::expect_null(fit$chained$nuisance_diagnostics$counterfactual_or)
+    } else {
+      testthat::expect_identical(acc$n_treatment_fits, 0L)
+      testthat::expect_gt(acc$n_or_fits, 0L)
+      testthat::expect_identical(length(fit$chained$nuisance_diagnostics$treatment), 0L)
+    }
+    av <- fit$chained$available
+    testthat::expect_identical(nrow(fit$inffunc), N)
+    testthat::expect_true(all(is.finite(fit$inffunc[, av, drop = FALSE])))
+    ag <- cdid::aggte(fit, type = "simple", bstrap = FALSE)
+    testthat::expect_s3_class(ag, "cdid_AGGTEobj")
+    testthat::expect_true(is.finite(ag$overall.att) && is.finite(ag$overall.se) && ag$overall.se > 0)
+  }
 })

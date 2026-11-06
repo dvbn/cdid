@@ -39,7 +39,8 @@
     "gmm_covariance",
     "pt_assumption",
     "pt_start",
-    "control"
+    "control",
+    "outcome_pooling"
   ],
   "DID_ATT_GT_FORMALS": [
     "yname",
@@ -114,6 +115,7 @@
     "selection_justification",
     "selection_est_method",
     "imputation_pooling",
-    "control"
+    "control",
+    "outcome_pooling"
   ]
 }

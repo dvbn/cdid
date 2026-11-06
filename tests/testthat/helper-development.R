@@ -12,3 +12,22 @@ local({
     sys.source(file.path(dev_dir, f), envir = parent.env(environment()))
   }
 })
+
+# Registered calls are fixed-arity closures. Keep test spies at the real .Call
+# boundary, with their symbols copied from the admitted owner's binding env.
+cdid_test_native_address <- function(kernel) {
+  get(as.character(body(kernel)[[2L]]), environment(kernel), inherits = FALSE)
+}
+cdid_test_native_calls_in <- function(resolver, owner) {
+  force(resolver); force(owner)
+  function(...) {
+    kernel <- resolver(...)
+    bindings <- new.env(parent = owner)
+    symbols <- environment(kernel)
+    for (nm in ls(symbols, all.names = TRUE))
+      assign(nm, get(nm, symbols, inherits = FALSE), bindings)
+    lockEnvironment(bindings, bindings = TRUE)
+    environment(kernel) <- bindings
+    kernel
+  }
+}

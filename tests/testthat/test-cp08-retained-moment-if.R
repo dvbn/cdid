@@ -205,8 +205,15 @@ rm_expect_retained <- function(res, info = NULL) {
 }
 rm_rebind <- function(env, nm, value) {
   old <- get(nm, envir = env)
-  unlockBinding(nm, env); assign(nm, value, envir = env); lockBinding(nm, env)
-  function() { unlockBinding(nm, env); assign(nm, old, envir = env); lockBinding(nm, env) }
+  locked <- bindingIsLocked(nm, env)
+  if (locked) unlockBinding(nm, env)
+  assign(nm, value, envir = env)
+  if (locked) lockBinding(nm, env)
+  function() {
+    if (locked) unlockBinding(nm, env)
+    assign(nm, old, envir = env)
+    if (locked) lockBinding(nm, env)
+  }
 }
 # Collect every batch a producer hands to its callback.
 rm_collect <- function(producer, links, B, scale = "core") {
@@ -492,8 +499,8 @@ test_that("retained slices equal the producer chunks and every mutant or rebindi
     fresh()
     expect_identical(length(rm_collect(bound, links, B)), length(filled)) # fresh valid store serves
     ids <- store$id
-    expect_true(bindingIsLocked("id", store))
-    invisible(rm_rebind(store, "id", rev(ids)))                         # locked ID snapshot mutant
+    expect_false(bindingIsLocked("id", store))
+    invisible(rm_rebind(store, "id", rev(ids)))                         # mutable lifetime ID snapshot mutant
     expect_identical(refused(bound), 0L)
     fresh()
     lam <- store$lambda

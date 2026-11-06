@@ -32,8 +32,8 @@ main <- function() {
     stop("--project must be the cdid checkout root containing validation/setup.R.")
   identity <- read.dcf(file.path(project, "DESCRIPTION"), fields = c("Package", "Version"))[1L, ]
   if (!identical(unname(identity[["Package"]]), "cdid") ||
-      !identical(unname(identity[["Version"]]), "1.1.0.1"))
-    stop("--project must select a cdid 1.1.0.1 source checkout.")
+      !identical(unname(identity[["Version"]]), "1.2.0.0"))
+    stop("--project must select a cdid 1.2.0.0 source checkout.")
   receipt_dir <- file.path(project, "validation", "setup-receipts")
   if (!dir.exists(receipt_dir) && !dir.create(receipt_dir))
     stop("Cannot create project-local receipt directory.")
@@ -76,9 +76,9 @@ main <- function() {
     fields <- c("Package", "Version", "Depends", "Imports", "LinkingTo")
     description <- function(path) as.list(read.dcf(path, fields = fields)[1L, ])
     cdid <- description(file.path(project, "DESCRIPTION"))
-    pins <- c(DRDID = "1.4.0", did = "2.5.1", cdid = "1.1.0.1")
+    pins <- c(DRDID = "1.4.0", did = "2.5.1", cdid = "1.2.0.0")
     if (!identical(cdid$Package, "cdid") || !identical(cdid$Version, pins[["cdid"]]))
-      stop("Expected selected cdid source version 1.1.0.1.")
+      stop("Expected selected cdid source version 1.2.0.0.")
     if (!all(file.exists(file.path(project, c("NAMESPACE", "R", "src")))))
       stop("A complete cdid source checkout, including compiled src, is required.")
     native_files <- list.files(file.path(project, "src"), recursive = TRUE, all.files = TRUE)

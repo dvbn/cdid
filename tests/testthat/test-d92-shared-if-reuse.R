@@ -111,7 +111,11 @@ d92_counting_ns <- function(legacy_plan = FALSE, force_stream = FALSE, cap = NUL
     reserve_fn <- get("cp04_retained_if_reserve", e)
     e$cp04_retained_if_reserve <- function(..., control) {
       control$max_retained_entries <- cap
-      reserve_fn(..., control = control)
+      out <- reserve_fn(..., control = control)
+      n$whole_lifetime_cap <- cap
+      n$whole_lifetime_status <- if (is.null(out)) "streamed" else "retained"
+      n$whole_lifetime_total <- if (is.null(out)) NULL else out$admission_total
+      out
     }
   }
   e$n <- n
@@ -166,9 +170,10 @@ d92_expect_parity <- function(a, b, info = NULL) {
 }
 
 d92_run_public <- function(d, chunk = 5L, ns = api, ...) {
+  # The shared/global coefficient and beta-only checks retain their pooled model.
   ns$att_gt(
     yname = "y", tname = "time", idname = "id", gname = "G", data = d,
-    bstrap = FALSE, cband = FALSE, control = list(chunk_rows = chunk), ...
+    bstrap = FALSE, cband = FALSE, outcome_pooling = "pooled", control = list(chunk_rows = chunk), ...
   )
 }
 
@@ -378,13 +383,60 @@ test_that("tight-cap decline, error-path release, and LAST callback mutation che
     total <- rec0$admission_total_entries
     expect_identical(rec0$status, "retained", info = rt$nm)
 
-    # Exact cap admits; one entry below declines cleanly to ordinary streaming.
+    # These caps apply specifically to the whole-lifetime reservation. A
+    # declined static augmented route has a separate covariance/GMM lifetime.
     e_at <- d92_counting_ns(cap = total)
     e_lo <- d92_counting_ns(cap = total - 1)
+    if (rt$nm == "augmented_dr") {
+      transfer <- api$cp04_retained_if_covariance_to_gmm
+      e_lo$cp04_retained_if_covariance_to_gmm <- function(store, backend, links, chunk_rows,
+          retained, work, control) {
+        # Independent boundary expression from test-covariance-gmm-transfer.R.
+        # Exercise both exact caps on the actual filled store, before GMM.
+        peak <- max(chunk_rows, store$B)
+        boundary <- api$cp04_retained_if_boundary_cost(backend, links, peak)
+        entries <- 1024 + max(store$entries,
+          api$cp04_retained_if_entries(store$N, store$L, peak) + boundary$entries)
+        transfer_total <- retained + backend$accounting$owned_entries +
+          backend$accounting$borrowed_entries + entries
+        original <- store$phi; raw_ref <- store$raw_ref
+        names_before <- ls(store, all.names = TRUE)
+        exact <- control
+        exact$max_retained_entries <- transfer_total - 1
+        exact$max_matrix_entries <- transfer_total - 1
+        expect_null(transfer(store, backend, links, chunk_rows, retained, work, exact))
+        expect_identical(ls(store, all.names = TRUE), names_before)
+        expect_identical(store$state, "filled")
+        expect_true(api$gmm_sexp_aliases(store$phi, original))
+        exact$max_retained_entries <- transfer_total
+        exact$max_matrix_entries <- transfer_total
+        out <- transfer(store, backend, links, chunk_rows, retained, work, exact)
+        expect_identical(out, store)
+        expect_true(api$gmm_sexp_aliases(out$phi, original))
+        expect_identical(out$raw_ref, raw_ref)
+        expect_identical(out$gmm_transfer$admission_total, transfer_total)
+        expect_identical(out$producer_passes, 1L)
+        expect_identical(out$slice_passes, 1L)
+        e_lo$n$transfer_boundary_checked <- TRUE
+        out
+      }
+    }
     do.call(d92_run_public, c(list(d = d_static, chunk = 5L, ns = e_at), rt$args))
     do.call(d92_run_public, c(list(d = d_static, chunk = 5L, ns = e_lo), rt$args))
     expect_identical(e_at$n$last_pipeline$resource_accounting$point_producer$retained_moment_if$status, "retained", info = rt$nm)
-    expect_identical(e_lo$n$last_pipeline$resource_accounting$point_producer$retained_moment_if$status, "streamed", info = rt$nm)
+    expect_identical(e_at$n$whole_lifetime_cap, total)
+    expect_identical(e_at$n$whole_lifetime_total, total)
+    expect_identical(e_at$n$whole_lifetime_status, "retained", info = rt$nm)
+    expect_identical(e_lo$n$whole_lifetime_cap, total - 1)
+    expect_identical(e_lo$n$whole_lifetime_status, "streamed", info = rt$nm)
+    below <- e_lo$n$last_pipeline$resource_accounting$point_producer$retained_moment_if
+    if (rt$nm == "augmented_dr") {
+      expect_true(e_lo$n$transfer_boundary_checked)
+      expect_identical(below$status, "retained")
+      expect_identical(below$mode, "covariance_to_gmm")
+      expect_identical(below$producer_passes, 1L)
+      expect_identical(below$slice_passes, 3L)
+    } else expect_identical(below$status, "streamed", info = rt$nm)
     d92_expect_parity(res0, e_at$n$last_pipeline, info = paste(rt$nm, "at cap"))
     d92_expect_parity(res0, e_lo$n$last_pipeline, info = paste(rt$nm, "below cap"))
 

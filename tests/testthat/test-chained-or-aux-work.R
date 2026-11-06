@@ -46,10 +46,14 @@ aux_work_assignment <- function() {
 }
 aux_work_account <- function(fx, bp, retained) {
   r <- fx$registry
+  reporting_retained <- retained
   scope <- list2env(list(nuis_res = r, cp04 = TRUE, active_backend = r$cp04,
     cp04_auto_plan = inherits(r$cp04, c("cdid_or_corollary1", "cdid_dr_corollary1", "cdid_dr_baseline")),
     use_raw_ipw = FALSE, aux_sel_bp = r$cp04_aux$selections[[bp]],
     aux_ids = r$cp04_aux_index[!is.na(r$cp04_aux_index)], bp_mode = bp,
+    # Match the real caller's reporting phase and its same-registry V5 adjustment.
+    reporting_retained = reporting_retained,
+    cp04_reporting_retained = aux_work_ns("cp04_registry_retained_entries")(r, reporting_retained),
     retained_with_diagnostics = retained, n_total = fx$N, ledger = fx$ledger),
     parent = asNamespace("cdid"))
   value <- eval(aux_work_assignment(), scope)

@@ -83,7 +83,9 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
         with:
           dependencies: '"all"'
-          extra-packages: any::rcmdcheck
+          extra-packages: |
+            any::rcmdcheck
+            any::V8
           install-quarto: false
           cache: false
       - name: Install font metrics used by the R help manual
@@ -107,6 +109,43 @@ jobs:
       - name: Install qpdf on Windows
         if: runner.os == 'Windows'
         run: choco install qpdf -y --no-progress
+      - name: Install and verify HTML help validators
+        shell: Rscript {0}
+        run: |
+          # CI tools only: use the same stable Tidy on every platform rather
+          # than a missing or obsolete system binary (notably on macOS).
+          stopifnot(requireNamespace("V8", quietly = TRUE))
+          context <- V8::v8()
+          stopifnot(identical(context$eval("1 + 1"), "2"))
+          root <- file.path(Sys.getenv("RUNNER_TEMP"), "cdid-html-tools")
+          dir.create(root, recursive = TRUE, showWarnings = FALSE)
+          archive <- file.path(root, "tidy-5.8.0.tar.gz")
+          download.file("https://github.com/htacg/tidy-html5/archive/refs/tags/5.8.0.tar.gz", archive, mode = "wb")
+          stopifnot(identical(digest::digest(file = archive, algo = "sha256"),
+                             "59c86d5b2e452f63c5cdb29c866a12a4c55b1741d7025cf2f3ce0cde99b0660e"))
+          untar(archive, exdir = root)
+          source <- file.path(root, "tidy-html5-5.8.0")
+          build <- file.path(root, "build")
+          prefix <- file.path(root, "install")
+          cmake <- Sys.which("cmake")
+          stopifnot(nzchar(cmake))
+          run_cmake <- function(args) {
+            status <- system2(cmake, vapply(args, shQuote, character(1)))
+            stopifnot(identical(status, 0L))
+          }
+          run_cmake(c("-S", source, "-B", build,
+                      "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+                      "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIB=OFF",
+                      "-DTIDY_CONSOLE_SHARED=OFF", "-DBUILD_TAB2SPACE=OFF"))
+          run_cmake(c("--build", build, "--config", "Release", "--parallel", "2"))
+          run_cmake(c("--install", build, "--config", "Release", "--prefix", prefix))
+          tidy <- file.path(prefix, "bin", if (.Platform$OS.type == "windows") "tidy.exe" else "tidy")
+          tidy <- normalizePath(tidy, winslash = "/", mustWork = TRUE)
+          version <- system2(tidy, "--version", stdout = TRUE, stderr = TRUE)
+          stopifnot(is.null(attr(version, "status")), any(grepl("5.8.0", version, fixed = TRUE)))
+          cat(paste0("R_TIDYCMD=", tidy, "\n"), file = Sys.getenv("GITHUB_ENV"), append = TRUE)
+          cat("Tidy:", tidy, "\n", paste(version, collapse = "\n"),
+              "\nV8:", as.character(packageVersion("V8")), "\n")
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: source-archive
@@ -124,14 +163,14 @@ jobs:
             hash <- digest::digest(file = archive, algo = "sha256")
             expected <- strsplit(readLines("source-archive/SHA256SUMS"), " ")[[1L]][1L]
             stopifnot(identical(hash, expected))
-            writeLines(c(paste("Archive SHA256:", hash), paste("rcmdcheck version:", as.character(utils::packageVersion("rcmdcheck"))), capture.output(sessionInfo())), "check/environment.txt")
+            writeLines(c(paste("Archive SHA256:", hash), paste("rcmdcheck version:", as.character(utils::packageVersion("rcmdcheck"))), paste("HTML Tidy:", Sys.getenv("R_TIDYCMD")), paste("V8 version:", as.character(utils::packageVersion("V8"))), capture.output(sessionInfo())), "check/environment.txt")
             result <- rcmdcheck::rcmdcheck(path = archive, args = "--as-cran", check_dir = "check", timeout = 120 * 60, error_on = "never")
             saveRDS(result, "check/result.rds")
             writeLines(result$stdout, "check/stdout.txt")
             writeLines(result$stderr, "check/stderr.txt")
             writeLines(capture.output(print(result)), "check/summary.txt")
-            if (isTRUE(result$timeout) || result$status != 0L || length(result$errors) || length(result$warnings)) {
-              stop("R CMD check failed; see the retained logs and result.rds")
+            if (isTRUE(result$timeout) || result$status != 0L || length(result$errors) || length(result$warnings) || length(result$notes)) {
+              stop("R CMD check requires zero errors, warnings and notes; see the retained logs and result.rds")
             }
           }, error = function(e) {
             writeLines(conditionMessage(e), "check/exception.txt")

@@ -390,7 +390,7 @@ test_that("malformed design and descriptor shapes refuse with typed bound errors
     a <- list(po$observations$y, post$date_start, post$post_a_index, post$post_obs_index, 1L, 7L, pos_k, gj_k,
       w_k, r_k, odds_k, sb_k, Z_k, plan$link_dates, plan$link_par, plan$dimnames, TRUE, plan$max_output_entries)
     edits <- list(...); for (j in names(edits)) a[[as.integer(j)]] <- edits[[j]]
-    do.call(.Call, c(list(kern), a))
+    do.call(kern, a)
   }
   good <- call()
   expect_identical(good$status, c(0L, 0L, 0L))
@@ -685,7 +685,7 @@ test_that("general-p loading products preserve exact R primitive arithmetic and 
     z <- matrix(cases[[nm]]$z, nrow = 1L); l <- cases[[nm]]$l
     par <- matrix(c(0,0,1,1,l,0,0), ncol = 1L); before <- unserialize(serialize(list(z,par),NULL))
     ref <- unname(drop(z %*% l))
-    r <- .Call(kern, rep(0.0,length(po$observations$y)), post$date_start, post$post_a_index, post$post_obs_index,
+    r <- kern(rep(0.0,length(po$observations$y)), post$date_start, post$post_a_index, post$post_obs_index,
       1L,1L,1L,1L,1.0,1.0,1.0,1.0,z,plan$link_dates[,1L,drop=FALSE],par,list(NULL,"probe"),TRUE,1e6)
     expect_identical(colnames(r$beta_score), "probe", info = nm)
     expect_identical(unname(r$beta_score[1L,1L]), ref, info = nm)

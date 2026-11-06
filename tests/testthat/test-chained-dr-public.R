@@ -1,6 +1,15 @@
 # Public integration tests for D48 CP07: chained doubly robust (DR) estimation
 # via public att_gt(..., est_method = "dr", mode = "chained") and aggte().
 
+# Import only the diagnostic witness definition, without sibling fixtures/tests.
+drp_diagnostic_copy_witness <- local({
+  defs <- parse(testthat::test_path("test-chained-or-public.R"), keep.source = FALSE)
+  hit <- which(vapply(defs, function(x) is.call(x) && identical(x[[1L]], as.name("<-")) &&
+    identical(x[[2L]], as.name("orp_diagnostic_copy_witness")), logical(1L)))
+  stopifnot(length(hit) == 1L)
+  eval(defs[[hit]])
+})
+
 drp_has_installed_cdid <- function() {
   if (exists("or_public_helpers", inherits = TRUE)) return(FALSE)
   isNamespaceLoaded("cdid") || requireNamespace("cdid", quietly = TRUE)
@@ -66,7 +75,7 @@ drp_public_fixture <- function(route = "none",
     tb <- drp_trans[drp_trans$route == route, ]
     frame$rho <- tb$rho[match(paste(d$cohort, d$x), paste(tb$cohort, tb$x))]
   }
-  args <- list(
+  args <- list(outcome_pooling = "pooled",
     yname = "y", tname = "time", idname = "id", gname = "g",
     data = data, frame = frame, xformla = xformla, weightsname = "w",
     est_method = est_method, control_group = "nevertreated",
@@ -198,6 +207,7 @@ testthat::test_that("public att_gt default est_method = 'dr' and explicit 'dr' m
     testthat::expect_equal(ag$overall.se, se_ref, tolerance = 1e-8)
   }
 
+  witness <- drp_diagnostic_copy_witness()
   # 2. All 12 conditional MTAR modes (pair_logit F/B/A x 3 poolings; independent_period_logit F x 3 poolings)
   for (sm in c("pair_logit", "independent_period_logit")) {
     for (sp in c("separate", "within_cohort", "across_cohorts")) {
@@ -236,9 +246,9 @@ testthat::test_that("public att_gt default est_method = 'dr' and explicit 'dr' m
         testthat::expect_equal(diag$accounting$n_regression_blocks, length(unique(diag$fitted_catalog$regression_block)))
         testthat::expect_equal(diag$accounting$n_treatment_fits, length(unique(diag$fitted_catalog$treatment_model)))
         testthat::expect_length(diag$records$treatment, diag$accounting$n_treatment_fits)
-        bound <- 4 * diag$accounting$owned_entries + 4096
         resource <- fit$chained$resource_accounting
-        testthat::expect_equal(resource$final_diagnostic_copy_entries, 5 * bound, tolerance = 0)
+        testthat::expect_equal(resource$final_diagnostic_copy_entries, 5 * witness$output, tolerance = 0)
+        testthat::expect_lte(witness$payload(diag), witness$output)
         testthat::expect_lte(max(resource$simultaneous_entries, resource$initial_envelope_entries) +
           resource$final_diagnostic_copy_entries, fit$chained$public$numeric_workspace_entries)
 

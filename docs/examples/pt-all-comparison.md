@@ -1,6 +1,6 @@
 # Add PT-all restrictions
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
 
 In chained difference in differences (`cdid`, extending Bellégo, Benatia and Dortet-Bernadet 2025 and Callaway and Sant'Anna 2021), `pt_assumption` selects the parallel trends restrictions imposed in generalized method of moments (GMM) estimation ([Parallel trends](../methods/parallel-trends.md)). The default `pt_assumption = "post"` (`PT-post`) assumes conditional parallel trends from each cohort's reference period onward. Setting `pt_assumption = "all"` (`PT-all`) with an explicit common calendar start date `pt_start` keeps every `PT-post` condition and each cohort's original reference period, and adds zero differential restrictions on represented untreated preperiod steps between `pt_start` and each cohort's reference period.
 
@@ -67,12 +67,14 @@ if (!is.data.frame(units) || !all(c("id", "first_treat", "x") %in% names(units))
 
 # 1. Baseline panel fits: PT-post vs PT-all with explicit pt_start = 1.
 fit_pt_post <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = panel, frame = units,
   control_group = "nevertreated", est_method = "dr", selection = "none",
   pt_assumption = "post", base_period = "varying", bstrap = FALSE, cband = FALSE
 )
 fit_pt_all <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = panel, frame = units,
   control_group = "nevertreated", est_method = "dr", selection = "none",
@@ -111,12 +113,14 @@ pulse_panel <- panel
 pulse_panel$y <- ifelse(observed, y_pulse_complete, NA_real_)
 
 fit_pulse_post <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = pulse_panel, frame = units,
   control_group = "nevertreated", est_method = "dr", selection = "none",
   pt_assumption = "post", base_period = "varying", bstrap = FALSE, cband = FALSE
 )
 fit_pulse_all <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "period", idname = "id", gname = "first_treat",
   xformla = ~ x, data = pulse_panel, frame = units,
   control_group = "nevertreated", est_method = "dr", selection = "none",

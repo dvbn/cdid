@@ -266,6 +266,33 @@ cp09_phi <- function(fit, links = seq_along(fit$links), chunk = fit$control$max_
   }
   H
 }
+# V20 accepts mixed NYT control pools with ragged local intercept records.
+# Check actual kernel execution; the complete path never supplies its own IF
+# truth (the existing detailed/general comparisons remain unchanged below).
+rm_expect_mixed_or_native <- function(fit, links, B) {
+  reader <- get("cp04_reader", fit$reader_ref, inherits = FALSE)
+  expect_identical(fit$complete_support$route, "complete_support")
+  expect_true(any(vapply(fit$regression_specs, function(s) length(s$support_ids) > 1L, logical(1))))
+  expect_identical(fit$complete_support$control,
+    sort(unique(as.integer(unlist(lapply(fit$regression_specs, `[[`, "cohorts"))))))
+  pre <- api$or_baseline_if_budget(fit, B, links, FALSE)
+  plan <- api$or_baseline_native_plan(fit, links, B, pre)
+  expect_identical(plan$kind, "or_baseline_native_plan")
+  expect_true(is.list(plan$blk))
+  address <- cdid_test_native_address(api$or_baseline_native_kernel("C_gmm_cp08_or_if_chunk"))
+  calls <- 0L; fn <- api$or_baseline_native_if_chunk
+  e <- new.env(parent = environment(fn))
+  e$.Call <- function(.NAME, ...) {
+    if (identical(.NAME, address)) calls <<- calls + 1L
+    base::.Call(.NAME, ...)
+  }
+  e$or_baseline_native_kernel <- cdid_test_native_calls_in(api$or_baseline_native_kernel, e)
+  environment(fn) <- e
+  rows <- seq_len(B)
+  actual <- fn(fit, reader, rows, links, "frame", pre, plan)
+  expect_identical(calls, 1L)
+  expect_equal(actual$phi, cp09_chunk(fit, rows, links, details = TRUE)$phi, tolerance = 1e-12)
+}
 cp09_run <- function(d = cp09_panel(), est = "dr", cg = "notyettreated", ns = api,
                      chunk = 9L, xf = ~x + x2, weightsname = NULL, condition_trigger = NULL,
                      ridge_relative = NULL, base_period = "varying", clustered = FALSE) {
@@ -288,6 +315,31 @@ cp09_run <- function(d = cp09_panel(), est = "dr", cg = "notyettreated", ns = ap
     allow_frame_only = p$n_frame_only > 0L, na.rm = FALSE, bstrap = FALSE, caller_rng = FALSE,
     gmm_covariance = "tikhonov", pt_assumption = "post", pt_start = NULL, cp04 = p$cp04)
 }
+# Only the observed strict-zero crossing can differ categorically: every
+# label must still describe its own spectrum under the unchanged b+r guards.
+cp09_diagnostic_zero_crossing <- function(a, b) {
+  if (!identical(sort(c(a$trigger_reason, b$trigger_reason)),
+      c("roundoff_negative_psd", "spectral_condition_below_trigger"))) return(FALSE)
+  scalar <- function(x) is.numeric(x) && length(x) == 1L && is.finite(x)
+  for (h in list(a, b)) {
+    c <- h$conditioning
+    if (!identical(h$zero_covariance, FALSE) || !isTRUE(c$gram_provenance_certified) ||
+        !all(vapply(list(c$d_min, c$b_roundoff_bound, c$r_eigen_residual, c$rho, h$condition_trigger), scalar, logical(1))) ||
+        !length(c$eigenvalues_B) || any(!is.finite(c$eigenvalues_B)) ||
+        !identical(c$d_min, min(c$eigenvalues_B)) || c$b_roundoff_bound < 0 || c$r_eigen_residual < 0 ||
+        c$r_eigen_residual > c$b_roundoff_bound || abs(c$d_min) > c$b_roundoff_bound + c$r_eigen_residual)
+      return(FALSE)
+    if (c$d_min < 0) {
+      if (!identical(h$trigger_reason, "roundoff_negative_psd") ||
+          !identical(c$diagnosed_numerical_negative, TRUE) ||
+          !identical(c$negative_eigenvalue_diagnosis, "consistent_with_roundoff")) return(FALSE)
+    } else if (!(c$d_min > 0 && c$rho < h$condition_trigger) ||
+        !identical(h$trigger_reason, "spectral_condition_below_trigger") ||
+        !identical(c$diagnosed_numerical_negative, FALSE) ||
+        !identical(c$negative_eigenvalue_diagnosis, "nonnegative_spectrum")) return(FALSE)
+  }
+  TRUE
+}
 cp09_equal <- function(a, b) {
   expect_true(is.matrix(a$reporting$if_full)); expect_true(is.matrix(a$covariance_stream$V))
   for (nm in c("mhat", "V", "mean_phi"))
@@ -303,6 +355,22 @@ cp09_equal <- function(a, b) {
     expect_true(is.numeric(count) && length(count) == 1L && is.finite(count) && count == floor(count))
     expect_gte(count, 0L); expect_lte(count, length(conditioning$eigenvalues_B))
     expect_identical(count, as.integer(sum(conditioning$eigenvalues_B <= 0)))
+    h <- z$covariance_handling
+    expect_identical(conditioning$d_min, min(conditioning$eigenvalues_B))
+    expect_true(is.finite(conditioning$b_roundoff_bound) && conditioning$b_roundoff_bound >= 0)
+    expect_true(is.finite(conditioning$r_eigen_residual) && conditioning$r_eigen_residual >= 0)
+    expect_lte(conditioning$r_eigen_residual, conditioning$b_roundoff_bound)
+    expect_gte(conditioning$d_min, -(conditioning$b_roundoff_bound + conditioning$r_eigen_residual))
+    negative <- !h$zero_covariance && conditioning$d_min < 0
+    expect_identical(conditioning$diagnosed_numerical_negative, negative)
+    expect_identical(conditioning$negative_eigenvalue_diagnosis,
+      if (h$zero_covariance) "exact_zero_matrix" else if (negative) "consistent_with_roundoff" else "nonnegative_spectrum")
+    if (negative) expect_true(conditioning$gram_provenance_certified)
+    if (h$trigger_reason == "roundoff_negative_psd") expect_true(negative)
+    if (h$trigger_reason == "spectral_condition_below_trigger") {
+      expect_false(h$zero_covariance); expect_gt(conditioning$d_min, 0)
+      expect_lt(conditioning$rho, h$condition_trigger)
+    }
     pre <- z$auxiliary_reporting$preflight
     ctrl <- z$controls$pipeline_control$owner_control
     expect_true(all(costs %in% names(pre)))
@@ -316,6 +384,13 @@ cp09_equal <- function(a, b) {
   }
   ah$conditioning$nonpositive_eigenvalue_count <- NULL
   bh$conditioning$nonpositive_eigenvalue_count <- NULL
+  if (cp09_diagnostic_zero_crossing(ah, bh)) {
+    # Exactly these three discontinuous fields have been checked per input.
+    # Rank/Cholesky/exact-zero/other reasons retain the full comparison.
+    ah$trigger_reason <- bh$trigger_reason <- NULL
+    ah$conditioning$diagnosed_numerical_negative <- bh$conditioning$diagnosed_numerical_negative <- NULL
+    ah$conditioning$negative_eigenvalue_diagnosis <- bh$conditioning$negative_eigenvalue_diagnosis <- NULL
+  }
   expect_equal(ah, bh, tolerance = 1e-12)
   expect_equal(a$full_frame_transport$Phi_full, b$full_frame_transport$Phi_full, tolerance = 1e-12)
   for (nm in c("estimates", "se", "analytical_se", "if_full", "vcov"))
@@ -439,11 +514,12 @@ test_that("admitted full-width covariance block when L > chunk_rows enables exis
       expect_identical(rec$slice_passes, 3L)
       expect_identical(e_new$n$chunks, 1L * n_chunks_cp09)
     } else {
-      # OR complete facts require every control pool to be exactly never-treated.
+      # V20 complete facts accept actual mixed NYT pools with ragged supports.
       expect_s3_class(b, "cdid_or_baseline")
       expect_true(any(vapply(b$regression_specs, function(x)
         identical(st$cohorts[x$cohorts], c(26, Inf)), logical(1))))
-      expect_null(b$complete_support)
+      expect_false(is.null(b$complete_support))
+      rm_expect_mixed_or_native(b, ids, cov_new$chunk_rows)
       rm_expect_retained(a)
       expect_true(is.environment(api$cp04_retained_if_reserve(b, ids, cov_new$chunk_rows, cov_new,
         retained = 0, gmm_retained = 0, live = 0, work = 0, control = b$control)))
@@ -882,7 +958,8 @@ test_that("fitted baseline OR full-width planning retains real cap fallbacks, NY
   N <- 53L; B <- 9; L <- length(links); ctrl <- fit$control
   expect_identical(L, 30L)
   expect_true(any(vapply(fx$links, function(x) identical(x$K, c(26, Inf)), logical(1))))
-  expect_null(fit$complete_support)
+  expect_false(is.null(fit$complete_support))
+  rm_expect_mixed_or_native(fit, links, B)
   plan <- api$cp04_stream_plan(fit, links, 0)
   legacy <- api$cp04_stream_plan_legacy(fit, links, 0)
   expect_identical(length(plan$blocks), 1L)
@@ -923,7 +1000,7 @@ test_that("fitted baseline OR full-width planning retains real cap fallbacks, NY
   expect_identical(length(api$cp04_stream_plan(out_at, links, 0)$blocks), 1L)
   expect_identical(api$cp04_stream_plan(out_below, links, 0), api$cp04_stream_plan_legacy(out_below, links, 0))
 
-  # Mixed-control NYT OR is general and now eligible. Exact entry/work caps
+  # Mixed-control NYT OR uses complete support. Exact entry/work caps
   # and charged planner probes still enforce the complete inventory.
   entries <- inventory$entries
   cache_work <- inventory$work
@@ -1009,4 +1086,38 @@ test_that("fitted baseline OR full-width planning retains real cap fallbacks, NY
     expect_error(api$cp04_stream_plan_full_block(structure(list(), class = cl), links),
       regexp = "Invalid explicit covariance link batch.", fixed = TRUE, class = class(input_error)[1L])
   }
+})
+
+# The bounded exception must reject incorrect labels, guards and other causes.
+test_that("the diagnostic zero-crossing exception is restricted to the observed source predicates", {
+  record <- function(d, reason) list(zero_covariance = FALSE, trigger_reason = reason, condition_trigger = .99,
+    conditioning = list(d_min = d, eigenvalues_B = c(1, d), b_roundoff_bound = 1e-11,
+      r_eigen_residual = 5e-14, rho = max(d, 0), gram_provenance_certified = TRUE,
+      diagnosed_numerical_negative = d < 0,
+      negative_eigenvalue_diagnosis = if (d < 0) "consistent_with_roundoff" else "nonnegative_spectrum"))
+  negative <- record(-2e-16, "roundoff_negative_psd")
+  positive <- record(6e-16, "spectral_condition_below_trigger")
+  expect_true(cp09_diagnostic_zero_crossing(negative, positive))
+  expect_true(cp09_diagnostic_zero_crossing(positive, negative))
+  for (reason in c("known_unit_covariance_rank_bound", "cholesky_failure_on_valid_psd", "exact_zero_eigenvalue")) {
+    changed <- negative; changed$trigger_reason <- reason
+    expect_false(cp09_diagnostic_zero_crossing(changed, positive))
+  }
+  for (field in c("diagnosed_numerical_negative", "negative_eigenvalue_diagnosis",
+                  "gram_provenance_certified", "d_min", "b_roundoff_bound", "r_eigen_residual")) {
+    changed <- negative
+    changed$conditioning[[field]] <- switch(field, diagnosed_numerical_negative = FALSE,
+      negative_eigenvalue_diagnosis = "nonnegative_spectrum", gram_provenance_certified = FALSE,
+      d_min = -1, b_roundoff_bound = -1, r_eigen_residual = 2e-11)
+    expect_false(cp09_diagnostic_zero_crossing(changed, positive), info = field)
+  }
+  changed <- negative; changed$conditioning$d_min <- -1
+  changed$conditioning$eigenvalues_B <- c(1, -1)
+  expect_false(cp09_diagnostic_zero_crossing(changed, positive))
+  changed <- positive; changed$conditioning$rho <- changed$condition_trigger
+  expect_false(cp09_diagnostic_zero_crossing(negative, changed))
+  changed <- positive; changed$zero_covariance <- TRUE
+  expect_false(cp09_diagnostic_zero_crossing(negative, changed))
+  changed <- positive; changed$conditioning$d_min <- 0; changed$conditioning$eigenvalues_B <- c(1, 0)
+  expect_false(cp09_diagnostic_zero_crossing(negative, changed))
 })

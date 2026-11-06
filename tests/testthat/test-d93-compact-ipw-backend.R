@@ -495,11 +495,7 @@ test_that("D93 compact raw-IPW backend matches independent scalar oracle and sca
             weighting = "optimal", reduce_structural_redundancy = TRUE,
             run_numerical_transfer = FALSE, cband = FALSE, bstrap = FALSE
           )
-          if (identical(miss, "complete")) {
-            expect_null(res_new$nuisance_registry$raw_ipw)
-          } else {
-            expect_s3_class(res_new$nuisance_registry$raw_ipw, "cdid_ipw_raw_backend")
-          }
+          expect_s3_class(res_new$nuisance_registry$raw_ipw, "cdid_ipw_raw_backend")
           expect_null(res_new$nuisance_registry$cp04)
           expect_identical(res_new$metadata$catalog$rows, res_ref$metadata$catalog$rows)
           expect_identical(res_new$reporting$target_meta, res_ref$reporting$target_meta)
@@ -526,6 +522,9 @@ test_that("D93 compact raw-IPW backend matches independent scalar oracle and sca
           expect_equal(res_new$reporting$if_full, res_ref$reporting$if_full, tolerance = 1e-12)
           expect_equal(res_new$covariance_stream$mhat, res_ref$covariance_stream$mhat, tolerance = 1e-12)
           expect_equal(res_new$covariance_stream$V, res_ref$covariance_stream$V, tolerance = 1e-12)
+          expect_identical(res_new$covariance_handling$handler_used, res_ref$covariance_handling$handler_used)
+          expect_identical(res_new$covariance_handling$handler_invoked, res_ref$covariance_handling$handler_invoked)
+          expect_equal(res_new$covariance_handling$lambda, res_ref$covariance_handling$lambda, tolerance = 1e-12)
           for (agg_nm in names(res_ref$aggregations)) {
             expect_equal(res_new$aggregations[[agg_nm]]$estimates, res_ref$aggregations[[agg_nm]]$estimates, tolerance = 1e-12)
             expect_equal(res_new$aggregations[[agg_nm]]$se, res_ref$aggregations[[agg_nm]]$se, tolerance = 1e-12)
@@ -874,4 +873,572 @@ test_that("D93 compact raw-IPW backend preserves cluster inference, retention de
     ),
     class = "cdid_ipw_owner_bound_error"
   )
+})
+
+# V15: existing D93 complete/scalar tests above retain all formula checks.
+# These witnesses check optional reuse admission and producer identity only.
+test_that("complete multioperator reuse funds all consumers and declines before fitting under pressure", {
+  sim <- make_d93_compact_ipw_test_panel(n_units = 60L, times = 1:4,
+    cohorts = c(2, 3, Inf), missing_mode = "complete", unequal_weights = TRUE)
+  args <- list(data = sim$data, idname = "id", tname = "time", yname = "y", gname = "g",
+    control = make_d93_test_pipeline_control(), xformla = ~x1, weightsname = "w",
+    control_group = "nevertreated", base_period = "varying", pt_assumption = "post",
+    weighting = "optimal", reduce_structural_redundancy = TRUE,
+    run_numerical_transfer = FALSE, cband = FALSE, bstrap = FALSE)
+  actual <- do.call(run_chained_ipw_pipeline, args)
+  legacy <- do.call(run_legacy_scalar_ipw_pipeline, args)
+  witness <- actual$resource_accounting$complete_raw_capacity
+  expect_identical(witness$admitted, TRUE)
+  expect_s3_class(actual$nuisance_registry$raw_ipw, "cdid_ipw_raw_backend")
+  expect_null(legacy$nuisance_registry$raw_ipw)
+  expect_lte(actual$resource_accounting$simultaneous_entries, witness$peak_entries)
+  expect_lte(actual$nuisance_registry$raw_ipw$accounting$construction_peak_entries, witness$construction_entries)
+  # Stores have their own cumulative optional work admission. The route
+  # witness bounds mandatory work; independently admitted store/check work
+  # remains in the returned total and under the same configured cap.
+  store <- actual$resource_accounting$point_producer$retained_moment_if
+  optional_work <- sum(c(store$work_ops_bound, store$auxiliary$work_ops_bound))
+  expect_gte(optional_work, 0)
+  expect_lte(optional_work, actual$resource_accounting$downstream_work_ops)
+  expect_lte(actual$resource_accounting$downstream_work_ops - optional_work, witness$mandatory_work_upper)
+  expect_lte(actual$resource_accounting$downstream_work_ops, args$control$owner_control$max_work_ops)
+  expect_equal(actual$reporting$if_full, legacy$reporting$if_full, tolerance = 1e-12)
+  # The old route itself establishes this finite capacity witness. Its actual
+  # recorded initial/consumer envelope plus fixed bookkeeping remains allowed;
+  # optional raw table/consumer obligations must decline before any fit.
+  cap <- ceiling(max(legacy$resource_accounting$initial_envelope_entries,
+    legacy$resource_accounting$simultaneous_entries) + 4096)
+  args$control <- make_d93_test_pipeline_control(max_retained_entries = cap,
+    max_matrix_entries = cap, max_output_entries = cap)
+  old_pressure <- do.call(run_legacy_scalar_ipw_pipeline, args)
+  pressure <- do.call(run_chained_ipw_pipeline, args)
+  expect_identical(pressure$resource_accounting$complete_raw_capacity$admitted, FALSE)
+  expect_null(pressure$nuisance_registry$raw_ipw)
+  expect_equal(pressure$reporting$estimates, old_pressure$reporting$estimates, tolerance = 1e-12)
+  expect_equal(pressure$reporting$if_full, old_pressure$reporting$if_full, tolerance = 1e-12)
+  expect_equal(pressure$reporting$vcov, old_pressure$reporting$vcov, tolerance = 1e-12)
+  expect_identical(pressure$support$ledger, old_pressure$support$ledger)
+  expect_identical(pressure$covariance_handling, old_pressure$covariance_handling)
+  # A truly unavailable old request keeps its original typed resource refusal.
+  args$control <- make_d93_test_pipeline_control(max_retained_entries = 1000,
+    max_matrix_entries = 1000, max_output_entries = 1000)
+  expect_error(do.call(run_chained_ipw_pipeline, args), class = "cdid_ipw_owner_bound_error")
+})
+
+test_that("complete singleoperator routing and raw callback source checks remain intact", {
+  sim <- make_d93_compact_ipw_test_panel(n_units = 60L, times = 1:4,
+    cohorts = c(2, Inf), missing_mode = "complete", unequal_weights = TRUE)
+  single <- run_chained_ipw_pipeline(data = sim$data, idname = "id", tname = "time", yname = "y", gname = "g",
+    control = make_d93_test_pipeline_control(), xformla = ~x1, weightsname = "w",
+    control_group = "nevertreated", pt_assumption = "post", weighting = "optimal",
+    run_numerical_transfer = FALSE, cband = FALSE, bstrap = FALSE)
+  expect_null(single$nuisance_registry$raw_ipw)
+  expect_null(single$resource_accounting$complete_raw_capacity)
+  sim <- make_d93_compact_ipw_test_panel(n_units = 60L, times = 1:4,
+    cohorts = c(2, 3, Inf), missing_mode = "complete", unequal_weights = TRUE)
+  multi <- run_chained_ipw_pipeline(data = sim$data, idname = "id", tname = "time", yname = "y", gname = "g",
+    control = make_d93_test_pipeline_control(), xformla = ~x1, weightsname = "w",
+    control_group = "nevertreated", pt_assumption = "post", weighting = "optimal",
+    run_numerical_transfer = FALSE, cband = FALSE, bstrap = FALSE)
+  b <- multi$nuisance_registry$raw_ipw
+  expect_s3_class(b, "cdid_ipw_raw_backend")
+  ids <- vapply(multi$point_links_used, `[[`, integer(1), "cp04_index")
+  before <- get("frame_owner", b$frame_ref, inherits = FALSE)
+  expect_error(tryCatch(cp04_replay_links(b, ids, function(batch) {
+    if (max(batch$rows) == b$n_a_units) {
+      unlockBinding("frame_owner", b$frame_ref)
+      bad <- get("frame_owner", b$frame_ref, inherits = FALSE); bad$w_a[1L] <- bad$w_a[1L] + 1
+      assign("frame_owner", bad, envir = b$frame_ref); lockBinding("frame_owner", b$frame_ref)
+    }
+  }, chunk_rows = 19L), finally = {
+    unlockBinding("frame_owner", b$frame_ref); assign("frame_owner", before, envir = b$frame_ref)
+    lockBinding("frame_owner", b$frame_ref)
+  }), class = "cdid_ipw_owner_integrity_error")
+  expect_identical(before, get("frame_owner", b$frame_ref, inherits = FALSE))
+})
+
+# V16: exact per-invocation complete support facts, without coalescing pairs.
+test_that("complete pair summary reuse preserves raw chunk-order masses, fingerprints and original pair identities", {
+  for (miss in c("complete", "partial", "mixed")) {
+    sim <- make_d93_compact_ipw_test_panel(n_units = 60L, times = 1:4,
+      cohorts = c(2, 3, Inf), missing_mode = if (miss == "mixed") "complete" else miss, unequal_weights = TRUE)
+    if (miss == "mixed") sim$data <- sim$data[!(sim$data$time == 4 & sim$data$id %% 7L == 0L), , drop = FALSE]
+    ctrl <- make_d93_test_pipeline_control(max_chunk_rows = 7L)
+    po <- construct_ipw_panel_owner(sim$data, "id", "time", "y", "g", ctrl$owner_control)
+    fo <- construct_ipw_frame_owner(po, sim$unit_id,
+      cbind(`(Intercept)` = 1, x1 = sim$unit_x1), sim$unit_w, ctrl$owner_control, frame_g = sim$unit_g)
+    meta <- build_owner_comparison_catalog(po, targets = c(2, 3), anticipation = 0L,
+      control_group = "notyettreated", conventions = "D10_D13_admissible_frame", control = ctrl$owner_control,
+      catalog_bounds = ctrl$catalog_bounds, frame_owner = fo, build_design = TRUE,
+      pt_assumption = "all", pt_start = po$all_times[1L])
+    args <- list(metadata_obj = meta, frame_owner = fo, design = meta$design,
+      owner_control = ctrl$owner_control, fitted_control = ctrl$fitted_control, point_control = ctrl$point_control,
+      glm_control = ctrl$glm_control, class_bounds = ctrl$class_bounds,
+      weighting = "identity", reduce_structural_redundancy = FALSE)
+    calls <- 0L; summaries <- list()
+    cached <- build_ipw_raw_backend_registry
+    spy_env <- new.env(parent = environment(cached))
+    spy_env$ipw_raw_scan_pair_summary <- function(...) {
+      calls <<- calls + 1L
+      ipw_raw_scan_pair_summary(...)
+    }
+    spy_env$ipw_raw_pair_support_for_cohorts <- function(frame_owner, pair_summary, ...) {
+      summaries[[as.character(pair_summary$pair_id)]] <<- pair_summary
+      ipw_raw_pair_support_for_cohorts(frame_owner, pair_summary, ...)
+    }
+    environment(cached) <- spy_env
+    actual <- do.call(cached, args)
+    # Only this builder-local proof is declined. The unchanged standalone
+    # scanner still proves/visits every true complete pair independently.
+    reference_fn <- build_ipw_raw_backend_registry
+    env <- new.env(parent = environment(reference_fn))
+    env$ipw_owner_pair_complete <- function(...) FALSE
+    environment(reference_fn) <- env
+    reference <- do.call(reference_fn, args)
+    b <- actual$raw_ipw; old <- reference$raw_ipw
+    n_complete <- sum(vapply(b$pairs, `[[`, logical(1), "complete_pair"))
+    expect_identical(b$pairs, old$pairs)
+    expect_identical(b$support_specs, old$support_specs)
+    expect_identical(b$supports, old$supports)
+    expect_identical(b$treatment_specs, old$treatment_specs)
+    expect_equal(b$treatments, old$treatments, tolerance = 1e-12)
+    expect_identical(lapply(actual$nuisance_views, function(v) v$support),
+      lapply(reference$nuisance_views, function(v) v$support))
+    expect_equal(calls, length(b$pairs) - max(0, n_complete - 1L))
+    expect_equal(actual$construction_work$complete_pair_fingerprints_reused, max(0, n_complete - 1L))
+    for (pid in seq_along(b$pairs)) {
+      raw <- ipw_raw_scan_pair_summary(fo, po, b$pairs[[pid]]$pair, 7L)
+      raw$pair_id <- as.integer(pid)
+      expect_identical(summaries[[as.character(pid)]], raw)
+      expect_identical(raw$complete_pair, b$pairs[[pid]]$complete_pair)
+      for (sid in which(vapply(b$support_specs, `[[`, integer(1), "pair_id") == pid)) {
+        k <- b$support_specs[[sid]]$cohort
+        expect_identical(b$supports[[sid]]$n_pair, raw$cohort_pair_count[k])
+        expect_identical(b$supports[[sid]]$pair_mass, raw$cohort_pair_mass[k])
+      }
+    }
+    rows <- 7:1; links <- rev(seq_along(b$links))
+    expect_equal(evaluate_ipw_raw_if_chunk(b, rows, links)$phi,
+      evaluate_ipw_raw_if_chunk(old, rows, links)$phi, tolerance = 1e-12)
+    expect_identical(b$accounting$construction_table_entries_bound, old$accounting$construction_table_entries_bound)
+    expect_identical(b$accounting$construction_peak_entries, old$accounting$construction_peak_entries)
+    expect_identical(b$accounting$work_ops_bound, old$accounting$work_ops_bound)
+  }
+})
+
+test_that("raw replay plans extract dispatch metadata once inside the original workspace reservation", {
+  sim <- make_d93_compact_ipw_test_panel(n_units = 60L, missing_mode = "partial")
+  ctrl <- make_d93_test_pipeline_control(max_chunk_rows = 7L)
+  po <- construct_ipw_panel_owner(sim$data, "id", "time", "y", "g", ctrl$owner_control)
+  fo <- construct_ipw_frame_owner(po, sim$unit_id,
+    cbind(`(Intercept)` = 1, x1 = sim$unit_x1), sim$unit_w, ctrl$owner_control, frame_g = sim$unit_g)
+  catalog <- build_owner_comparison_catalog(po, targets = c(2, 3), anticipation = 0L,
+    control_group = "notyettreated", conventions = "D10_D13_admissible_frame", control = ctrl$owner_control,
+    catalog_bounds = ctrl$catalog_bounds, frame_owner = fo, build_design = TRUE,
+    pt_assumption = "all", pt_start = po$all_times[1L])
+  registry <- build_ipw_raw_backend_registry(catalog, fo, catalog$design,
+    owner_control = ctrl$owner_control, fitted_control = ctrl$fitted_control, point_control = ctrl$point_control,
+    glm_control = ctrl$glm_control, class_bounds = ctrl$class_bounds,
+    weighting = "identity", reduce_structural_redundancy = FALSE)
+  b <- registry$raw_ipw
+  links <- rev(seq_along(b$links))[seq.int(1L, length(b$links), by = 2L)]
+  calls <- 0L
+  spy <- new.env(parent = environment(ipw_raw_if_plan))
+  spy$ipw_raw_if_metadata <- function(...) {
+    calls <<- calls + 1L
+    ipw_raw_if_metadata(...)
+  }
+  planner <- ipw_raw_if_plan; environment(planner) <- spy
+  evaluator <- evaluate_ipw_raw_if_chunk; environment(evaluator) <- spy
+  plan <- planner(b, links, 7L)
+  expect_identical(calls, 1L)
+  expect_false(is.null(plan$replay_index))
+  # Independent table invariant: both active pair order and each pair's support
+  # order agree with the original backend descriptors, including a link subset.
+  expect_identical(plan$replay_index$pair_cohorts, lapply(plan$pids, function(pid) {
+    specs <- b$support_specs[plan$sids]
+    vapply(Filter(function(s) s$pair_id == pid, specs), `[[`, integer(1L), "cohort")
+  }))
+  expect_identical(plan$replay_index$treatment_pair_pos,
+    vapply(b$treatment_specs[plan$tids], function(s) match(s$pair_id, plan$pids), integer(1L)))
+  expect_identical(plan$replay_index$nuisance_ids,
+    vapply(b$treatment_specs[plan$tids], `[[`, integer(1L), "nuisance_idx"))
+  for (rows in list(7:1, 58:60)) {
+    indexed <- evaluator(b, rows, links, plan = plan)
+    expect_identical(calls, 1L)
+    direct <- evaluate_ipw_raw_if_chunk(b, rows, links, details = TRUE)
+    expect_equal(indexed$phi, direct$phi, tolerance = 1e-12)
+    expect_identical(indexed$id, direct$id)
+    expect_identical(indexed$link_ids, direct$link_ids)
+  }
+  bad <- plan
+  bad$replay_index$pair_cohorts[[1L]][1L] <- bad$replay_index$pair_cohorts[[1L]][1L] + 1L
+  expect_error(evaluator(b, 1:7, links, plan = bad), class = "cdid_ipw_raw_backend_integrity_error")
+  expect_error(evaluator(b, 1:7, rev(links), plan = plan), class = "cdid_ipw_raw_backend_integrity_error")
+
+  # The exact extra native-counted payload is funded inside the old scratch,
+  # including the funded_entries field itself. An external consumer may fill
+  # every remaining entry without increasing the original simultaneous peak.
+  old <- plan; old$replay_index <- NULL; old$funded_entries <- NULL; old$ref <- NULL
+  old$entries <- unname(cp04_payload(old)["entries"])
+  expect_identical(plan$entries - plan$funded_entries, old$entries)
+  expect_identical(plan$pre, ipw_raw_if_budget(b, 7L, links))
+  S <- length(plan$sids); P <- length(plan$pids); T <- length(plan$tids); L <- length(links)
+  metadata <- 16 * (S + T + L + b$p + 16)
+  expect_lte(plan$funded_entries + 7 * S + 4 * P + 4 * T + 256 + 2 * L + 64, metadata)
+  expect_lte(plan$funded_entries + 4 * (S + T + L + b$p) + 128, metadata)
+  base_retained <- sum(c(b$accounting$owned_entries, b$accounting$borrowed_entries, old$entries))
+  old_peak <- base_retained + old$pre$output + old$pre$scratch
+  external <- b$control$max_matrix_entries - old_peak
+  expect_equal(external + b$accounting$owned_entries + b$accounting$borrowed_entries +
+    plan$entries - plan$funded_entries + plan$pre$output + plan$pre$scratch,
+    b$control$max_matrix_entries)
+  # Exact matrix/work caps still admit the index because it spends the old
+  # reservation; neither cap grows and neither row partition changes.
+  for (cap in c("max_matrix_entries", "max_work_ops")) {
+    pressure <- b
+    pressure$control[[cap]] <- if (cap == "max_matrix_entries") old_peak else old$pre$work
+    pressure <- ipw_owner_seal(pressure, "ipw_raw_backend")
+    before <- calls
+    indexed <- planner(pressure, links, 7L)
+    expect_false(is.null(indexed$replay_index))
+    expect_identical(calls, before + 1L)
+    actual <- evaluator(pressure, 7:1, links, plan = indexed)
+    expect_identical(calls, before + 1L)
+    expect_equal(actual$phi, evaluate_ipw_raw_if_chunk(b, 7:1, links)$phi, tolerance = 1e-12)
+  }
+  # The extra retention cap can independently decline, before extracting any
+  # metadata. The original plan shape and one-extraction chunk remain valid.
+  pressure <- b; pressure$control$max_retained_entries <- base_retained
+  pressure <- ipw_owner_seal(pressure, "ipw_raw_backend")
+  before <- calls
+  plain <- planner(pressure, links, 7L)
+  expect_null(plain$replay_index); expect_null(plain$funded_entries)
+  expect_identical(calls, before)
+  actual <- evaluator(pressure, 7:1, links, plan = plain)
+  expect_identical(calls, before + 1L)
+  expect_equal(actual$phi, evaluate_ipw_raw_if_chunk(b, 7:1, links)$phi, tolerance = 1e-12)
+  # One small request cannot fund this conservative construction inventory.
+  # Declining the map preserves the original preflight and direct behavior.
+  before <- calls
+  small <- planner(b, links[1L], 7L)
+  expect_null(small$replay_index); expect_null(small$funded_entries)
+  expect_identical(calls, before)
+  expect_equal(evaluator(b, 58:60, links[1L], plan = small)$phi,
+    evaluate_ipw_raw_if_chunk(b, 58:60, links[1L])$phi, tolerance = 1e-12)
+  expect_identical(calls, before + 1L)
+})
+
+# V25 frozen collector from 7003ddd, verbatim except its test-local name.
+d93_v25_old_observer_collect <- function(frame_owner, panel_owner, pair_summary, coh_desc, n_obs, step) {
+  n_a <- as.integer(frame_owner$n_a_units)
+  p <- as.integer(frame_owner$n_covariates)
+  a_cohort_idx <- frame_owner$a_cohort_index
+  w_a <- frame_owner$w_a
+  Z_a <- frame_owner$Z_a
+  pair_desc <- pair_summary$pair
+  ds <- pair_desc$s_calendar_index
+  dt <- pair_desc$t_calendar_index
+  complete_pair <- isTRUE(pair_summary$complete_pair)
+
+  risk_a_idx <- integer(n_obs)
+  risk_gi <- integer(n_obs)
+  risk_w <- numeric(n_obs)
+  Z_use <- matrix(0.0, nrow = n_obs, ncol = p, dimnames = list(NULL, colnames(Z_a)))
+  obs_s <- integer(n_obs)
+  obs_t <- integer(n_obs)
+
+  pos <- 0L
+  a_start <- 1L
+  while (a_start <= n_a) {
+    ipw_owner_check_interrupt()
+    a_end <- as.integer(min(as.double(n_a), as.double(a_start) + step - 1))
+    hit <- if (complete_pair) {
+      ipw_owner_query_complete_pair_mask(panel_owner, ds, dt, a_start, a_end)
+    } else {
+      ipw_owner_query_pair_mask(
+        panel_owner, pair_desc$s, pair_desc$t,
+        a_start = a_start, a_end = a_end, ds = ds, dt = dt
+      )
+    }
+    a <- hit$a_index
+    if (length(a) > 0L) {
+      gi <- ipw_owner_view_cohort_index(coh_desc, a_cohort_idx[a])
+      in_r <- which(!is.na(gi))
+      k <- length(in_r)
+      if (k > 0L) {
+        if (pos + k > n_obs) {
+          ipw_raw_backend_abort("Observed risk support count changed from its pair summary.", "integrity")
+        }
+        ii <- seq.int(pos + 1L, pos + k)
+        a_sub <- a[in_r]
+        risk_a_idx[ii] <- a_sub
+        risk_gi[ii] <- as.integer(gi[in_r])
+        risk_w[ii] <- w_a[a_sub]
+        Z_use[ii, ] <- Z_a[a_sub, , drop = FALSE]
+        obs_s[ii] <- hit$obs_s[in_r]
+        obs_t[ii] <- hit$obs_t[in_r]
+        pos <- pos + k
+      }
+    }
+    a_start <- as.double(a_end) + 1
+  }
+  if (pos != n_obs) {
+    ipw_raw_backend_abort("Observed risk support count disagreed with its pair summary.", "integrity")
+  }
+  list(
+    risk_a_idx = risk_a_idx,
+    risk_gi = risk_gi,
+    risk_w = risk_w,
+    Z_use = Z_use,
+    obs_s = obs_s,
+    obs_t = obs_t
+  )
+}
+
+
+# Independent raw-record join. Only the canonical observation-position table
+# supplies endpoint row numbers; no posting query or collector supplies truth.
+d93_v25_observer_reference <- function(sim, frame, panel, pair, cohorts) {
+  observed <- sim$data[!is.na(sim$data$y), c("id", "time"), drop = FALSE]
+  ids <- intersect(observed$id[observed$time == pair$s], observed$id[observed$time == pair$t])
+  unit_g <- sim$unit_g[match(panel$a_id, sim$unit_id)]
+  declared <- match(unit_g, cohorts$cohorts)
+  a <- which(panel$a_id %in% ids & !is.na(declared))
+  o <- panel$observations
+  key <- paste(o$unit_index, o$time)
+  ms <- if (length(a)) match(paste(panel$a_unit_index[a], pair$s), key) else integer(0L)
+  mt <- if (length(a)) match(paste(panel$a_unit_index[a], pair$t), key) else integer(0L)
+  list(risk_a_idx = a, risk_gi = declared[a], risk_w = frame$w_a[a],
+    Z_use = frame$Z_a[a, , drop = FALSE], obs_s = ms, obs_t = mt)
+}
+
+test_that("coarse raw observers exactly copy the frozen collector and independent ordered risk-set join", {
+  sim <- make_d93_compact_ipw_test_panel(n_units = 64L, cohorts = c(2, 3, 4, Inf),
+    missing_mode = "partial", unequal_weights = TRUE)
+  sim$data$y[sim$data$time == 3 & sim$data$id %% 11L == 0L] <- NA_real_
+  empty <- sim$data[1L, , drop = FALSE]; empty$time <- 5; empty$y <- NA_real_
+  sim$data <- rbind(sim$data, empty)
+  ctrl <- make_d93_test_pipeline_control(max_chunk_rows = 7L)
+  fitted <- ctrl$fitted_control; fitted$max_chunk_rows <- 3L
+  fitted <- validate_ipw_fitted_view_control(fitted)
+  po <- construct_ipw_panel_owner(sim$data, "id", "time", "y", "g", ctrl$owner_control)
+  calls <- 0L; reads <- 0L; captured <- NULL
+  spy <- new.env(parent = environment(ipw_raw_collect_observer_buffer))
+  address <- cdid_test_native_address(ipw_raw_observer_collector_kernel())
+  spy$ipw_raw_observer_collector_kernel <- cdid_test_native_calls_in(ipw_raw_observer_collector_kernel, spy)
+  spy$.Call <- function(.NAME, ...) {
+    if (identical(.NAME, address)) calls <<- calls + 1L
+    out <- base::.Call(.NAME, ...)
+    if (identical(.NAME, address)) captured <<- out
+    out
+  }
+  spy$ipw_owner_read_y_positions <- function(...) { reads <<- reads + 1L; stop("Collector read an outcome.") }
+  collect <- ipw_raw_collect_observer_buffer; environment(collect) <- spy
+  designs <- list(matrix(1.0, 64L, 1L, dimnames = list(NULL, "(Intercept)")),
+    cbind(`(Intercept)` = 1, x1 = sim$unit_x1, x2 = cos(sim$unit_id * 0.23)))
+  for (Z in designs) {
+    fo <- construct_ipw_frame_owner(po, sim$unit_id, Z, sim$unit_w, ctrl$owner_control, frame_g = sim$unit_g)
+    for (K in list(Inf, c(Inf, 4, 3), c(3, Inf, 4))) {
+      cohort <- ipw_owner_make_cohort_descriptor(fo, 2, K)
+      for (t in c(4, 5)) {
+        pair <- ipw_owner_make_pair_descriptor(po, 1, t)
+        summary <- ipw_raw_scan_pair_summary(fo, po, pair, 7L)
+        expected <- d93_v25_observer_reference(sim, fo, po, pair, cohort)
+        n <- length(expected$risk_a_idx)
+        inputs <- serialize(list(po$postings, fo$a_cohort_index, fo$w_a, fo$Z_a, cohort), NULL, version = 3)
+        for (step in c(1L, 7L)) {
+          before <- calls
+          actual <- collect(fo, po, summary, cohort, n, step)
+          expect_identical(calls, before + 1L)
+          expect_identical(actual, d93_v25_old_observer_collect(fo, po, summary, cohort, n, step))
+          expect_identical(actual, expected)
+          expect_identical(reads, 0L)
+          expect_identical(inputs, serialize(list(po$postings, fo$a_cohort_index, fo$w_a, fo$Z_a, cohort), NULL, version = 3))
+          expect_identical(captured$status, 0L)
+          for (field in names(actual)) expect_true(gmm_sexp_aliases(actual[[field]], captured[[field]]))
+          expect_true(gmm_sexp_aliases(colnames(actual$Z_use), colnames(fo$Z_a)))
+          expect_false(gmm_sexp_aliases(actual$Z_use, fo$Z_a))
+          E <- (ncol(Z) + 5) * n + 512
+          borrowed_names <- unname(cp04_payload(colnames(fo$Z_a))["entries"])
+          expect_lte(unname(cp04_payload(captured)["entries"]) - borrowed_names, E)
+          B_f <- min(fo$n_a_units, fitted$max_chunk_rows)
+          O_old <- (ncol(Z) + 6) * n + 32
+          Q_old <- 2 * B_f * ncol(Z) + 88 * B_f + cohort$m_cohorts + 512
+          expect_lte(E, O_old + Q_old)
+          expect_identical(B_f, 3)
+        }
+      }
+    }
+  }
+  # Complete support keeps its existing R path, without resolving the new DLL.
+  full <- make_d93_compact_ipw_test_panel(n_units = 64L, cohorts = c(2, 3, 4, Inf), missing_mode = "complete")
+  po_full <- construct_ipw_panel_owner(full$data, "id", "time", "y", "g", ctrl$owner_control)
+  fo_full <- construct_ipw_frame_owner(po_full, full$unit_id, designs[[1L]], full$unit_w,
+    ctrl$owner_control, frame_g = full$unit_g)
+  cohort <- ipw_owner_make_cohort_descriptor(fo_full, 2, Inf)
+  pair <- ipw_owner_make_pair_descriptor(po_full, 1, 4)
+  summary <- ipw_raw_scan_pair_summary(fo_full, po_full, pair, 7L)
+  n <- length(d93_v25_observer_reference(full, fo_full, po_full, pair, cohort)$risk_a_idx)
+  before <- calls
+  expect_identical(collect(fo_full, po_full, summary, cohort, n, 7L),
+    d93_v25_old_observer_collect(fo_full, po_full, summary, cohort, n, 7L))
+  expect_identical(calls, before)
+})
+
+test_that("coarse raw observers decline unsupported indices and preserve count failures and native bounds", {
+  sim <- make_d93_compact_ipw_test_panel(n_units = 64L, cohorts = c(2, 3, 4, Inf), missing_mode = "partial")
+  ctrl <- make_d93_test_pipeline_control(max_chunk_rows = 7L)
+  po <- construct_ipw_panel_owner(sim$data, "id", "time", "y", "g", ctrl$owner_control)
+  fo <- construct_ipw_frame_owner(po, sim$unit_id, cbind(`(Intercept)` = 1, x1 = sim$unit_x1),
+    sim$unit_w, ctrl$owner_control, frame_g = sim$unit_g)
+  cohort <- ipw_owner_make_cohort_descriptor(fo, 2, c(Inf, 4, 3))
+  pair <- ipw_owner_make_pair_descriptor(po, 1, 4)
+  summary <- ipw_raw_scan_pair_summary(fo, po, pair, 7L)
+  expected <- d93_v25_observer_reference(sim, fo, po, pair, cohort)
+  n <- length(expected$risk_a_idx)
+  for (bad_n in c(n - 1L, n + 1L)) {
+    old <- tryCatch(d93_v25_old_observer_collect(fo, po, summary, cohort, bad_n, 7L), error = identity)
+    actual <- tryCatch(ipw_raw_collect_observer_buffer(fo, po, summary, cohort, bad_n, 7L), error = identity)
+    expect_s3_class(actual, "cdid_ipw_raw_backend_integrity_error")
+    expect_identical(class(actual), class(old)); expect_identical(conditionMessage(actual), conditionMessage(old))
+  }
+  spy <- new.env(parent = environment(ipw_raw_collect_observer_buffer))
+  spy$ipw_raw_observer_collector_kernel <- function() stop("Ineligible collector resolved native code.")
+  fallback <- ipw_raw_collect_observer_buffer; environment(fallback) <- spy
+  for (field in c("post_obs_index", "post_a_index")) {
+    long <- po; long$postings[[field]] <- as.double(long$postings[[field]])
+    expect_identical(fallback(fo, long, summary, cohort, n, 7L),
+      d93_v25_old_observer_collect(fo, long, summary, cohort, n, 7L))
+  }
+  address <- ipw_raw_observer_collector_kernel(); post <- po$postings
+  bounds <- c(post$date_start[pair$s_calendar_index], post$date_end[pair$s_calendar_index],
+    post$date_start[pair$t_calendar_index], post$date_end[pair$t_calendar_index])
+  E <- (fo$n_covariates + 5) * n + 512
+  invoke <- function(bd = bounds, owner = cohort$owner_cohort_index, view = cohort$view_cohort_index,
+                     observations = post$post_obs_index, ctl = as.integer(c(n, 1L, cohort$m_cohorts)), cap = E) {
+    address(post$post_a_index, observations, bd, fo$a_cohort_index, fo$w_a, fo$Z_a,
+      owner, view, ctl, cap)
+  }
+  expect_identical(invoke()$status, 0L)
+  expect_error(invoke(bd = replace(bounds, 1L, 0L)), class = "cdid_gmm_bound_error")
+  expect_error(invoke(owner = rev(cohort$owner_cohort_index)), class = "cdid_gmm_bound_error")
+  expect_error(invoke(view = replace(cohort$view_cohort_index, 1L, 0L)), class = "cdid_gmm_bound_error")
+  expect_error(invoke(cap = E - 1), class = "cdid_gmm_bound_error")
+  empty <- invoke(bd = c(1L, 0L, 1L, 0L), ctl = as.integer(c(0, 1, cohort$m_cohorts)), cap = 512)
+  expect_identical(empty$status, 0L); expect_length(empty$risk_a_idx, 0L)
+  expect_identical(dim(empty$Z_use), c(0L, as.integer(fo$n_covariates)))
+  # Deliberate valid-shape mutations must fail the independent buffer truth.
+  wrong_view <- cohort$view_cohort_index
+  wrong_view[1:2] <- wrong_view[2:1]
+  expect_false(identical(invoke(view = wrong_view)$risk_gi, expected$risk_gi))
+  expect_false(identical(invoke(observations = post$post_obs_index + 1L)$obs_s, expected$obs_s))
+  # Live registered arity and the exact symbol used by the R collector.
+  dll <- getLoadedDLLs()[["cdid"]]
+  reg <- getDLLRegisteredRoutines(dll, addNames = TRUE)[[".Call"]]
+  expect_identical(reg[["C_gmm_ipw_raw_observer_collect"]]$numParameters, 10L)
+  expect_identical(cdid_test_native_address(address), getNativeSymbolInfo("C_gmm_ipw_raw_observer_collect", PACKAGE = dll)$address)
+})
+
+# V29: independent byte/cardinality witnesses for local raw record metadata.
+test_that("raw character inventory charges local Unicode/auxiliary roles and scales linearly in D", {
+  ctrl <- make_d93_test_pipeline_control()
+  long_key <- paste0("catalog:", paste(rep("\u03bb\u6f22", 700L), collapse = ""))
+  own_id <- paste0("own:", paste(rep("\u00e9", 180L), collapse = ""))
+  keys <- c(rep("same-key", 36L), long_key)
+  meta <- list(catalog = list(rows = data.frame(operator_id = rep(1:6, length.out = length(keys)))),
+    row_mapping = list(functional_key = keys, link_id = own_id, nuisance_id = "borrowed:nuisance"))
+  Z <- matrix(0, 1L, 2L, dimnames = list(NULL, c("(Intercept)", paste0("x_", own_id))))
+  frame <- list(Z_a = Z, a_cohorts = c(2, 3, 4, Inf))
+  aux <- list(descriptors = list(
+    list(g = 2, K = c(3, 4, Inf), link_id = paste0("aux:", own_id)),
+    list(g = 3, K = c(4, Inf), nuisance_id = paste0("aux-only:", own_id), functional_key = "custom:aux")))
+  inv <- ipw_raw_record_char_inventory(meta, frame, aux, ctrl$fitted_control)
+  bytes <- function(x) sum(nchar(x, type = "bytes"))
+  common <- bytes(colnames(Z)) + bytes(c("g", "k_1", "k_2", "k_3")) + bytes(as.character(frame$a_cohorts))
+  scalar_ids <- c(own_id, "borrowed:nuisance", vapply(aux$descriptors, function(d) {
+    x <- c(d$link_id, d$nuisance_id, d$functional_key); if (length(x)) x[which.max(nchar(x, type = "bytes"))] else ""
+  }, character(1)))
+  id_max <- max(128, nchar(scalar_ids, type = "bytes"))
+  # Each actual reporting key includes every K value, not only its auxiliary j.
+  aux_key_upper <- vapply(aux$descriptors, function(d) {
+    bytes("reporting_operator:") + bytes(as.character(d$g)) + bytes(as.character(d$K)) + max(1, length(d$K))
+  }, numeric(1))
+  key_max <- max(nchar(keys, type = "bytes"), aux_key_upper, nchar(scalar_ids[-1L], type = "bytes"))
+  expected_bytes <- 128 * common + 16 * id_max + 16 * key_max
+  expect_equal(inv$records, length(keys) + length(aux$descriptors))
+  expect_equal(inv$common_name_bytes, common)
+  expect_equal(inv$max_id_bytes, id_max)
+  expect_equal(inv$max_key_bytes, key_max)
+  expect_equal(inv$per_record_source_bytes, expected_bytes)
+  expect_equal(inv$per_record_slots, ceiling(expected_bytes / 2) + 32)
+  expect_equal(inv$total_record_slots, inv$records * (ceiling(expected_bytes / 2) + 32))
+  expect_gt(bytes(long_key), nchar(long_key, type = "chars"))
+  for (d in aux$descriptors) {
+    actual_key <- paste0("reporting_operator:", gsub(" ", "", paste(d$g, paste(d$K, collapse = ","), sep = ":")))
+    expect_lte(bytes(actual_key), inv$max_key_bytes)
+  }
+  expect_lte(unname(cp04_payload(list(guard = inv, construction = inv))["entries"]), inv$metadata_entries)
+  larger <- meta
+  larger$catalog$rows <- rbind(meta$catalog$rows, meta$catalog$rows)
+  larger$row_mapping$functional_key <- rep(keys, 2L)
+  twice <- ipw_raw_record_char_inventory(larger, frame, aux, ctrl$fitted_control)
+  expect_identical(twice$per_record_source_bytes, inv$per_record_source_bytes)
+  expect_equal(twice$total_record_slots, (2 * length(keys) + length(aux$descriptors)) * inv$per_record_slots)
+  # A source mutation dropping the longest key must fail the same byte truth.
+  wrong <- meta; wrong$row_mapping$functional_key <- rep("same-key", length(keys))
+  omitted <- ipw_raw_record_char_inventory(wrong, frame, aux, ctrl$fitted_control)
+  expect_lt(omitted$per_record_source_bytes, expected_bytes)
+  cap <- ctrl$owner_control
+  cap$max_matrix_entries <- 4096 + 64 * (ncol(Z) + 4 + length(aux$descriptors) + 1) - 1
+  expect_error(ipw_raw_record_char_inventory(meta, frame, aux, ctrl$fitted_control, envelope = cap),
+    class = "cdid_ipw_owner_bound_error")
+})
+
+test_that("complete NYT guard and constructed raw records share the funded local character inventory", {
+  sim <- make_d93_compact_ipw_test_panel(n_units = 64L, times = 1:5,
+    cohorts = c(2, 3, 4, Inf), missing_mode = "complete", unequal_weights = TRUE)
+  covariate <- paste0("x_", paste(rep("\u03bb\u00e9", 24L), collapse = ""))
+  sim$data[[covariate]] <- sim$data$x1
+  args <- list(data = sim$data, idname = "id", tname = "time", yname = "y", gname = "g",
+    control = make_d93_test_pipeline_control(), xformla = stats::reformulate(covariate), weightsname = "w",
+    control_group = "notyettreated", base_period = "varying", pt_assumption = "all", pt_start = 1,
+    weighting = "optimal", reduce_structural_redundancy = TRUE,
+    run_numerical_transfer = FALSE, cband = FALSE, bstrap = FALSE)
+  actual <- do.call(run_chained_ipw_pipeline, args)
+  legacy <- do.call(run_legacy_scalar_ipw_pipeline, args)
+  reg <- actual$nuisance_registry; b <- reg$raw_ipw
+  witness <- actual$resource_accounting$complete_raw_capacity
+  expect_identical(witness$admitted, TRUE)
+  expect_s3_class(b, "cdid_ipw_raw_backend")
+  inv <- b$accounting$construction_character_inventory
+  expect_identical(witness$character_inventory, inv)
+  expect_identical(witness$construction_table_entries_bound, b$accounting$construction_table_entries_bound)
+  compact_entries <- unname(cp04_payload(list(b$pairs, b$support_specs, b$supports,
+    b$treatment_specs, b$treatments, b$links))["entries"])
+  expect_equal(b$accounting$owned_entries, compact_entries + 256 +
+    b$accounting$owner_snapshot_entries + inv$metadata_entries)
+  expect_equal(inv$catalog_records, nrow(actual$metadata$catalog$rows))
+  expect_gt(inv$auxiliary_records, 0)
+  expect_equal(inv$records, inv$catalog_records + inv$auxiliary_records)
+  expect_lte(b$accounting$construction_peak_entries, witness$construction_entries)
+  expect_lte(actual$resource_accounting$simultaneous_entries, witness$peak_entries)
+  # Count every actual retained record, including aliases and auxiliary-only
+  # fitted/nuisance records, rather than estimating physical string sharing.
+  records <- list(reg$nuisance_views, reg$link_views, reg$fitted_views, reg$point_links_all,
+    reg$raw_aux_nuisance_views, reg$raw_aux_fitted_views, reg$raw_aux_points,
+    b$pairs, b$support_specs, b$supports, b$treatment_specs, b$treatments, b$links)
+  payload <- cp04_payload(records)
+  expect_lte(unname(payload["entries"]), witness$construction_table_entries_bound)
+  # Static field/disclosure strings remain funded by the unchanged fixed
+  # allowance; dynamic own/name/key byte roles are extra and counted fourfold.
+  expect_lte(unname(payload["char_bytes"]), 2 * 20480 * inv$records + 4 * inv$records * inv$per_record_source_bytes)
+  expect_equal(actual$reporting$estimates, legacy$reporting$estimates, tolerance = 1e-12)
+  expect_equal(actual$reporting$if_full, legacy$reporting$if_full, tolerance = 1e-12)
+  expect_equal(actual$reporting$vcov, legacy$reporting$vcov, tolerance = 1e-12)
+  expect_equal(actual$reporting$se, legacy$reporting$se, tolerance = 1e-12)
+  expect_identical(actual$auxiliary_reporting$descriptor_status, legacy$auxiliary_reporting$descriptor_status)
+  expect_identical(actual$covariance_handling$handler_used, legacy$covariance_handling$handler_used)
+  expect_identical(actual$covariance_handling$handler_invoked, legacy$covariance_handling$handler_invoked)
+  expect_equal(actual$covariance_handling$lambda, legacy$covariance_handling$lambda, tolerance = 1e-12)
 })

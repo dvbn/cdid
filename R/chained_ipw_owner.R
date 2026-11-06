@@ -3460,6 +3460,16 @@ construct_ipw_link_view <- function(
       require_support)
   }
   link_scanned <- is.null(sup_info)
+  # The public CP04 registry alone may reserve raw all-owner-cohort support
+  # for an incomplete pair. Its exact requested-cohort checks remain local;
+  # NULL keeps the original scanner and every original preflight unchanged.
+  if (link_scanned && link_context && is.environment(construction_context$pair_support)) {
+    pair_support <- cp04_pair_support(construction_context, frame_owner, pair_desc, coh_desc, step, require_support)
+    if (!is.null(pair_support)) {
+      sup_info <- pair_support$support
+      link_scanned <- pair_support$scanned
+    }
+  }
   if (is.null(sup_info)) {
     if (link_context) construction_context$link_scans <- construction_context$link_scans + 1
     sup_info <- ipw_owner_chunked_pair_support(

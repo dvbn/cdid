@@ -32,13 +32,14 @@ pub_capture_warnings <- function(expr) { w <- character(); val <- withCallingHan
 # A. Public surface and scope gate (no did needed)
 # ------------------------------------------------------------------------------
 
-test_that("att_gt appends control = NULL after the chained-only extensions; did's formals and order are intact", {
+test_that("att_gt preserves control's position and appends outcome pooling; did's formals and order are intact", {
   f <- formals(att_gt)
   n_up <- length(upstream_att_gt_formals)
   expect_identical(names(f)[seq_len(n_up)], upstream_att_gt_formals)
   expect_identical(names(f)[n_up + 1L], "...")
   expect_identical(names(f)[-seq_len(n_up + 1L)], cdid_chained_only_formals)
-  expect_identical(names(f)[length(f)], "control"); expect_null(f$control)
+  expect_identical(tail(names(f), 2L), c("control", "outcome_pooling")); expect_null(f$control)
+  expect_identical(f$outcome_pooling, "separate")
   expect_identical(f$est_method, "dr"); expect_identical(f$bstrap, TRUE); expect_identical(f$cband, TRUE); expect_identical(f$biters, 1000)
   expect_identical(names(formals(aggte)), upstream_aggte_formals)          # aggte signature unchanged
 })

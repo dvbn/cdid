@@ -1,5 +1,44 @@
 # Root runs this file against the real installed namespace and native DLL.
 # These deterministic algebra fixtures are not a coverage simulation.
+orp_diagnostic_copy_witness <- function(local = parent.frame()) {
+  # Reuse only the independent scalar payload definition, without executing
+  # sibling tests or calling either native accounting entry point.
+  ref <- new.env(parent = baseenv())
+  defs <- parse(testthat::test_path("test-cp04-diagnostic-field-batch.R"), keep.source = FALSE)
+  hit <- which(vapply(defs, function(x) is.call(x) && identical(x[[1L]], as.name("<-")) &&
+    identical(x[[2L]], as.name("dfb_ref_payload")), logical(1L)))
+  stopifnot(length(hit) == 1L)
+  eval(defs[[hit]], ref)
+  E <- function(x) unname(ref$dfb_ref_payload(x)["entries"])
+  admit <- getFromNamespace("cp04_public_diagnostic_admit", "cdid")
+  witness <- new.env(parent = emptyenv()); witness$output <- NULL; witness$payload <- E
+  checked_admit <- function(res, control, public_object, label) {
+    bound <- admit(res, control, public_object, label)
+    b <- res$nuisance_registry$cp04
+    testthat::expect_null(res$resource_accounting$memory_phases)
+    design <- if (is.null(b$design_ref)) 0 else
+      get("imputation_design_owner", b$design_ref, inherits = FALSE)$accounting$owned_entries
+    # Independently count every retained result/partial-public alias. The
+    # output allowance plus four construction buffers is the current contract.
+    retained <- max(0, res$resource_accounting$simultaneous_entries,
+      res$resource_accounting$initial_envelope_entries, E(res) + design) + E(public_object)
+    cap <- retained + 5 * bound
+    testthat::expect_gt(bound, 0)
+    testthat::expect_lte(cap, control$owner_control$max_matrix_entries)
+    exact <- control
+    exact$owner_control$max_retained_entries <- cap
+    exact$owner_control$max_matrix_entries <- cap
+    testthat::expect_identical(admit(res, exact, public_object, label), bound)
+    exact$owner_control$max_matrix_entries <- cap - 1
+    testthat::expect_error(admit(res, exact, public_object, label), class = "cdid_ipw_owner_bound_error")
+    witness$output <- bound
+    bound
+  }
+  testthat::local_mocked_bindings(cp04_public_diagnostic_admit = checked_admit,
+    .package = "cdid", .env = local)
+  witness
+}
+
 orp_ns <- function(name) {
   ns <- asNamespace("cdid")
   stopifnot(isNamespace(ns), environmentIsLocked(ns), bindingIsLocked(name, ns))
@@ -37,7 +76,7 @@ orp_fixture <- function(route = "none", dates = 1:4) {
     tab <- tab[tab$route == route, ]; tab$cohort <- as.numeric(replace(tab$cohort, tab$cohort == "NT", "Inf"))
     frame$rho <- tab$rho[match(paste(d$cohort, d$x), paste(tab$cohort, tab$x))]
   }
-  args <- list(yname = "y", tname = "time", idname = "id", gname = "g", data = data, frame = frame,
+  args <- list(outcome_pooling = "pooled", yname = "y", tname = "time", idname = "id", gname = "g", data = data, frame = frame,
     xformla = ~x, weightsname = "w", est_method = "reg", control_group = "nevertreated",
     bstrap = FALSE, cband = FALSE, gmm_weighting = "identity")
   if (route != "none") {
@@ -527,11 +566,11 @@ testthat::test_that("public OR resource planning preserves explicit chunks and f
 })
 
 testthat::test_that("automatic OR row planning reserves the final diagnostic copy", {
+  witness <- orp_diagnostic_copy_witness()
   fit <- orp_fit(orp_fixture("F"))
   resource <- fit$chained$resource_accounting
-  owned <- fit$chained$nuisance_diagnostics$accounting$owned_entries
-  bound <- 4 * owned + 4096
-  testthat::expect_equal(resource$final_diagnostic_copy_entries, 5 * bound, tolerance = 0)
+  testthat::expect_equal(resource$final_diagnostic_copy_entries, 5 * witness$output, tolerance = 0)
+  testthat::expect_lte(witness$payload(fit$chained$nuisance_diagnostics), witness$output)
   testthat::expect_lte(max(resource$simultaneous_entries, resource$initial_envelope_entries) +
     resource$final_diagnostic_copy_entries, fit$chained$public$numeric_workspace_entries)
   baseline <- orp_fit(orp_fixture())

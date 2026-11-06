@@ -2401,13 +2401,14 @@ ipw_point_if_eval_chunk_internal <- function(
     if (!is.list(state) || !identical(state$kind, "cdid_ipw_point_if_general_state") ||
         !ipw_owner_seal_ok(state, "point_if_general_state") ||
         !is.environment(state$runtime) || !identical(state$runtime$status, "built") ||
-        !identical(state$frame_ref, frame_owner$ref) ||
-        !identical(state$panel_ref, frame_owner$panel_ref) ||
+        !gmm_sexp_aliases(state$runtime$payload, state$runtime$payload_snapshot) ||
+        !identical(state$runtime$payload$frame_ref, frame_owner$ref) ||
+        !identical(state$runtime$payload$panel_ref, frame_owner$panel_ref) ||
         !identical(state$n_a_units, na) ||
         !identical(state$n_links, L) ||
         !identical(state$link_ids, link_ids) ||
-        !is.list(state$link_states) || length(state$link_states) != L ||
-        !is.list(state$link_state_refs) || length(state$link_state_refs) != L) {
+        !is.list(state$runtime$payload$link_states) || length(state$runtime$payload$link_states) != L ||
+        !is.list(state$runtime$payload$link_state_refs) || length(state$runtime$payload$link_state_refs) != L) {
       ipw_point_view_general_abort("General point-IF replay state is malformed, foreign, released, or differs from its sealed snapshot.")
     }
     if (batch_index < 1L || batch_index > state$n_chunks) {
@@ -3785,7 +3786,6 @@ ipw_point_if_general_state_reserve <- function(
   res$frame_ref <- plan$frame_owner$ref
   res$panel_ref <- plan$frame_owner$panel_ref
   res$plan_snapshot <- plan
-  lockBinding("plan_snapshot", res)
   res$N <- as.integer(N)
   res$L <- as.integer(L)
   res$B <- as.integer(B)
@@ -3809,9 +3809,24 @@ ipw_point_if_general_state_reserve <- function(
   res$work_total <- admitted$work_total
   res$cap <- max_lim
   res$work_cap <- max_wo
-  lockEnvironment(res, bindings = TRUE)
-  unlockBinding("state", res)
+  # The plan and its owner references are lifetime storage, cleared on exit.
+  for (nm in setdiff(ls(res, all.names = TRUE),
+      c("state", "plan_snapshot", "plan_ref", "frame_ref", "panel_ref"))) lockBinding(nm, res)
+  lockEnvironment(res, bindings = FALSE)
   res
+}
+
+# Only sparse replay link records use a mutable lifetime reference. Their
+# arrays are checked once at construction; COW edits lose the exact snapshot
+# identity at every existing replay boundary, including the final callback.
+ipw_point_if_general_link_state_ok <- function(x) {
+  ref <- if (is.list(x)) x$ref else NULL
+  is.environment(ref) && identical(parent.env(ref), emptyenv()) &&
+    environmentIsLocked(ref) &&
+    exists("point_if_general_link_state", ref, inherits = FALSE) &&
+    !bindingIsLocked("point_if_general_link_state", ref) &&
+    !bindingIsActive("point_if_general_link_state", ref) &&
+    gmm_sexp_aliases(x, get("point_if_general_link_state", ref, inherits = FALSE))
 }
 
 ipw_point_if_general_state_verify <- function(state, plan, control) {
@@ -3824,37 +3839,38 @@ ipw_point_if_general_state_verify <- function(state, plan, control) {
   if (!is.list(state) || !identical(state$kind, "cdid_ipw_point_if_general_state") ||
       !ipw_owner_seal_ok(state, "point_if_general_state") ||
       !is.environment(state$runtime) || !identical(state$runtime$status, "built") ||
+        !gmm_sexp_aliases(state$runtime$payload, state$runtime$payload_snapshot) ||
       !is.environment(state$binding_ref) || !identical(parent.env(state$binding_ref), emptyenv()) ||
       !environmentIsLocked(state$binding_ref) ||
       !exists("plan_snapshot", envir = state$binding_ref, inherits = FALSE) ||
-      !bindingIsLocked("plan_snapshot", state$binding_ref) ||
+      bindingIsLocked("plan_snapshot", state$binding_ref) ||
       !gmm_sexp_aliases(plan, get("plan_snapshot", envir = state$binding_ref, inherits = FALSE))) {
     ipw_point_view_general_abort("General point-IF replay state is malformed, foreign, released, or differs from its sealed snapshot.")
   }
   fo <- plan$frame_owner
   L <- plan$n_links
   C <- as.integer(plan$preflight$n_chunks)
-  ok <- identical(state$plan_ref, plan$ref) &&
-    identical(state$frame_ref, fo$ref) &&
-    identical(state$panel_ref, fo$panel_ref) &&
+  ok <- identical(state$runtime$payload$plan_ref, plan$ref) &&
+    identical(state$runtime$payload$frame_ref, fo$ref) &&
+    identical(state$runtime$payload$panel_ref, fo$panel_ref) &&
     identical(state$n_a_units, plan$n_a_units) &&
     identical(state$n_links, L) &&
     identical(state$step, plan$step) &&
     identical(state$n_chunks, C) &&
     identical(state$link_ids, plan$link_ids) &&
-    is.list(state$link_states) && length(state$link_states) == L &&
-    is.list(state$link_state_refs) && length(state$link_state_refs) == L
+    is.list(state$runtime$payload$link_states) && length(state$runtime$payload$link_states) == L &&
+    is.list(state$runtime$payload$link_state_refs) && length(state$runtime$payload$link_state_refs) == L
   for (ell in seq_len(L)) {
     if (!ok) break
-    ls_ell <- state$link_states[[ell]]
+    ls_ell <- state$runtime$payload$link_states[[ell]]
     pl_ell <- plan$point_links[[ell]]
     lv_ell <- plan$link_views[[ell]]
     S_ell <- as.integer(pl_ell$counts$n_observed_risk_units)
     offs <- if (is.list(ls_ell)) ls_ell$chunk_offsets else NULL
     ok <- is.list(ls_ell) &&
       identical(ls_ell$kind, "cdid_ipw_point_if_general_link_state") &&
-      identical(ls_ell$ref, state$link_state_refs[[ell]]) &&
-      ipw_owner_seal_ok(ls_ell, "point_if_general_link_state") &&
+      identical(ls_ell$ref, state$runtime$payload$link_state_refs[[ell]]) &&
+      ipw_point_if_general_link_state_ok(ls_ell) &&
       identical(ls_ell$link_index, as.integer(ell)) &&
       identical(ls_ell$link_id, plan$link_ids[[ell]]) &&
       identical(ls_ell$point_link_ref, pl_ell$ref) &&
@@ -3881,11 +3897,11 @@ ipw_point_if_general_state_verify <- function(state, plan, control) {
 }
 
 ipw_point_if_general_state_link_slice <- function(state, ell, batch_index, a_s, a_e, b_len, fit, lv_ell) {
-  ls_ell <- state$link_states[[ell]]
+  ls_ell <- state$runtime$payload$link_states[[ell]]
   C <- state$n_chunks
   if (!is.list(ls_ell) || !identical(ls_ell$kind, "cdid_ipw_point_if_general_link_state") ||
-      !identical(ls_ell$ref, state$link_state_refs[[ell]]) ||
-      !ipw_owner_seal_ok(ls_ell, "point_if_general_link_state") ||
+      !identical(ls_ell$ref, state$runtime$payload$link_state_refs[[ell]]) ||
+      !ipw_point_if_general_link_state_ok(ls_ell) ||
       !identical(ls_ell$link_index, as.integer(ell)) ||
       !identical(ls_ell$point_link_ref, fit$ref) ||
       !identical(ls_ell$link_view_ref, lv_ell$ref) ||
@@ -3957,10 +3973,11 @@ ipw_point_if_general_state_build <- function(
       !identical(reservation$kind, "cdid_ipw_point_if_general_state_reservation") ||
       !identical(reservation$state, "reserved") ||
       !identical(parent.env(reservation), emptyenv()) || !environmentIsLocked(reservation) ||
-      !all(vapply(setdiff(ls(reservation, all.names = TRUE), "state"),
+      !all(vapply(setdiff(ls(reservation, all.names = TRUE),
+        c("state", "plan_snapshot", "plan_ref", "frame_ref", "panel_ref")),
         bindingIsLocked, logical(1L), env = reservation)) ||
       !exists("plan_snapshot", envir = reservation, inherits = FALSE) ||
-      !bindingIsLocked("plan_snapshot", reservation) ||
+      bindingIsLocked("plan_snapshot", reservation) ||
       !gmm_sexp_aliases(plan, get("plan_snapshot", envir = reservation, inherits = FALSE)) ||
       !identical(plan$ref, reservation$plan_ref) ||
       !identical(plan$frame_owner$ref, reservation$frame_ref) ||
@@ -3983,9 +4000,8 @@ ipw_point_if_general_state_build <- function(
   reservation$state <- "building"
   on.exit({
     if (!identical(reservation$state, "built")) reservation$state <- "failed"
-    unlockBinding("plan_snapshot", reservation)
-    assign("plan_snapshot", NULL, envir = reservation)
-    lockBinding("plan_snapshot", reservation)
+    for (nm in c("plan_snapshot", "plan_ref", "frame_ref", "panel_ref"))
+      assign(nm, NULL, envir = reservation)
   }, add = TRUE)
 
   a_index_list <- vector("list", L)
@@ -4212,7 +4228,7 @@ ipw_point_if_general_state_build <- function(
   for (ell in seq_len(L)) {
     pl_ell <- plan$point_links[[ell]]
     lv_ell <- plan$link_views[[ell]]
-    ls_ell <- ipw_owner_seal(list(
+    ls_ell <- list(
       kind = "cdid_ipw_point_if_general_link_state",
       link_index = as.integer(ell),
       link_id = plan$link_ids[[ell]],
@@ -4229,27 +4245,35 @@ ipw_point_if_general_state_build <- function(
       obs_t_index = obs_t_list[[ell]],
       odds = odds_list[[ell]],
       score_base = score_base_list[[ell]]
-    ), "point_if_general_link_state")
+    )
+    # Unlike immutable owners, this private lifetime reference must release.
+    lref <- new.env(parent = emptyenv())
+    ls_ell$ref <- lref
+    lref$point_if_general_link_state <- ls_ell
+    lockEnvironment(lref, bindings = FALSE)
     link_states[[ell]] <- ls_ell
     link_state_refs[[ell]] <- ls_ell$ref
   }
 
   binding_ref <- new.env(parent = emptyenv())
   binding_ref$plan_snapshot <- plan
-  lockEnvironment(binding_ref, bindings = TRUE)
+  lockEnvironment(binding_ref, bindings = FALSE)
 
   runtime <- new.env(parent = emptyenv())
   runtime$status <- "built"
   runtime$passes_completed <- 0L
   runtime$chunks_evaluated <- 0L
   runtime$verifications <- 0L
+  # A releasable exact snapshot protects the outer payload list too. These
+  # are aliases, with no array copy; both are cleared at the release boundary.
+  # The existing 2048-entry header reserve covers the extra small list header.
+  runtime$payload <- list(plan_ref = plan$ref, frame_ref = fo$ref, panel_ref = fo$panel_ref,
+    link_states = link_states, link_state_refs = link_state_refs)
+  runtime$payload_snapshot <- runtime$payload
   lockEnvironment(runtime, bindings = FALSE)
 
   state <- ipw_owner_seal(list(
     kind = "cdid_ipw_point_if_general_state",
-    plan_ref = plan$ref,
-    frame_ref = fo$ref,
-    panel_ref = fo$panel_ref,
     binding_ref = binding_ref,
     runtime = runtime,
     n_a_units = na,
@@ -4273,9 +4297,7 @@ ipw_point_if_general_state_build <- function(
     work_cap = reservation$work_cap,
     queries_performed = logit_cert_count_output(reservation$queries_expected),
     endpoints_read_during_construction = 0L,
-    link_ids = plan$link_ids,
-    link_states = link_states,
-    link_state_refs = link_state_refs
+    link_ids = plan$link_ids
   ), "point_if_general_state")
 
   reservation$state <- "built"
@@ -4397,23 +4419,16 @@ ipw_point_if_general_state_release <- function(state, plan = NULL, superseded = 
       "endpoints through ipw_owner_read_y_positions; released immediately after solve_chained_gmm_core."
     )
   )
-  if (is.environment(rt)) rt$status <- "released"
-  if (is.list(state$link_state_refs)) {
-    for (lref in state$link_state_refs) {
-      if (is.environment(lref) && exists("point_if_general_link_state", envir = lref, inherits = FALSE)) {
-        if (bindingIsLocked("point_if_general_link_state", lref)) unlockBinding("point_if_general_link_state", lref)
-        assign("point_if_general_link_state", NULL, envir = lref)
-      }
+  if (is.environment(rt)) {
+    rt$status <- "released"
+    for (lref in rt$payload$link_state_refs) {
+      if (is.environment(lref)) lref$point_if_general_link_state <- NULL
     }
+    # Both the runtime and every surviving link-reference alias lose payload.
+    rt$payload <- NULL
+    rt$payload_snapshot <- NULL
   }
-  if (is.environment(state$binding_ref) && exists("plan_snapshot", envir = state$binding_ref, inherits = FALSE)) {
-    if (bindingIsLocked("plan_snapshot", state$binding_ref)) unlockBinding("plan_snapshot", state$binding_ref)
-    assign("plan_snapshot", NULL, envir = state$binding_ref)
-  }
-  if (is.environment(state$ref) && exists("point_if_general_state", envir = state$ref, inherits = FALSE)) {
-    if (bindingIsLocked("point_if_general_state", state$ref)) unlockBinding("point_if_general_state", state$ref)
-    assign("point_if_general_state", NULL, envir = state$ref)
-  }
+  if (is.environment(state$binding_ref)) state$binding_ref$plan_snapshot <- NULL
   rec
 }
 
@@ -4748,9 +4763,9 @@ ipw_point_if_native_kernel <- function() {
   if (is.environment(cache)) {
     cache$owner <- owner
     cache$syms <- syms
-    cache$address <- si$address
+    cache$address <- attr(syms, "calls")[["C_gmm_ipw_if_chunk"]]
   }
-  si$address
+  attr(syms, "calls")[["C_gmm_ipw_if_chunk"]]
 }
 
 ipw_point_view_batch_abort <- function(message, diagnostics = list()) {
@@ -5677,7 +5692,7 @@ ipw_point_if_plan_chunk <- function(plan, a_start, a_end, kernel, include_compon
   score_base_k <- (w_k / r_k) * (D_k - prob_k)
   rm(gi, D_k, lv_k, prob_k)
   post <- po$postings
-  res <- .Call(kernel, po$observations$y, post$date_start, post$post_a_index, post$post_obs_index,
+  res <- kernel(po$observations$y, post$date_start, post$post_a_index, post$post_obs_index,
     a_s, b_len, pos_k, gj_k, w_k, r_k, odds_k, score_base_k, Z_k, plan$link_dates, plan$link_par,
     plan$dimnames, isTRUE(include_components), plan$max_output_entries)
   rm(pos_k, gj_k, w_k, r_k, odds_k, score_base_k, Z_k)
@@ -6073,7 +6088,6 @@ ipw_point_if_retained_reserve <- function(plan, control, live, work, envelope_co
   carrier$fitted_refs <- if (identical(plan$kind, "cdid_ipw_point_if_general_plan")) plan$fitted_refs else NULL
   carrier$nuisance_refs <- if (identical(plan$kind, "cdid_ipw_point_if_general_plan")) plan$nuisance_refs else NULL
   carrier$plan_snapshot <- plan
-  lockBinding("plan_snapshot", carrier)
   carrier$N <- as.integer(N)
   carrier$n_total <- as.integer(n_total)
   carrier$clustered <- isTRUE(clustered)
@@ -6093,10 +6107,12 @@ ipw_point_if_retained_reserve <- function(plan, control, live, work, envelope_co
   carrier$batches <- 0L
   carrier$slices_emitted <- 0L
   carrier$verifications <- 1L
-  # Lock configuration bindings and retain their exact objects in a separate
-  # locked environment. Unlock/rebind/relock of an equal COW copy is refused.
+  # Seal small configuration only. Source snapshots and raw storage remain
+  # mutable lifetime bindings in this private carrier and are cleared together.
+  # The existing 4096-entry metadata reserve covers both environment headers.
   seal <- new.env(parent = emptyenv())
-  mutable <- c("state", "producer_passes", "slice_passes", "batches", "slices_emitted", "verifications")
+  mutable <- c("state", "producer_passes", "slice_passes", "batches", "slices_emitted", "verifications",
+    "plan_snapshot", "plan_ref", "frame_ref", "panel_ref", "link_ids", "fitted_ref", "fitted_refs", "nuisance_refs")
   for (nm in setdiff(ls(carrier, all.names = TRUE), mutable)) {
     assign(nm, get(nm, carrier, inherits = FALSE), seal)
     lockBinding(nm, carrier)
@@ -6146,26 +6162,27 @@ ipw_point_if_retained_check <- function(carrier, plan, control, verify_plan = TR
   same_refs <- if (identical(plan$kind, "cdid_ipw_point_if_batch_plan")) {
     identical(plan$fitted_view$ref, carrier$fitted_ref)
   } else if (identical(plan$kind, "cdid_ipw_point_if_general_plan")) {
-    identical(plan$fitted_refs, carrier$fitted_refs) && identical(plan$nuisance_refs, carrier$nuisance_refs)
+    gmm_sexp_aliases(plan$fitted_refs, carrier$fitted_refs) &&
+      gmm_sexp_aliases(plan$nuisance_refs, carrier$nuisance_refs)
   } else {
     identical(plan$kind, "cdid_custom_ipw_if_plan")
   }
-  if (!exists("plan_snapshot", carrier, inherits = FALSE) || !bindingIsLocked("plan_snapshot", carrier) ||
+  if (!exists("plan_snapshot", carrier, inherits = FALSE) || bindingIsLocked("plan_snapshot", carrier) ||
       !gmm_sexp_aliases(plan, get("plan_snapshot", carrier, inherits = FALSE)) ||
       !identical(plan$kind, carrier$plan_kind) ||
       !identical(plan$ref, carrier$plan_ref) || !identical(plan$frame_owner$ref, carrier$frame_ref) ||
       !identical(plan$frame_owner$panel_ref, carrier$panel_ref) || !same_refs ||
       !identical(plan$n_a_units, carrier$N) || !identical(plan_L, carrier$L) ||
-      !identical(plan$step, carrier$B) || !identical(plan$link_ids, carrier$link_ids)) {
+      !identical(plan$step, carrier$B) || !gmm_sexp_aliases(plan$link_ids, carrier$link_ids)) {
     ipw_point_view_batch_abort("Retained point IF carrier does not describe this sealed plan.")
   }
   if (carrier$state %in% c("filled", "slicing")) {
     full <- carrier$phi; N <- carrier$N; L <- carrier$L
-    if (!exists("phi", carrier, inherits = FALSE) || !bindingIsLocked("phi", carrier) ||
-        !exists("raw_ref", carrier, inherits = FALSE) || !bindingIsLocked("raw_ref", carrier) ||
+    if (!exists("phi", carrier, inherits = FALSE) || bindingIsLocked("phi", carrier) ||
+        !exists("raw_ref", carrier, inherits = FALSE) || bindingIsLocked("raw_ref", carrier) ||
         !is.environment(carrier$raw_ref) || !identical(parent.env(carrier$raw_ref), emptyenv()) ||
         !environmentIsLocked(carrier$raw_ref) || !exists("phi", carrier$raw_ref, inherits = FALSE) ||
-        !bindingIsLocked("phi", carrier$raw_ref) || !gmm_sexp_aliases(full, get("phi", carrier$raw_ref, inherits = FALSE)) ||
+        bindingIsLocked("phi", carrier$raw_ref) || !gmm_sexp_aliases(full, get("phi", carrier$raw_ref, inherits = FALSE)) ||
         !is.matrix(full) || !is.double(full) || nrow(full) != N || ncol(full) != L ||
         !identical(colnames(full), carrier$link_ids)) {
       ipw_point_view_batch_abort("Retained point IF carrier lost its shape after the producer pass.")
@@ -6177,7 +6194,7 @@ ipw_point_if_retained_check <- function(carrier, plan, control, verify_plan = TR
 
 # The one producer pass: the unchanged plan replay, whose every callback batch
 # is stored raw (exact rows, IDs from the plan's bound panel owner, link order,
-# finite values) and handed on unchanged. A locked raw-matrix binding retains
+# finite values) and handed on unchanged. A private raw-matrix reference retains
 # the exact completed object; copy-on-modify value, label or order changes
 # cannot alias it. The caller's covariance preflight admitted the replay work;
 # the fill/slice work is charged in addition.
@@ -6263,9 +6280,9 @@ ipw_point_if_retained_fill <- function(
   }
   colnames(phi) <- cn
   raw_ref <- new.env(parent = emptyenv()); raw_ref$phi <- phi
-  lockEnvironment(raw_ref, bindings = TRUE)
-  carrier$phi <- phi; lockBinding("phi", carrier)
-  carrier$raw_ref <- raw_ref; lockBinding("raw_ref", carrier)
+  lockEnvironment(raw_ref, bindings = FALSE)
+  carrier$phi <- phi
+  carrier$raw_ref <- raw_ref
   carrier$state <- "filled"
   carrier$producer_passes <- carrier$producer_passes + 1L
   carrier$batches <- batches
@@ -6373,7 +6390,7 @@ replay_ipw_point_if_retained <- function(carrier, plan, control, callback, trace
   ))
 }
 
-# Release right after the GMM solve: the matrix, its locked reference and the
+# Release right after the GMM solve: the matrix, its raw reference and the
 # plan snapshot are dropped; the scalar record of what happened is returned
 # (NULL carrier: the plan replay served every pass).
 ipw_point_if_retained_release <- function(carrier, plan = NULL) {
@@ -6429,10 +6446,10 @@ ipw_point_if_retained_release <- function(carrier, plan = NULL) {
       "row partition; released before auxiliary reporting and final output"
     )
   )
-  drop <- intersect(c("phi", "raw_ref", "plan_snapshot", "seal", "plan_ref", "frame_ref", "panel_ref",
+  drop <- intersect(c("phi", "raw_ref", "plan_snapshot", "plan_ref", "frame_ref", "panel_ref",
     "link_ids", "fitted_ref", "fitted_refs", "nuisance_refs"),
     ls(carrier, all.names = TRUE))
-  for (nm in drop) if (bindingIsLocked(nm, carrier)) unlockBinding(nm, carrier)
+  if (is.environment(carrier$raw_ref)) carrier$raw_ref$phi <- NULL
   rm(list = drop, envir = carrier)
   carrier$state <- "released"
   rec

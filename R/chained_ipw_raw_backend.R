@@ -353,6 +353,19 @@ ipw_raw_verify_pair_masks_equal <- function(frame_owner, panel_owner, pair1_summ
 # Stream ONE observer buffer (`risk_a_idx`, `risk_gi`, `risk_w`, `Z_use`,
 # `obs_s`, `obs_t`) for `(pair_summary, coh_desc)` in bounded chunks of `step`.
 # No outcome values (`y`) are read here.
+ipw_raw_observer_collector_kernel <- function() {
+  syms <- gmm_require_native_dll()
+  owner <- environment(sys.function())
+  dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
+  si <- tryCatch(base::getNativeSymbolInfo("C_gmm_ipw_raw_observer_collect", PACKAGE = dlls[["cdid"]]),
+    error = function(e) NULL)
+  if (is.null(si) || !inherits(si, "NativeSymbolInfo") || is.null(si$address) ||
+      !identical(as.integer(si$numParameters), 10L))
+    cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_ipw_raw_observer_collect`.",
+      c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
+  attr(syms, "calls")[["C_gmm_ipw_raw_observer_collect"]]
+}
+
 ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summary, coh_desc, n_obs, step) {
   n_a <- as.integer(frame_owner$n_a_units)
   p <- as.integer(frame_owner$n_covariates)
@@ -363,6 +376,47 @@ ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summa
   ds <- pair_desc$s_calendar_index
   dt <- pair_desc$t_calendar_index
   complete_pair <- isTRUE(pair_summary$complete_pair)
+
+  if (!complete_pair) {
+    post <- panel_owner$postings
+    plain_integer <- function(x) is.integer(x) && !is.object(x) && is.null(dim(x))
+    eligible <- plain_integer(post$post_a_index) && plain_integer(post$post_obs_index) &&
+      length(post$post_a_index) == length(post$post_obs_index) &&
+      length(post$post_a_index) <= .Machine$integer.max &&
+      plain_integer(post$date_start) && plain_integer(post$date_end) &&
+      plain_integer(a_cohort_idx) && is.double(w_a) && !is.object(w_a) && is.null(dim(w_a)) &&
+      is.double(Z_a) && is.matrix(Z_a) && !is.object(Z_a) &&
+      plain_integer(coh_desc$owner_cohort_index) && plain_integer(coh_desc$view_cohort_index) &&
+      length(coh_desc$owner_cohort_index) == length(coh_desc$view_cohort_index) &&
+      !is.na(ds) && !is.na(dt)
+    if (eligible) {
+      n <- ipw_owner_int_bound(n_obs, "raw observer count", min_val = 0)
+      chunk <- ipw_owner_int_bound(step, "raw observer chunk rows")
+      declared <- ipw_owner_int_bound(coh_desc$m_cohorts, "raw observer declared cohorts")
+      entries <- ipw_owner_safe_sum(c(ipw_owner_safe_product(p + 5, n), 512))
+      # O_old=(p+6)n+32 and Q_old>=2p+88+m+512 (B_f>=1), regardless
+      # of the independently chosen stream step. Spend only that old slice.
+      old_slice <- ipw_owner_safe_sum(c(ipw_owner_safe_product(p + 6, n), 32,
+        2 * p, 88, declared, 512))
+      ipw_owner_check_matrix_dims(n, p, label = "raw observer design")
+      if (n <= .Machine$integer.max && chunk <= .Machine$integer.max &&
+          declared <= .Machine$integer.max && entries <= old_slice &&
+          entries <= frame_owner$control$max_matrix_entries) {
+        bounds <- c(post$date_start[ds], post$date_end[ds], post$date_start[dt], post$date_end[dt])
+        out <- ipw_raw_observer_collector_kernel()(post$post_a_index, post$post_obs_index,
+          bounds, a_cohort_idx, w_a, Z_a, coh_desc$owner_cohort_index, coh_desc$view_cohort_index,
+          as.integer(c(n, chunk, declared)), entries)
+        if (identical(out$status, 1L))
+          ipw_raw_backend_abort("Observed risk support count changed from its pair summary.", "integrity")
+        if (identical(out$status, 2L))
+          ipw_raw_backend_abort("Observed risk support count disagreed with its pair summary.", "integrity")
+        if (!identical(out$status, 0L))
+          ipw_raw_backend_abort("Native observer collection returned an invalid status.", "integrity")
+        out$status <- NULL
+        return(out)
+      }
+    }
+  }
 
   risk_a_idx <- integer(n_obs)
   risk_gi <- integer(n_obs)
@@ -874,19 +928,23 @@ build_ipw_raw_backend_registry <- function(
   Q_bound <- if (is.null(aux_spec)) 0L else length(aux_spec$descriptors)
   D_bound <- as.double(M) + Q_bound
   C_bound <- as.double(length(f_owner$a_cohorts))
-  char_bound <- ipw_fitted_view_char_bytes(
-    list(colnames(f_owner$Z_a), as.character(f_owner$a_cohorts),
-         paste0("link:r", seq_len(M)), metadata_obj$row_mapping$functional_key), fit_ctrl)$charged_slots
-  table_entries_bound <- ipw_owner_safe_product(D_bound,
-    20480 + 16 * p * p + 16 * p * C_bound + 256 * (p + C_bound + 1) + 4 * char_bound,
-    label = "raw-IPW support/model/link and diagnostic tables")
   construction_base <- max(retained_pipeline_entries, ipw_point_view_owner_entries(f_owner, p_owner))
+  character_inventory <- ipw_raw_record_char_inventory(metadata_obj, f_owner, aux_spec, fit_ctrl,
+    retained = construction_base, envelope = own_ctrl, work = external_work_ops)
+  table_entries_bound <- ipw_owner_safe_sum(c(ipw_owner_safe_product(D_bound,
+    20480 + 16 * p * p + 16 * p * C_bound + 256 * (p + C_bound + 1)),
+    ipw_owner_safe_product(4, character_inventory$total_record_slots), character_inventory$metadata_entries),
+    label = "raw-IPW support/model/link and diagnostic tables")
   construction_retained <- ipw_owner_safe_sum(c(construction_base, table_entries_bound, owner_snapshot_entries),
     min(own_ctrl$max_retained_entries, own_ctrl$max_matrix_entries),
     "raw-IPW construction owners, pipeline and compact tables")
-  numerical_work <- 0
+  # Fund both possible inventory calls (optional guard and this constructor).
+  # Standalone/incomplete callers keep the same conservative work allowance.
+  numerical_work <- ipw_owner_safe_product(2, character_inventory$work_ops_bound)
+  ipw_owner_safe_sum(c(external_work_ops, numerical_work), own_ctrl$max_work_ops,
+    "raw-IPW prefix and character inventory work")
   retained_failure_entries <- 0
-  construction_peak <- construction_retained
+  construction_peak <- max(construction_retained, construction_base + character_inventory$scratch_entries)
   C_all <- length(metadata_obj$catalog$spec$cohorts)
   op_rows <- as.double(tabulate(match(cat_rows$operator_id, unique(cat_rows$operator_id))))
   split_bound <- sum(op_rows * (op_rows - 1) / 2)
@@ -933,6 +991,13 @@ build_ipw_raw_backend_registry <- function(
   pair_cache <- new.env(hash = TRUE, parent = emptyenv())
   distinct_pairs <- list()
   pair_keys <- character()
+  # One invocation, one immutable frame/panel and one fixed stream_step.
+  # Every complete pair visits the identical A positions in identical chunk
+  # order, so counts, weighted masses and modular power sums are identical.
+  # The canonical numeric vectors already persist in distinct_pairs; this
+  # extra reference/header is inside its existing128*(M+1) summary reservation.
+  complete_summary <- NULL
+  complete_summary_reuses <- 0L
 
   get_pair_summary <- function(pair_desc) {
     pkey <- paste0(
@@ -943,9 +1008,19 @@ build_ipw_raw_backend_registry <- function(
     pid <- get0(pkey, envir = pair_cache, inherits = FALSE)
     if (is.null(pid)) {
       charge_scans(1, C_bound)
-      ps <- ipw_raw_scan_pair_summary(f_owner, p_owner, pair_desc, stream_step, date_memo)
+      # A new pair must prove BOTH its own dates complete. Equal fitted
+      # weights, equal hashes or an earlier complete pair are not that proof.
+      if (!is.null(complete_summary) &&
+          ipw_owner_pair_complete(p_owner, pair_desc, stream_step, date_memo)) {
+        ps <- complete_summary
+        ps$pair <- pair_desc
+        complete_summary_reuses <<- complete_summary_reuses + 1L
+      } else {
+        ps <- ipw_raw_scan_pair_summary(f_owner, p_owner, pair_desc, stream_step, date_memo)
+      }
       pid <- length(distinct_pairs) + 1L
       ps$pair_id <- as.integer(pid)
+      if (is.null(complete_summary) && isTRUE(ps$complete_pair)) complete_summary <<- ps
       distinct_pairs[[pid]] <<- ps
       pair_keys[pid] <<- pkey
       assign(pkey, pid, envir = pair_cache)
@@ -1775,7 +1850,7 @@ build_ipw_raw_backend_registry <- function(
   })
   owned_entries <- unname(cp04_payload(list(
     pairs_compact, support_specs, supports, treatment_specs, treatments, backend_links
-  ))["entries"]) + 256 + owner_snapshot_entries
+  ))["entries"]) + 256 + owner_snapshot_entries + character_inventory$metadata_entries
   borrowed_entries <- ipw_point_view_owner_entries(f_owner, p_owner)
   work_charged <- ipw_owner_safe_sum(c(scan_work, descriptor_charge$work_ops_bound, numerical_work))
   composed_work <- ipw_owner_safe_sum(
@@ -1825,6 +1900,7 @@ build_ipw_raw_backend_registry <- function(
         owner_snapshot_entries = owner_snapshot_entries,
         construction_peak_entries = construction_peak,
         construction_table_entries_bound = table_entries_bound,
+        construction_character_inventory = character_inventory,
         simultaneous_scratch_bound = construction_peak - construction_retained,
         work_ops_bound = composed_work,
         full_n_masks_retained = FALSE,
@@ -1875,7 +1951,7 @@ build_ipw_raw_backend_registry <- function(
       registry_entries_reserved = mask_registry_entries + split_cert_entries,
       split_records_bound = split_bound,
       link_support_scans_reused = n_support_reused,
-      complete_pair_fingerprints_reused = 0
+      complete_pair_fingerprints_reused = complete_summary_reuses
     ),
     raw_work_accounting = list(
       mode = "cumulative_includes_prefix",
@@ -2132,6 +2208,20 @@ ipw_raw_if_budget <- function(backend, B, links, details = FALSE) {
   c(env, list(pids = as.integer(pids), sids = as.integer(sids), tids = as.integer(tids)))
 }
 
+# Fixed, outcome-free dispatch vectors. The existing chunk scratch reservation
+# of 16 * (S + M_models + L + p + 16) covers these vectors and their list slices.
+# Direct/detailed evaluation prepares them once, outside the pair/model loops.
+ipw_raw_if_metadata <- function(backend, pre) {
+  ss <- backend$support_specs[pre$sids]
+  ts <- backend$treatment_specs[pre$tids]
+  list(
+    support_pairs = vapply(ss, `[[`, integer(1L), "pair_id"),
+    support_cohorts = vapply(ss, `[[`, integer(1L), "cohort"),
+    treatment_pair_pos = match(vapply(ts, `[[`, integer(1L), "pair_id"), pre$pids),
+    nuisance_ids = vapply(ts, `[[`, integer(1L), "nuisance_idx")
+  )
+}
+
 ipw_raw_if_plan <- function(backend, links, B) {
   pre <- ipw_raw_if_budget(backend, B, links, details = FALSE)
   lk <- backend$links[links]
@@ -2151,6 +2241,54 @@ ipw_raw_if_plan <- function(backend, links, B) {
     entries = 0
   )
   plan$entries <- unname(cp04_payload(plan)["entries"])
+
+  # Optional replay-local dispatch map, admitted before any map allocation.
+  # The map and its construction must fit INSIDE the existing fixed metadata
+  # scratch, so every caller's additional retained prefix stays fully funded.
+  # Payload's len+8 accounting gives S+9P+2T+102 extra entries including the
+  # new plan fields/names; 128 reserves that fixed overhead before allocation.
+  # Constructor scratch covers source slices, extracted vectors, pair match,
+  # stable radix workspace, counts/endpoints and one cohort slice. The separate
+  # constructor prefix covers lk and headers; replay metadata covers remaining
+  # loop indices/headers. Full-B and shorter-tail envelopes remain unchanged.
+  S <- length(pre$sids); P <- length(pre$pids); T <- length(pre$tids); L <- length(links)
+  metadata_entries <- ipw_owner_safe_product(16, ipw_owner_safe_sum(c(S, T, L, backend$p, 16)))
+  index_entries <- ipw_owner_safe_sum(c(S, 9 * P, 2 * T, 128))
+  index_scratch <- ipw_owner_safe_sum(c(7 * S, 4 * P, 4 * T, 256))
+  constructor_prefix <- ipw_owner_safe_sum(c(2 * L, 64))
+  replay_metadata <- ipw_owner_safe_sum(c(4 * (S + T + L + backend$p), 128))
+  construction <- ipw_owner_safe_sum(c(index_entries, index_scratch, constructor_prefix))
+  replay <- ipw_owner_safe_sum(c(index_entries, replay_metadata))
+  metadata_work <- ipw_owner_safe_product(256, ipw_owner_safe_sum(c(S, T, L, 1)))
+  index_work <- ipw_owner_safe_product(128, ipw_owner_safe_sum(c(S, P, T, 1)))
+  replay_metadata_work <- ipw_owner_safe_product(64, ipw_owner_safe_sum(c(S, T, L, 1)))
+  work <- ipw_owner_safe_sum(c(index_work, replay_metadata_work))
+  retained <- ipw_owner_safe_sum(c(backend$accounting$owned_entries,
+    backend$accounting$borrowed_entries, plan$entries, index_entries))
+  local_replay <- ipw_owner_safe_sum(c(backend$accounting$owned_entries,
+    backend$accounting$borrowed_entries, plan$entries, pre$output, pre$scratch))
+  if (retained <= backend$control$max_retained_entries &&
+      local_replay <= backend$control$max_matrix_entries &&
+      max(construction, replay) <= metadata_entries && work <= metadata_work) {
+    meta <- ipw_raw_if_metadata(backend, pre)
+    pair_pos <- match(meta$support_pairs, pre$pids)
+    support_order <- order(pair_pos, method = "radix")
+    pair_count <- tabulate(pair_pos, nbins = P)
+    pair_end <- cumsum(as.double(pair_count))
+    pair_start <- pair_end - pair_count + 1
+    plan$replay_index <- list(
+      pair_cohorts = lapply(seq_len(P), function(j)
+        meta$support_cohorts[support_order[seq.int(pair_start[j], pair_end[j])]]),
+      treatment_pair_pos = meta$treatment_pair_pos,
+      nuisance_ids = meta$nuisance_ids
+    )
+    base_entries <- plan$entries
+    plan$funded_entries <- 0
+    plan$entries <- unname(cp04_payload(plan)["entries"])
+    plan$funded_entries <- plan$entries - base_entries
+    if (plan$funded_entries > index_entries)
+      ipw_raw_backend_abort("Raw-IPW replay dispatch map exceeded its reserved entries.", "bound")
+  }
   ipw_owner_seal(plan, "ipw_raw_if_plan")
 }
 
@@ -2224,6 +2362,7 @@ evaluate_ipw_raw_if_chunk <- function(backend, rows, links, scale = "frame", det
   B <- length(rows)
   rows_i <- as.integer(rows)
   links_i <- as.integer(links)
+  replay_index <- NULL
 
   if (!is.null(plan) && !want_details) {
     plan_ref <- if (typeof(plan) == "list" && !is.object(plan)) .subset2(plan, "ref") else NULL
@@ -2239,8 +2378,12 @@ evaluate_ipw_raw_if_chunk <- function(backend, rows, links, scale = "frame", det
     pre <- plan$pre
     link_ids <- plan$link_ids
     model_pos <- plan$model_pos
+    replay_index <- plan$replay_index
+    # Only the exact old plan footprint is outside pre$scratch: the optional
+    # map's full payload is already funded in its fixed metadata reservation.
+    plan_entries <- plan$entries - if (is.null(replay_index)) 0 else plan$funded_entries
     ipw_owner_safe_sum(c(backend$accounting$owned_entries, backend$accounting$borrowed_entries,
-      pre$output, pre$scratch, plan$entries), backend$control$max_matrix_entries,
+      pre$output, pre$scratch, plan_entries), backend$control$max_matrix_entries,
       "raw-IPW sealed plan plus IF output and scratch")
   } else {
     pre <- ipw_raw_if_budget(backend, B, links_i, details = want_details)
@@ -2248,6 +2391,7 @@ evaluate_ipw_raw_if_chunk <- function(backend, rows, links, scale = "frame", det
     link_ids <- vapply(lk, `[[`, character(1L), "link_id")
     model_pos <- match(vapply(lk, `[[`, integer(1L), "model"), pre$tids)
   }
+  meta <- if (is.null(replay_index)) ipw_raw_if_metadata(backend, pre) else replay_index
 
   frame <- get("frame_owner", envir = backend$frame_ref, inherits = FALSE)
   panel <- get("panel_owner", envir = backend$panel_ref, inherits = FALSE)
@@ -2263,9 +2407,10 @@ evaluate_ipw_raw_if_chunk <- function(backend, rows, links, scale = "frame", det
     pid <- pre$pids[p_idx]
     pair_rec <- backend$pairs[[pid]]
     hit_p <- ipw_raw_query_pair_rows(panel, pair_rec, rows_i)
-    # Active cohorts for this pair across `pre$sids`
-    active_sids_p <- pre$sids[vapply(backend$support_specs[pre$sids], function(s) s$pair_id == pid, logical(1L))]
-    active_cohorts_p <- vapply(backend$support_specs[active_sids_p], `[[`, integer(1L), "cohort")
+    # Preserve the original active-support order without per-pair list dispatch.
+    active_cohorts_p <- if (is.null(replay_index)) {
+      meta$support_cohorts[meta$support_pairs == pid]
+    } else meta$pair_cohorts[[p_idx]]
     obs_active <- which(hit_p$obs & (u_a_cohort %in% active_cohorts_p))
     dy_vec <- numeric(B)
     if (length(obs_active) > 0L) {
@@ -2308,7 +2453,7 @@ evaluate_ipw_raw_if_chunk <- function(backend, rows, links, scale = "frame", det
   # Preserve the accepted shared-nuisance score reuse: only one bounded design,
   # raw probability and effective-odds buffer is live. Different pairs keep
   # their own outcomes, partials, model columns and original link ordering.
-  nuisance_ids <- vapply(backend$treatment_specs[pre$tids], `[[`, integer(1L), "nuisance_idx")
+  nuisance_ids <- meta$nuisance_ids
   nuisance_buffer <- NULL
   current_nuisance <- NA_integer_
   nuisance_evaluations <- 0L
@@ -2316,7 +2461,7 @@ evaluate_ipw_raw_if_chunk <- function(backend, rows, links, scale = "frame", det
     tj <- pre$tids[t_idx]
     spec <- backend$treatment_specs[[tj]]
     f <- backend$treatments[[tj]]
-    p_idx <- match(spec$pair_id, pre$pids)
+    p_idx <- meta$treatment_pair_pos[t_idx]
     ph <- pair_hits[[p_idx]]
 
     if (!identical(current_nuisance, nuisance_ids[t_idx])) {

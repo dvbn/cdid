@@ -154,7 +154,7 @@ bb_kernel_call <- function(plan, a_s, a_e, ..., kernel = api$ipw_point_if_native
     dimnames = plan$dimnames, components = FALSE, max = plan$max_output_entries)
   repl <- list(...)
   for (nm in names(repl)) args[nm] <- list(repl[[nm]])
-  do.call(.Call, c(list(kernel), unname(args)))
+  do.call(kernel, unname(args))
 }
 
 fx <- bb_fixture()

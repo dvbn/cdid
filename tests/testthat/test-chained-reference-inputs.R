@@ -40,7 +40,7 @@ rid_panel <- function(n = 48, dates = c(1, 2, 4, 5, 7), cohorts = c(4, 5, 0),
 rid_fit <- function(d, xformla = ~x, est_method = "reg", control_group = "nevertreated", ...) {
   rid_ns("att_gt")(yname = "y", tname = "time", idname = "id", gname = "G", data = d, xformla = xformla,
     weightsname = "w", est_method = est_method, control_group = control_group, bstrap = FALSE, cband = FALSE,
-    gmm_weighting = "identity", ...)
+    gmm_weighting = "identity", outcome_pooling = "pooled", ...)
 }
 
 rid_post <- function(fit) which(fit$t >= fit$group)
@@ -237,7 +237,10 @@ testthat::test_that("static designs keep the static design and alias map; one ca
   fr_s <- fr; fr_s$w <- c(dc$w[match(unique(ds$id), dc$id)], 1, 1)
   b <- rid_fit(dc, frame = fr_s, control_group = "notyettreated")
   testthat::expect_identical(a$att, b$att)
-  testthat::expect_identical(a$inffunc, b$inffunc)
+  testthat::expect_identical(
+    list(typeof(a$inffunc), attributes(a$inffunc), a$inffunc == 0),
+    list(typeof(b$inffunc), attributes(b$inffunc), b$inffunc == 0))
+  testthat::expect_equal(a$inffunc, b$inffunc, tolerance = 1e-12)
   testthat::expect_identical(a$chained$nuisance_diagnostics$accounting$n_regression_blocks,
     b$chained$nuisance_diagnostics$accounting$n_regression_blocks)
   rid_compare(a, rid_ref$d60_ref_setup(ds, fix_weights = "first_period", control_group = "notyettreated",

@@ -107,8 +107,15 @@ gn_collect <- function(fn, ...) {
 # Rebind one locked reference binding; returns the restorer.
 gn_rebind <- function(env, nm, value) {
   old <- get(nm, envir = env, inherits = FALSE)
-  unlockBinding(nm, env); assign(nm, value, envir = env); lockBinding(nm, env)
-  function() { unlockBinding(nm, env); assign(nm, old, envir = env); lockBinding(nm, env) }
+  locked <- bindingIsLocked(nm, env)
+  if (locked) unlockBinding(nm, env)
+  assign(nm, value, envir = env)
+  if (locked) lockBinding(nm, env)
+  function() {
+    if (locked) unlockBinding(nm, env)
+    assign(nm, old, envir = env)
+    if (locked) lockBinding(nm, env)
+  }
 }
 
 # ----- Panels: the accepted 41 x 6 design with deterministic missingness ----
@@ -281,6 +288,7 @@ d90_spy <- function(e) {
   }, envir = e)
   assign("ipw_point_if_general_state_build", function(...) {
     log$state <- build(...)
+    log$link_refs <- log$state$runtime$payload$link_state_refs
     log$state
   }, envir = e)
   log
@@ -479,8 +487,9 @@ test_that("admitted replay state equals the old general route through covariance
     expect_true(is.list(st), info = paste(info, "state built"))
     if (is.list(st)) {
       expect_identical(st$runtime$status, "released", info = info)
-      expect_null(get0("point_if_general_state", envir = st$ref, inherits = FALSE), info = info)
-      for (lref in st$link_state_refs) expect_null(get0("point_if_general_link_state", envir = lref, inherits = FALSE), info = info)
+      expect_null(st$runtime$payload, info = info)
+      expect_null(st$runtime$payload_snapshot, info = info)
+      for (lref in e_new$.log$link_refs) expect_null(get0("point_if_general_link_state", envir = lref, inherits = FALSE), info = info)
     }
     expect_false(d90_has_kind(r_new), info = info)
   }
@@ -530,7 +539,8 @@ test_that("admitted replay state equals the old general route through covariance
   expect_true(is.list(st_err))
   if (is.list(st_err)) {
     expect_identical(st_err$runtime$status, "released")
-    expect_null(get0("point_if_general_state", envir = st_err$ref, inherits = FALSE))
+    expect_null(st_err$runtime$payload)
+  expect_null(st_err$runtime$payload_snapshot)
   }
 })
 
@@ -592,13 +602,13 @@ test_that("weighted-96 state replay, component chunks and centered covariance eq
     # Sparse layout against the observation pattern: observed risk A-units in A
     # order, per-chunk counts (empty observer chunks are zero steps), treated first.
     for (ell in seq_len(L)) {
-      lst <- st$link_states[[ell]]
+      lst <- st$runtime$payload$link_states[[ell]]
       a_obs <- which(w$in_obs[[ell]])
       expect_identical(lst$a_index, a_obs, info = paste(info, "link", ell))
       expect_identical(diff(lst$chunk_offsets), tabulate(ceiling(a_obs / B), nbins = C), info = paste(info, "link", ell))
       expect_identical(lst$cohort_index == 1L, w$fx96$G[a_obs] == 4, info = paste(info, "link", ell))
     }
-    if (C > 1L) expect_true(any(diff(st$link_states[[4L]]$chunk_offsets) == 0L), info = paste(info, "empty observer chunk"))
+    if (C > 1L) expect_true(any(diff(st$runtime$payload$link_states[[4L]]$chunk_offsets) == 0L), info = paste(info, "empty observer chunk"))
     # Replays: the state equals state = NULL (batches and read trace) and the dense IF.
     tr_s <- new.env(parent = emptyenv()); tr_o <- new.env(parent = emptyenv())
     gs <- gn_collect(api$replay_ipw_point_if_general, plan = plan, control = pc, trace_env = tr_s, state = st)
@@ -673,7 +683,7 @@ test_that("weighted-96 state replay, component chunks and centered covariance eq
       plan_p <- api$ipw_point_if_general_plan(w$plinks[perm], pc)
       st_p <- api$ipw_point_if_general_state(plan_p, pc)
       for (ell in seq_along(perm)) {
-        expect_identical(st_p$link_states[[ell]][fields], st$link_states[[perm[ell]]][fields], info = paste(info, "permuted link", ell))
+        expect_identical(st_p$runtime$payload$link_states[[ell]][fields], st$runtime$payload$link_states[[perm[ell]]][fields], info = paste(info, "permuted link", ell))
       }
       gp <- gn_collect(api$replay_ipw_point_if_general, plan = plan_p, control = pc, state = st_p)
       expect_identical(gp, gn_collect(api$replay_ipw_point_if_general, plan = plan_p, control = pc), info = info)
@@ -684,7 +694,7 @@ test_that("weighted-96 state replay, component chunks and centered covariance eq
       expect_equal(unname(cg_p$covariance), unname(cg_s$covariance[perm, perm]), tolerance = 1e-12, info = info)
       # Without the one-nuisance chunk cache: the same sealed vectors and batches.
       st_nc <- api$ipw_point_if_general_state(plan, pc, use_nuisance_cache = FALSE)
-      expect_identical(lapply(st_nc$link_states, `[`, fields), lapply(st$link_states, `[`, fields), info = info)
+      expect_identical(lapply(st_nc$runtime$payload$link_states, `[`, fields), lapply(st$runtime$payload$link_states, `[`, fields), info = info)
       expect_identical(gn_collect(api$replay_ipw_point_if_general, plan = plan, control = pc, use_nuisance_cache = FALSE,
         state = st_nc), gs, info = info)
     }
@@ -748,26 +758,29 @@ test_that("one outcome-free query and score setup serves four replays while ever
     expect_true(all(obs$time[ps] == w$pairs[[ell]][1L]) && all(obs$time[pt] == w$pairs[[ell]][2L]), info = paste("link", ell))
     expect_false(any(obs$y[c(ps, pt)] == 1e308), info = paste("link", ell))
   }
-  # Release: scalar accounting only, then every sealed binding is dropped.
+  # Release clears every lifetime holder; the locked self seal keeps only the
+  # small immutable header and references to those emptied environments.
+  link_refs <- st$runtime$payload$link_state_refs
   rec <- e$ipw_point_if_general_state_release(st, plan)
   expect_identical(rec$status, "retained_and_released")
   expect_true(isTRUE(rec$admitted) && isTRUE(rec$released))
   expect_identical(c(rec$passes_served, rec$chunks_served, rec$state_verifications, rec$queries_performed,
     rec$endpoints_read_during_construction), c(4L, 4L * C, 1L + 4L * (C + 1L), C * L, 0L))
   expect_identical(st$runtime$status, "released")
-  expect_null(get0("point_if_general_state", envir = st$ref, inherits = FALSE))
+  expect_null(st$runtime$payload)
+  expect_null(st$runtime$payload_snapshot)
   expect_null(get0("plan_snapshot", envir = st$binding_ref, inherits = FALSE))
-  for (lref in st$link_state_refs) expect_null(get0("point_if_general_link_state", envir = lref, inherits = FALSE))
+  for (lref in link_refs) expect_null(get0("point_if_general_link_state", envir = lref, inherits = FALSE))
 })
 
 # ---------------------------------------------------------------------------
-# 4. Refusals: callback mutations (first and last callback), unlocked or
+# 4. Refusals: callback mutations (first and last callback), malformed or
 #    rebound bindings, foreign plans/states, a shifted partition, COW-mutated
 #    payloads and released states. Each refuses before the
 #    next endpoint read or before returning.
 # ---------------------------------------------------------------------------
 
-test_that("state checks refuse mutated, foreign, unlocked, rebound, shifted and released states, including a mutation in the last callback", {
+test_that("state checks refuse mutated, foreign, locked lifetime, rebound, shifted and released states, including a mutation in the last callback", {
   w <- d90_w96()
   e <- gn_ns(list(), character())
   log <- d90_spy(e)
@@ -801,11 +814,11 @@ test_that("state checks refuse mutated, foreign, unlocked, rebound, shifted and 
   intact("runtime restored")
   # Last callback: a sealed link state, then a point link, is rebound; the
   # check after the last callback refuses before the replay returns.
-  bad_ls <- st$link_states[[L]]
+  bad_ls <- st$runtime$payload$link_states[[L]]
   bad_ls$odds <- rev(bad_ls$odds)
   pl2 <- plan$point_links[[2L]]
   bump <- function(x) { x$estimate <- if (is.null(x$estimate)) 1 else x$estimate + 1; x }
-  for (case in list(list(env = st$link_state_refs[[L]], nm = "point_if_general_link_state", value = bad_ls),
+  for (case in list(list(env = st$runtime$payload$link_state_refs[[L]], nm = "point_if_general_link_state", value = bad_ls),
                     list(env = pl2$ref, nm = "point_link_view", value = bump(pl2)))) {
     restore <- NULL
     mut_last <- function(b) {
@@ -817,11 +830,12 @@ test_that("state checks refuse mutated, foreign, unlocked, rebound, shifted and 
     if (is.function(restore)) restore()
     intact(paste("restored", case$nm))
   }
-  # An unlocked link-state binding or a rebound plan snapshot refuses before any read.
-  unlockBinding("point_if_general_link_state", st$link_state_refs[[1L]])
-  refuse(e$replay_ipw_point_if_general(plan, pc, cb, state = st), "cdid_ipw_point_view_general_error", info = "unlocked")
-  refuse(e$stream_ipw_point_covariance_general(plan, pc, state = st), "cdid_ipw_point_view_general_error", info = "unlocked, covariance")
-  lockBinding("point_if_general_link_state", st$link_state_refs[[1L]])
+  # A locked lifetime binding cannot release; a rebound snapshot has another
+  # identity. Both malformed layouts refuse before any endpoint read.
+  lockBinding("point_if_general_link_state", st$runtime$payload$link_state_refs[[1L]])
+  refuse(e$replay_ipw_point_if_general(plan, pc, cb, state = st), "cdid_ipw_point_view_general_error", info = "locked lifetime")
+  refuse(e$stream_ipw_point_covariance_general(plan, pc, state = st), "cdid_ipw_point_view_general_error", info = "locked lifetime, covariance")
+  unlockBinding("point_if_general_link_state", st$runtime$payload$link_state_refs[[1L]])
   plan2 <- e$ipw_point_if_general_plan(w$plinks, pc)
   restore <- gn_rebind(st$binding_ref, "plan_snapshot", plan2)
   refuse(e$replay_ipw_point_if_general(plan, pc, cb, state = st), "cdid_ipw_point_view_general_error", info = "rebound snapshot")
@@ -836,7 +850,7 @@ test_that("state checks refuse mutated, foreign, unlocked, rebound, shifted and 
     "cdid_ipw_point_view_general_error", info = "shifted chunk")
   refuse(e$ipw_point_if_eval_chunk_internal(plan$norm, 1L, 13L, plan$control, batch_index = 2L, state = st),
     "cdid_ipw_point_view_general_error", info = "wrong batch index")
-  # The owner contract is a locked binding plus native SEXP identity
+  # Immutable owner headers retain their locked binding plus native SEXP identity
   # (chained_ipw_owner.R:ipw_owner_seal_ok; cdid.c:C_gmm_sexp_aliases).
   # Payload validity is checked during state_build, then protected by COW.
   # Calling the private sealer on invented payloads bypasses that constructor;
@@ -852,11 +866,15 @@ test_that("state checks refuse mutated, foreign, unlocked, rebound, shifted and 
     function(x) { x$cohort_index[1L] <- x$cohort_index[1L] + 1L; x },
     function(x) { x$obs_t_index[1L] <- 0L; x },
     function(x) { x$a_index[1:2] <- x$a_index[2:1]; x })
+  # Address the mutable environment directly: nested replacement through st
+  # would also copy its sealed outer header, leaving that control corrupted.
+  runtime <- st$runtime
   for (i in seq_along(edits)) {
-    changed <- st
-    changed$link_states[[1L]] <- edits[[i]](st$link_states[[1L]])
-    refuse(e$replay_ipw_point_if_general(plan, pc, cb, state = changed),
+    original <- runtime$payload
+    runtime$payload$link_states[[1L]] <- edits[[i]](original$link_states[[1L]])
+    refuse(e$replay_ipw_point_if_general(plan, pc, cb, state = st),
       "cdid_ipw_point_view_general_error", info = paste("COW payload mutation", i))
+    runtime$payload <- original
   }
   intact("payload mutations leave the original intact")
   # Construction owns the deep checks. Corrupt a genuine outcome-free query
@@ -886,7 +904,7 @@ test_that("state checks refuse mutated, foreign, unlocked, rebound, shifted and 
     expect_length(blog$reads, 0L)
     expect_identical(reservation$state, "failed")
     expect_null(reservation$plan_snapshot)
-    expect_true(bindingIsLocked("plan_snapshot", reservation))
+    expect_false(bindingIsLocked("plan_snapshot", reservation))
     expect_null(blog$state)
   }
   # Released: every later use refuses before any read.
@@ -921,7 +939,8 @@ test_that("state admission composes entries and work exactly, declines only at c
   expect_true(is.environment(res))
   expect_identical(res$state, "reserved")
   expect_true(environmentIsLocked(res))
-  expect_true(all(vapply(setdiff(ls(res, all.names = TRUE), "state"), bindingIsLocked, logical(1L), env = res)))
+  expect_true(all(vapply(setdiff(ls(res, all.names = TRUE),
+    c("state", "plan_snapshot", "plan_ref", "frame_ref", "panel_ref")), bindingIsLocked, logical(1L), env = res)))
   expect_false(bindingIsLocked("state", res))
   expect_identical(res$S, sum(as.double(S_ell)))
   expect_identical(c(res$raw_entries, res$entries, res$work, res$state_checks_planned),
@@ -948,7 +967,7 @@ test_that("state admission composes entries and work exactly, declines only at c
   st_x <- e$ipw_point_if_general_state_build(res_x, plan, pc)
   expect_identical(res_x$state, "built")
   expect_null(res_x$plan_snapshot)
-  expect_true(bindingIsLocked("plan_snapshot", res_x))
+  expect_false(bindingIsLocked("plan_snapshot", res_x))
   expect_identical(c(st_x$entries, st_x$admission_total), c(need$entries, live0 + need$entries))
   expect_identical(gn_collect(e$replay_ipw_point_if_general, plan = plan, control = pc, state = st_x),
     gn_collect(e$replay_ipw_point_if_general, plan = plan, control = pc))

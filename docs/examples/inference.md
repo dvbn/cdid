@@ -1,6 +1,6 @@
 # Clustered inference, confidence bands, and pretrend tests
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
 
 After estimating group time average treatment effects on an incomplete panel, applied analyses typically need standard errors that account for within cluster dependence, simultaneous confidence bands across cells or event study horizons, and diagnostic pretrend tests. `cdid` builds on the chained difference in differences framework of Bellégo, Benatia and Dortet-Bernadet (2025) and the inference and aggregation workflow of Callaway and Sant'Anna (2021) (`did`), propagating complete unit table influence functions through every output without refitting the underlying models.
 
@@ -81,6 +81,7 @@ panel_data$y <- ifelse(observed, y_full, NA_real_)
 
 # Fit chained DiD with treatment DR, PT-post, varying base period, and clustering.
 fit_inf <- cdid::att_gt(
+  outcome_pooling = "pooled",
   yname = "y", tname = "time", idname = "id", gname = "g",
   xformla = ~ x, data = panel_data, panel = TRUE,
   allow_unbalanced_panel = TRUE, control_group = "nevertreated",
@@ -113,6 +114,7 @@ plot_dyn <- cdid::ggdid(agg_dyn)
 # Separate conditional pretrend CvM test (takes data/route arguments directly,
 # has no pt_assumption or gmm_weighting arguments, and defaults to est_method = "ipw").
 pre_cond_dr <- cdid::conditional_did_pretest(
+  outcome_pooling = "pooled",
   yname = "y", tname = "time", idname = "id", gname = "g",
   xformla = ~ x, data = panel_data, panel = TRUE,
   allow_unbalanced_panel = TRUE, control_group = "nevertreated",

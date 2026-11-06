@@ -32,7 +32,8 @@ test_that("att_gt keeps did's formals, order and defaults, plus the extensions",
          gmm_covariance = quote("tikhonov"),
          pt_assumption = quote(c("post", "all")),
          pt_start = NULL,
-         control = NULL)
+         control = NULL,
+         outcome_pooling = "separate")
   )
   # the forwarded formal list tracks the loaded did
   expect_identical(cdid:::upstream_att_gt_formals, setdiff(names(ref), "..."))

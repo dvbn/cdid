@@ -102,7 +102,7 @@ sp_public_fixture <- function(est_method = "ipw", route = "F",
     tb <- sp_trans[sp_trans$route == route, ]
     frame$rho <- tb$rho[match(paste(d$cohort, d$x), paste(tb$cohort, tb$x))]
   }
-  args <- list(
+  args <- list(outcome_pooling = "pooled",
     yname = "y", tname = "time", idname = "id", gname = "g",
     data = data, frame = frame, xformla = ~x, weightsname = "w",
     est_method = est_method, control_group = "nevertreated",
@@ -137,7 +137,8 @@ testthat::test_that("att_gt signature and chained-only formals include selection
   testthat::expect_identical(eval(f$selection), "none")
   testthat::expect_identical(eval(f$selection_model), "pair_logit")
   testthat::expect_identical(eval(f$selection_pooling), "separate")
-  testthat::expect_identical(names(f)[length(f)], "control")
+  testthat::expect_identical(tail(names(f), 2L), c("control", "outcome_pooling"))
+  testthat::expect_identical(eval(f$outcome_pooling), "separate")
   testthat::expect_null(f$control)
 })
 

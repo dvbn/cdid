@@ -95,7 +95,7 @@ cpt_details_rows <- function(backend, kind, j, retained) {
   B <- min(st$N, ctrl$max_chunk_rows)
   env_fn <- switch(kind, augmented = augmented_if_envelope, imputation = imputation_if_envelope,
     dr_selection = dr_corollary1_if_envelope, dr_baseline = dr_baseline_if_envelope,
-    or_legacy = , or_selection = or_corollary1_if_envelope, NULL)
+    or_legacy = , or_selection = or_corollary1_if_envelope, or_baseline = or_baseline_if_budget, NULL)
   if (is.null(env_fn)) return(B)
   one <- env_fn(backend, 1, j, TRUE); two <- env_fn(backend, 2, j, TRUE)
   slope <- two$output + two$scratch - one$output - one$scratch
@@ -224,13 +224,16 @@ cpt_two_arm_rows <- function(kind, backend, tj, rows, reader, frame, ref) {
   out <- list(rr = rr, D = D, fw = fw, X = X, odds = lv$odds, active = lv$active, dy = dy,
     lam_up = lam_up, up_n = up_n, p_trt = length(f$coefficients))
   if (dr) {
-    reg <- backend$regressions[[spec$regression]]; p_or <- backend$shared$p
-    kept <- if (p_or > 0L) backend$or_frame_index[backend$outcome_recipe$slope_index[backend$shared$keep]] else integer(0)
+    reg <- backend$regressions[[spec$regression]]
+    outcome <- if (identical(backend$outcome_pooling, "separate"))
+      or_outcome_block_fit(backend$outcome_groups, spec$regression) else backend$shared
+    p_or <- outcome$p
+    kept <- if (p_or > 0L) backend$or_frame_index[backend$outcome_recipe$slope_index[outcome$keep]] else integer(0)
     Z_or <- if (n && p_or > 0L) cpt_design_rows(frame, st, ref, spec$reference, rows_rr, kept) else matrix(0, n, p_or)
     d_or <- reg$L * Z_or
     out$d_or <- d_or
     out$rho <- dy - (if (backend$outcome_recipe$intercept) reg$alpha else 0) -
-      (if (p_or > 0L) as.vector(d_or %*% backend$shared$beta) else 0)
+      (if (p_or > 0L) as.vector(d_or %*% outcome$beta) else 0)
   } else out$rho <- dy
   out
 }
@@ -246,9 +249,11 @@ cpt_extract_two_arm <- function(state, backend, kind, j, sel, chunk_rows) {
     ipw_legacy = length(spec_t$cohorts) * (ncol(st$Z) + 1L), length(f$upstream_ids))
   p_trt <- length(f$coefficients)
   icpt <- dr && isTRUE(backend$outcome_recipe$intercept)
-  p_or <- if (dr) backend$shared$p else 0L
+  separate <- dr && identical(backend$outcome_pooling, "separate")
+  outcome <- if (separate) or_outcome_block_fit(backend$outcome_groups, spec_t$regression) else backend$shared
+  p_or <- if (dr) outcome$p else 0L
   coords <- c(paste0("up:", seq_len(up_n)), paste0("ps:", seq_len(p_trt)),
-    if (icpt) paste0("or_alpha:", spec_t$regression), if (p_or) paste0("or_beta:", seq_len(p_or)))
+    if (icpt) paste0("or_alpha:", spec_t$regression), if (p_or) paste0("or_beta:", if (separate) paste0(spec_t$regression, ":") else "", seq_len(p_or)))
   D_T <- unname(f$means["dp"]); D_M <- unname(f$means["dm"])
   spec <- list(id = sel$id, sigma = sel$sign, s = c(1, -1), D = c(D_T, D_M), coords = coords)
   B <- as.integer(min(st$N, chunk_rows, cpt_details_rows(backend, kind, j, state$retained_now)))
@@ -260,8 +265,9 @@ cpt_extract_two_arm <- function(state, backend, kind, j, sel, chunk_rows) {
     xi_ps <- if (!is.null(md$gamma)) md$gamma else md$beta
     xi <- cbind(md$upstream, xi_ps)
     if (dr) {
-      if (icpt) xi <- cbind(xi, det$alpha[, match(spec_t$regression, det$regression_ids)])
-      if (p_or) xi <- cbind(xi, det$beta)
+      local <- if (separate) det$blocks[[as.character(spec_t$regression)]] else NULL
+      if (icpt) xi <- cbind(xi, if (separate) local$alpha else det$alpha[, match(spec_t$regression, det$regression_ids)])
+      if (p_or) xi <- cbind(xi, if (separate) local$beta else det$beta)
     }
     xi <- unname(xi)
     rd <- cpt_two_arm_rows(kind, backend, tj, rows, reader, frame, ref)
@@ -283,10 +289,12 @@ cpt_extract_or <- function(state, backend, kind, j, sel, chunk_rows) {
   l <- backend$links[[j]]; s <- l$support_id; b <- l$regression
   sp <- backend$support_specs[[s]]; u <- backend$supports[[s]]
   blk <- backend$regressions[[b]]
-  icpt <- isTRUE(backend$outcome_recipe$intercept); p <- backend$shared$p
-  kept <- backend$outcome_recipe$slope_index[backend$shared$keep]
+  separate <- identical(backend$outcome_pooling, "separate")
+  outcome <- if (separate) or_outcome_block_fit(backend$outcome_groups, b) else backend$shared
+  icpt <- isTRUE(backend$outcome_recipe$intercept); p <- outcome$p
+  kept <- backend$outcome_recipe$slope_index[outcome$keep]
   channels <- if (identical(kind, "or_baseline")) s else u$channels
-  coords <- c(paste0("up:", channels), if (icpt) paste0("or_alpha:", b), if (p) paste0("or_beta:", seq_len(p)))
+  coords <- c(paste0("up:", channels), if (icpt) paste0("or_alpha:", b), if (p) paste0("or_beta:", if (separate) paste0(b, ":") else "", seq_len(p)))
   spec <- list(id = sel$id, sigma = sel$sign, s = 1, D = l$d, coords = coords)
   Dl <- length(coords); n_ch <- length(channels)
   B <- as.integer(min(st$N, chunk_rows, cpt_details_rows(backend, kind, j, state$retained_now)))
@@ -297,8 +305,9 @@ cpt_extract_or <- function(state, backend, kind, j, sel, chunk_rows) {
     xi_ch <- if (identical(kind, "or_baseline")) det$rates[, match(s, det$support_ids), drop = FALSE] else
       det$upstream[, match(channels, det$upstream_ids), drop = FALSE]
     xi <- xi_ch
-    if (icpt) xi <- cbind(xi, det$alpha[, match(b, det$regression_ids)])
-    if (p) xi <- cbind(xi, det$beta)
+    local <- if (separate) det$blocks[[as.character(b)]] else NULL
+    if (icpt) xi <- cbind(xi, if (separate) local$alpha else det$alpha[, match(b, det$regression_ids)])
+    if (p) xi <- cbind(xi, if (separate) local$beta else det$beta)
     xi <- unname(xi)
     ci <- st$cohort_index[rows]
     ix <- which(ci == sp$cohort)
@@ -327,7 +336,7 @@ cpt_extract_or <- function(state, backend, kind, j, sel, chunk_rows) {
       }
       d <- blk$L * z
       nu[rr, 1L] <- q
-      rh[rr, 1L] <- dy - blk$alpha - (if (p) as.vector(d %*% backend$shared$beta) else 0)
+      rh[rr, 1L] <- dy - blk$alpha - (if (p) as.vector(d %*% outcome$beta) else 0)
       off <- n_ch
       if (icpt) {
         pim[rr, off + 1L] <- -1
@@ -341,7 +350,7 @@ cpt_extract_or <- function(state, backend, kind, j, sel, chunk_rows) {
 }
 
 # ------------------------------------------------------------------------------
-# Pure imputation (ipw / reg / dr) and the augmented correction (dr): treated
+# Pure imputation and the augmented correction (ipw / reg / dr): treated
 # T and B_g, control C and B_o ratios with imputed (or augmented) responses.
 # ------------------------------------------------------------------------------
 cpt_extract_imputation <- function(state, backend, kind, j, sel, chunk_rows) {
@@ -359,7 +368,7 @@ cpt_extract_imputation <- function(state, backend, kind, j, sel, chunk_rows) {
     cp04_pair_rows(reader, lay$orig_row[r_sub], pair, read_outcomes) else
     function(r_sub, pair, read_outcomes = TRUE) cp04_pair_rows(reader, r_sub, pair, read_outcomes)
   recipe <- backend$outcome_recipe; trt_recipe <- backend$treatment_recipe
-  est <- if (augmented) "dr" else backend$est_method
+  est <- backend$est_method
   lf <- backend$links[[j]]
   cells <- backend$cells; groups <- backend$groups; sh <- backend$shared_or
   ci_g <- lf$target_cohort_index; cid_g <- lf$target_cell_id
@@ -375,19 +384,21 @@ cpt_extract_imputation <- function(state, backend, kind, j, sel, chunk_rows) {
   tid <- if (est %in% c("ipw", "dr")) lf$trt_id else NA_integer_
   p_trt <- if (is.na(tid)) 0L else trt_recipe$p
   bid <- if (use_or) lf$or_block_id else NA_integer_
+  separate <- use_or && reconstruction_separate(sh)
+  if (separate) sh <- reconstruction_or_block(sh, bid)
   p_or <- if (use_or) sh$p else 0L
   th <- if (augmented) sort(unique(unlist(lapply(cells[cids], `[[`, "theta_ids")))) else integer(0)
   coords <- c(paste0("a:", a_k), if (icpt) paste0("ia:", cids),
     unlist(lapply(gids, function(g) paste0("ib:", g, ":", seq_len(groups[[g]]$p)))),
     if (p_trt) paste0("ps:", seq_len(p_trt)), if (use_or && icpt) paste0("oa:", bid),
-    if (p_or) paste0("ob:", seq_len(p_or)), if (length(th)) paste0("th:", th))
+    if (p_or) paste0("ob:", if (separate) paste0(bid, ":") else "", seq_len(p_or)), if (length(th)) paste0("th:", th))
   Dl <- length(coords)
   col_a <- function(k) match(paste0("a:", k), coords)
   col_ia <- function(cid) match(paste0("ia:", cid), coords)
   col_ib <- function(g) match(paste0("ib:", g, ":", seq_len(groups[[g]]$p)), coords)
   col_ps <- match(paste0("ps:", seq_len(p_trt)), coords)
   col_oa <- if (use_or && icpt) match(paste0("oa:", bid), coords) else integer(0)
-  col_ob <- match(paste0("ob:", seq_len(p_or)), coords)
+  col_ob <- match(paste0("ob:", if (separate) paste0(bid, ":") else "", seq_len(p_or)), coords)
   col_th <- function(ids) match(paste0("th:", ids), coords)
   terms <- c("T", if (use_or) "Bg", if (est %in% c("ipw", "dr")) "C", if (est == "dr") "Bo")
   s <- c(T = 1, Bg = -1, C = -1, Bo = 1)[terms]
@@ -414,7 +425,7 @@ cpt_extract_imputation <- function(state, backend, kind, j, sel, chunk_rows) {
   }
   or_resp <- function(lr) {
     z <- if (p_or > 0L) lf$L * X_F[lr, sh$kept_cols_F, drop = FALSE] else matrix(0, length(lr), 0L)
-    bf <- sh$blocks[[bid]]
+    bf <- backend$shared_or$blocks[[bid]]
     list(rho = (if (icpt) bf$alpha else 0) + (if (p_or > 0L) as.vector(z %*% sh$beta) else 0), d = z)
   }
   put_resp <- function(pim_r, ii, cid, rs) {
@@ -475,11 +486,12 @@ cpt_extract_imputation <- function(state, backend, kind, j, sel, chunk_rows) {
     if (icpt) xi[, col_ia(cids)] <- det$imputation_alpha[, cids, drop = FALSE]
     for (g in gids) xi[, col_ib(g)] <- det$imputation_beta[[g]]
     if (p_trt) xi[, col_ps] <- det$trt_if[[tid]]$gamma
+    oi <- if (separate) det$or_if$blocks[[as.character(bid)]] else det$or_if
     if (use_or && icpt) {
-      abids <- if (!is.null(det$or_if$alpha_block_ids)) det$or_if$alpha_block_ids else seq_len(sh$n_blocks)
-      xi[, col_oa] <- det$or_if$alpha[, match(bid, abids)]
+      abids <- if (separate) bid else if (!is.null(oi$alpha_block_ids)) oi$alpha_block_ids else seq_len(sh$n_blocks)
+      xi[, col_oa] <- oi$alpha[, match(bid, abids)]
     }
-    if (p_or) xi[, col_ob] <- det$or_if$beta
+    if (p_or) xi[, col_ob] <- oi$beta
     if (length(th)) xi[, col_th(th)] <- det$selection_theta[, match(th, det$selection_theta_ids), drop = FALSE]
     cpt_piece(orig, nu, rho, lam, pim, sD, xi)
   }

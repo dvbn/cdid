@@ -126,17 +126,17 @@ cp04_selection_record <- function(cp04, backend = NULL, reader = NULL) {
     "n_regression_fits", "n_regression_blocks",
     "n_local_intercepts", "n_shared_slopes", "n_supports", "n_treatment_fits")
   if (identical(cp04$dr_method, "baseline")) return(list(method = "none", canonical_assumption = "none",
-    outcome_model = "shared one-period outcome-change control-mean regression",
+    outcome_pooling = cp04$outcome_pooling, outcome_model = outcome_public_model(cp04$outcome_pooling),
     treatment_model = "risk-set treatment propensity logit",
     duration_convention = "stored-calendar transition count L_e = i_t - i_s",
-    assumptions = paste("Either correct shared one-period outcome-change control-mean regression with local block intercepts",
+    assumptions = paste("Either correct counterfactual outcome-change control-mean regressions under the chosen outcome pooling",
       "or correct synthetic risk-set treatment propensity logits under valid observation reconstruction,",
       "chained parallel trends/no anticipation and fixed-weight population law."),
     models = if (is.null(backend)) NULL else backend$accounting[intersect(model_fields, names(backend$accounting))]))
   if (identical(cp04$or_method, "baseline")) return(list(method = "none", canonical_assumption = "none",
-    outcome_model = "shared one-period outcome-change control-mean regression",
+    outcome_pooling = cp04$outcome_pooling, outcome_model = outcome_public_model(cp04$outcome_pooling),
     duration_convention = "stored-calendar transition count L_e = i_t - i_s",
-    assumptions = "Shared one-period outcome-change control-mean regression with local block intercepts, chained parallel trends/no anticipation and fixed-weight population law.",
+    assumptions = "Counterfactual outcome-change control-mean regressions under the chosen outcome pooling, chained parallel trends/no anticipation and fixed-weight population law.",
     models = if (is.null(backend)) NULL else backend$accounting[intersect(model_fields, names(backend$accounting))]))
   sel_model <- if (is.null(cp04$selection_model)) "pair_logit" else cp04$selection_model
   sel_pool <- if (is.null(cp04$selection_pooling)) "separate" else cp04$selection_pooling
@@ -154,7 +154,7 @@ cp04_selection_record <- function(cp04, backend = NULL, reader = NULL) {
            if (!identical(sel_pool, "separate")) paste0(" under ", sel_pool, " slope pooling.") else ".")
   }
   out <- list(method = "corollary1", canonical_assumption = "conditional_mtar",
-    requested_selection = sel_req, selection_model = sel_model, selection_pooling = sel_pool,
+    requested_selection = sel_req, selection_model = sel_model, selection_pooling = sel_pool, outcome_pooling = cp04$outcome_pooling,
     link = "logit", fitting_universe = cp04$universe,
     population = cp04$population, formula = cp04$formula,
     transport = if (is.null(cp04$rho_column)) "rho=1" else paste0("fixed known normalized rho column: ", cp04$rho_column),
@@ -165,14 +165,14 @@ cp04_selection_record <- function(cp04, backend = NULL, reader = NULL) {
     n_selection_parameters = if (is.null(sb_sum)) 0L else sb_sum$n_selection_parameters,
     empirical_repeat_rates = a_rates,
     assumptions = paste(assump_prefix,
-      if (!is.null(cp04$dr_method)) "Either correct shared one-period outcome-change control-mean regression with local block intercepts or correct synthetic risk-set treatment propensity logits under valid observation reconstruction, PT/no anticipation and the fixed-weight population law must also hold; F logit does not imply U logit." else
-      if (!is.null(cp04$or_method)) "Correct shared one-period outcome-change control-mean regression with local block intercepts, PT/no anticipation and the fixed-weight population law must also hold; F logit does not imply U logit." else
+      if (!is.null(cp04$dr_method)) "Either correct counterfactual outcome-change control-mean regressions under the chosen outcome pooling or correct synthetic risk-set treatment propensity logits under valid observation reconstruction, PT/no anticipation and the fixed-weight population law must also hold; F logit does not imply U logit." else
+      if (!is.null(cp04$or_method)) "Correct counterfactual outcome-change control-mean regressions under the chosen outcome pooling, PT/no anticipation and the fixed-weight population law must also hold; F logit does not imply U logit." else
       "Synthetic treatment odds, PT/no anticipation and the fixed-weight population law must also hold; F logit does not imply U logit."),
     if_scale = "phi_F on ALL N roster rows; core psi=(n_A/N)*phi_F with 1/n_A covariance normalization",
     unsupported = c("known pair probabilities (including design p=1)", "custom IPW callbacks without an explicit log_weight_gradient", "estimated or unnormalized transport", "probit"),
     models = if (is.null(backend)) NULL else backend$accounting[intersect(model_fields, names(backend$accounting))])
   if (!is.null(cp04$or_method) || !is.null(cp04$dr_method)) {
-    out$outcome_model <- "shared one-period outcome-change control-mean regression"
+    out$outcome_model <- outcome_public_model(cp04$outcome_pooling)
     out$duration_convention <- "stored-calendar transition count L_e = i_t - i_s"
   }
   if (!is.null(cp04$dr_method)) {
@@ -200,7 +200,7 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
                                        dr_method = NULL, treatment_columns = NULL, imputation = NULL,
                                        augmented = NULL, reference_source = NULL, ipw_method = NULL,
                                        custom_est_method = NULL, custom_dots = list(), aux_spec = NULL,
-                                       pt_assumption = NULL, run_numerical_transfer = NULL) {
+                                       pt_assumption = NULL, run_numerical_transfer = NULL, outcome_pooling = "pooled") {
   M <- if (is.null(metadata)) 0L else nrow(metadata$catalog$rows)
   # CP08/D78 work ownership: the caller's cumulative prefix as received. The
   # descriptor-batch and descriptor-context work below is added to
@@ -251,7 +251,8 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
       context_entries = context$accounting$entries, context_entries_bound = context$accounting$entries_bound,
       context_work_ops_bound = context$accounting$work_ops_bound, link_support_context = NULL)
   } else {
-    built <- cp04_public_link_views(frame, specs, aux, ctrl$owner_control, retained_pipeline_entries)
+    built <- cp04_public_link_views(frame, specs, aux, ctrl$owner_control, retained_pipeline_entries,
+      reuse_pair_support = TRUE)
     views <- built$views; aux_index <- built$aux_index; aux_errors <- built$aux_errors
     construction <- list(route = "link_views", heavy_link_views_constructed = length(views),
       descriptor_rows = 0L, catalog_rows = as.integer(M), auxiliary_rows = length(aux$descriptors),
@@ -271,11 +272,11 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
   backend <- if (!is.null(context) && !is.null(dr_method))
     dr_public_fit(dr_method, reader, context, ctrl, retained_pipeline_entries, external_work_ops,
       automatic_chunk_rows, outcome_recipe = context$outcome_recipe, treatment_columns = treatment_columns,
-      selection_model = selection_model, selection_pooling = selection_pooling, reference = NULL) else
+      selection_model = selection_model, selection_pooling = selection_pooling, reference = NULL, outcome_pooling = outcome_pooling) else
     if (!is.null(context))
     or_public_fit(or_method, reader, context, ctrl, retained_pipeline_entries, external_work_ops,
       automatic_chunk_rows, outcome_recipe = context$outcome_recipe,
-      selection_model = selection_model, selection_pooling = selection_pooling, reference = NULL) else
+      selection_model = selection_model, selection_pooling = selection_pooling, reference = NULL, outcome_pooling = outcome_pooling) else
     if (length(views) && !is.null(augmented))
     augmented_public_fit(augmented, reader, views, ctrl, retained_pipeline_entries, external_work_ops,
       automatic_chunk_rows, reference = reference) else if (length(views) && !is.null(imputation))
@@ -283,11 +284,11 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
       automatic_chunk_rows, reference = reference) else if (length(views) && !is.null(dr_method))
     dr_public_fit(dr_method, reader, views, ctrl, retained_pipeline_entries, external_work_ops,
       automatic_chunk_rows, outcome_recipe = outcome_recipe, treatment_columns = treatment_columns,
-      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference) else
+      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference, outcome_pooling = outcome_pooling) else
     if (length(views) && !is.null(or_method))
     or_public_fit(or_method, reader, views, ctrl, retained_pipeline_entries, external_work_ops,
       automatic_chunk_rows, outcome_recipe = outcome_recipe,
-      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference) else
+      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference, outcome_pooling = outcome_pooling) else
     if (length(views) && !is.null(ipw_method))
     reference_ipw_public_fit(reader, views, ctrl, retained_pipeline_entries, external_work_ops, reference,
       custom_est_method = custom_est_method, custom_dots = custom_dots) else if (length(views) && is.function(custom_est_method))
@@ -316,6 +317,7 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
   list(cp04 = backend, cp04_reader = reader, cp04_aux = aux, cp04_aux_index = aux_index,
     cp04_aux_errors = aux_errors, point_links = points[seq_len(M)], cp04_points = points,
     cp04_construction = construction, cp04_work_accounting = work_accounting,
+    cp04_memory_accounting = cp04_registry_memory_accounting(retained_pipeline_entries, reader, backend),
     nuisance_keys = if (is.null(backend)) character() else
     if (inherits(backend, "cdid_augmented_backend")) augmented_public_nuisance_keys(backend) else
     if (inherits(backend, "cdid_imputation_backend")) imputation_public_nuisance_keys(backend) else
@@ -326,16 +328,68 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
       c(paste0("IPW:", backend$law, ":rate:", seq_along(backend$supports)),
         paste0("IPW:", backend$law, if (isTRUE(backend$custom)) ":callback:" else ":treatment:",
           seq_along(backend$treatments))) else if (!is.null(dr_method))
-      c(paste0("DR:", backend$law, ":shared_regression:1"),
+      c(if (identical(backend$outcome_pooling, "separate")) paste0("DR:", backend$law, ":regression:", seq_along(backend$regressions)) else paste0("DR:", backend$law, ":shared_regression:1"),
         paste0("DR:", backend$law, ":block:", seq_along(backend$regressions)),
         paste0("DR:", backend$law, ":treatment:", seq_along(backend$treatments)),
         if (length(backend$selections)) paste0("cp04:", backend$universe, ":selection:", seq_along(backend$selections))) else
     if (!is.null(or_method))
-      c(paste0("OR:", backend$law, ":shared_regression:1"),
+      c(if (identical(backend$outcome_pooling, "separate")) paste0("OR:", backend$law, ":regression:", seq_along(backend$regressions)) else paste0("OR:", backend$law, ":shared_regression:1"),
         paste0("OR:", backend$law, ":block:", seq_along(backend$regressions)),
         if (length(backend$selections)) paste0("cp04:", backend$universe, ":selection:", seq_along(backend$selections))) else
       paste0("cp04:", backend$universe, ":selection:", seq_along(backend$selections)),
     nuisance_views = list(), fitted_views = list())
+}
+
+# The static legacy CP04 and OR/DR adapters embed X=max(0,E0-O) in borrowed_entries,
+# where E0 is this registry's pipeline prefix and O the reader's borrowed owners.
+# Bind that exact lineage once. Standalone CP04 budgets never use this record.
+cp04_registry_memory_accounting <- function(prefix, reader, backend) {
+  if (is.null(backend) || !inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline", "cdid_or_corollary1",
+        "cdid_dr_corollary1", "cdid_imputation_backend", "cdid_augmented_backend", "cdid_cp04_corollary1")) ||
+      !is.null(backend$reference_ref)) return(NULL)
+  if (inherits(backend, "cdid_cp04_corollary1") &&
+      (isTRUE(backend$uses_selection_models) || !is.null(backend$layout))) return(NULL)
+  if (!inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline")))
+    return(cp04_registry_field_memory_accounting(prefix, reader, backend))
+  if (inherits(backend, "cdid_or_baseline")) validate_or_baseline_backend(backend) else validate_dr_baseline_backend(backend)
+  prefix <- ipw_owner_int_bound(prefix, "registry retained pipeline prefix", min_val = 0)
+  validate_cp04_reader(reader)
+  acc <- backend$accounting
+  external <- ipw_owner_int_bound(acc$retained_external_entries, "backend retained external prefix", min_val = 0)
+  expected <- max(0, prefix - reader$accounting$borrowed_owner_entries)
+  if (!identical(backend$reader_ref, reader$ref) || external != expected ||
+      acc$borrowed_entries != ipw_owner_safe_sum(c(reader$accounting$owned_entries,
+        reader$accounting$borrowed_owner_entries, external)))
+    cp04_abort("Registry memory prefix differs from the fitted baseline backend's source reservation.", "integrity")
+  if (external == 0) return(NULL)
+  cp04_budget(backend$control, c(acc$owned_entries, acc$borrowed_entries),
+    512, 0, 512, "registry memory-prefix metadata")
+  ipw_owner_seal(list(kind = "cp04_registry_memory_prefix", backend_ref = backend$ref,
+    reader_ref = reader$ref, pipeline_prefix_entries = prefix, embedded_external_entries = external),
+    "cp04_registry_memory_prefix")
+}
+
+# Only source call sites whose retained argument extends this registry's E0
+# invoke this helper. Remove exactly recorded X; all backend, reader and owner
+# charges remain. A numerically equal arbitrary caller reservation grants no
+# reuse, and the standalone preflight/stream APIs are unchanged.
+cp04_registry_retained_entries <- function(registry, retained) {
+  retained <- ipw_owner_int_bound(retained, "pipeline retained entries", min_val = 0)
+  rec <- registry$cp04_memory_accounting
+  if (is.null(rec)) return(retained)
+  if (identical(rec$kind, "cp04_registry_field_memory_prefix"))
+    return(cp04_registry_field_retained_entries(registry, retained))
+  backend <- registry$cp04; reader <- registry$cp04_reader
+  if (!ipw_owner_seal_ok(rec, "cp04_registry_memory_prefix") ||
+      !identical(rec$kind, "cp04_registry_memory_prefix") || !is.list(backend) || !is.list(reader) ||
+      !identical(backend$ref, rec$backend_ref) || !identical(reader$ref, rec$reader_ref) ||
+      !identical(backend$reader_ref, reader$ref))
+    cp04_abort("Pipeline retained-prefix composition requires its same sealed registry backend and reader.", "integrity")
+  if (inherits(backend, "cdid_or_baseline")) validate_or_baseline_backend(backend) else validate_dr_baseline_backend(backend)
+  if (backend$accounting$retained_external_entries != rec$embedded_external_entries ||
+      retained < rec$pipeline_prefix_entries)
+    cp04_abort("Pipeline retained reservation does not extend its recorded registry prefix.", "integrity")
+  retained - rec$embedded_external_entries
 }
 
 # ---------------------------------------------------------------------------
@@ -436,7 +490,8 @@ cp04_registry_work_accounting <- function(prefix, prepared, backend, max_work_op
 # support summary of an equal-mask view scanned earlier in this invocation; it
 # is dropped before any fit. Not admitted, every view scans as before. The
 # actual scans and borrowed records are counted apart, as evidence only.
-cp04_public_link_views <- function(frame, specs, aux, control, retained_pipeline_entries = 0) {
+cp04_public_link_views <- function(frame, specs, aux, control, retained_pipeline_entries = 0,
+                                   reuse_pair_support = FALSE) {
   M <- length(specs)
   # Only descriptor lengths are read; no pair/date/population scan. Include
   # auxiliary classes before admission so an earlier cache cannot coexist
@@ -446,6 +501,8 @@ cp04_public_link_views <- function(frame, specs, aux, control, retained_pipeline
   for (s in aux$descriptors) max_cohorts <- max(max_cohorts, 1 + length(s$K))
   ctx <- ipw_owner_link_support_context(frame, M + length(aux$descriptors), retained_pipeline_entries, control,
     max_cohorts = max_cohorts)
+  if (isTRUE(reuse_pair_support)) ctx <- cp04_pair_support_context(ctx, frame, M + length(aux$descriptors),
+    retained_pipeline_entries, control, max_cohorts)
   views <- lapply(seq_len(M), function(j) {
     s <- specs[[j]]
     construct_ipw_link_view(frame, s$s, s$t, g = s$g, K = s$K,
@@ -466,6 +523,9 @@ cp04_public_link_views <- function(frame, specs, aux, control, retained_pipeline
   }
   work <- if (is.null(ctx)) NULL else list(support_scans = ctx$link_scans, support_reuses = ctx$link_reuses,
     support_records = ctx$link_records, reserved_entries = ctx$link_entries)
+  if (is.environment(ctx) && is.environment(ctx$pair_support)) work$pair_support <- list(
+    scans = ctx$pair_support$scans, reuses = ctx$pair_support$reuses, records = ctx$pair_support$n_records,
+    capacity = ctx$pair_support$capacity, reserved_entries = ctx$pair_support$entries)
   ctx <- NULL
   list(views = views, aux_index = aux_index, aux_errors = aux_errors, construction_work = work)
 }
@@ -912,17 +972,17 @@ cp04_retained_if_reserve <- function(backend, links, chunk_rows, cov_plan, retai
   store$layout_state_snapshot <- if (is.null(backend$layout)) NULL else backend$layout$state
   store$X_F_snapshot <- backend$X_F
   store$pair_outcomes_snapshot <- backend$pair_outcomes
-  for (nm in c("reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot",
-               "reference_snapshot", "selection_snapshot", "design_snapshot",
-               "layout_snapshot", "layout_state_snapshot", "X_F_snapshot", "pair_outcomes_snapshot"))
-    lockBinding(nm, store)
   store$id <- dom$id; store$N <- N; store$n_A <- dom$n_A; store$lambda <- dom$lambda
   store$links <- as.integer(links); store$L <- L; store$B <- chunk_rows; store$scale <- "core"
-  store$entries <- entries; store$work <- cache_work; store$admission_total <- total; store$cap <- cap
+  store$entries <- entries; store$work <- cache_work; store$work_total <- work_total; store$admission_total <- total; store$cap <- cap
   store$producer_passes <- 0L; store$slice_passes <- 0L; store$batches <- 0L
   store$metadata_entries <- boundary$entries; store$boundary_work <- boundary$work
-  for (nm in setdiff(ls(store, all.names = TRUE), c("state", "producer_passes", "slice_passes", "batches")))
-    if (!bindingIsLocked(nm, store)) lockBinding(nm, store)
+  # Releasable source snapshots live in this phase-owned mutable store.
+  # The configuration contains no reference back to a large source payload.
+  lifetime <- c("phi", "raw_ref", "id", "backend_snapshot", "backend_ref", "reader_ref", "frame_ref", "panel_ref", "reference_ref", "selection_ref", "design_ref", "reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot", "reference_snapshot", "selection_snapshot", "selection_reader_snapshot", "design_snapshot", "layout_snapshot", "layout_state_snapshot", "X_F_snapshot", "pair_outcomes_snapshot", "auxiliary", "gmm_transfer")
+  for (nm in setdiff(ls(store, all.names = TRUE),
+      c(lifetime, "state", "producer_passes", "slice_passes", "batches")))
+    lockBinding(nm, store)
   store
 }
 
@@ -973,9 +1033,25 @@ cp04_retained_if_phase_inventory <- function(phase = c("covariance", "gmm"), bac
     d5_persistent_entries = d5_persistent)
 }
 
+# The same phase storage also serves ordinary static incomplete separate OR/DR.
+# Keep selected complete-support and every reference/selection route unchanged.
+cp04_retained_if_phase_baseline <- function(backend) {
+  is.list(backend) && inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline")) &&
+    identical(backend$outcome_pooling, "separate") && !isTRUE(backend$uses_selection_models) &&
+    is.null(backend$reference_ref) && is.null(backend$separate_complete)
+}
+
+# Ordinary static augmentation has the same single-phase store lifetime;
+# reference/layout and private retained-pair routes keep their existing gates.
+cp04_retained_if_phase_static_augmented <- function(backend) {
+  is.list(backend) && inherits(backend, "cdid_augmented_backend") &&
+    is.null(backend$reference_ref) && is.null(backend$layout) && is.null(backend$pair_outcomes)
+}
+
 # D92 phase-local retained moment IF (invocation-local, single-phase lifetime).
 # Considered only when the accepted whole-lifetime store declines for a
-# one-block, non-transfer, dated augmented backend:
+# one-block, non-transfer eligible backend (static or dated augmented, raw IPW or
+# ordinary static incomplete separate baseline OR/DR):
 #   - phase = "covariance": covariance-only store at `cov_plan$chunk_rows`,
 #     filled during the covariance mean pass, sliced during the covariance Gram
 #     pass, and released before allocating GMM consumers.
@@ -999,12 +1075,14 @@ cp04_retained_if_phase_reserve <- function(backend, links, phase = c("covariance
   if (inherits(backend, "cdid_cp04_retained_if_bound"))
     cp04_abort("Retained moment IF phase storage cannot be reserved on an already bound producer.", "integrity")
   if (isTRUE(numerical_transfer)) return(NULL)
-  if (!is.list(backend) || !inherits(backend, c("cdid_augmented_backend", "cdid_ipw_raw_backend"))) return(NULL)
+  if (!is.list(backend) || (!inherits(backend, c("cdid_augmented_backend", "cdid_ipw_raw_backend")) &&
+      !cp04_retained_if_phase_baseline(backend))) return(NULL)
   if (!is.list(cov_plan) || !is.list(cov_plan$blocks) || !length(cov_plan$blocks))
     cp04_abort("Invalid covariance plan for retained moment IF storage.", "integrity")
   if (length(cov_plan$blocks) != 1L) return(NULL)
   cp04_retained_if_validate_backend(backend)
-  if (inherits(backend, "cdid_augmented_backend") && (is.null(backend$reference_ref) || is.null(backend$layout))) return(NULL)
+  if (inherits(backend, "cdid_augmented_backend") && (is.null(backend$reference_ref) || is.null(backend$layout)) &&
+      !cp04_retained_if_phase_static_augmented(backend)) return(NULL)
   dom <- cp04_backend_domain(backend)
   reader <- dom$reader; st <- dom$state; frame <- dom$frame
   N <- dom$N; L <- length(links)
@@ -1087,17 +1165,56 @@ cp04_retained_if_phase_reserve <- function(backend, links, phase = c("covariance
   store$layout_state_snapshot <- if (is.null(backend$layout)) NULL else backend$layout$state
   store$X_F_snapshot <- backend$X_F
   store$pair_outcomes_snapshot <- backend$pair_outcomes
-  for (nm in c("reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot",
-               "reference_snapshot", "selection_snapshot", "design_snapshot",
-               "layout_snapshot", "layout_state_snapshot", "X_F_snapshot", "pair_outcomes_snapshot"))
-    lockBinding(nm, store)
   store$id <- dom$id; store$N <- N; store$n_A <- dom$n_A; store$lambda <- dom$lambda
   store$links <- as.integer(links); store$L <- L; store$B <- chunk_rows; store$scale <- "core"
-  store$entries <- entries; store$work <- cache_work; store$admission_total <- total; store$cap <- cap
+  store$entries <- entries; store$work <- cache_work; store$work_total <- work_total; store$admission_total <- total; store$cap <- cap
   store$producer_passes <- 0L; store$slice_passes <- 0L; store$batches <- 0L
   store$metadata_entries <- boundary$entries; store$boundary_work <- boundary$work
-  for (nm in setdiff(ls(store, all.names = TRUE), c("state", "producer_passes", "slice_passes", "batches")))
-    if (!bindingIsLocked(nm, store)) lockBinding(nm, store)
+  # Releasable source snapshots live in this phase-owned mutable store.
+  # The configuration contains no reference back to a large source payload.
+  lifetime <- c("phi", "raw_ref", "id", "backend_snapshot", "backend_ref", "reader_ref", "frame_ref", "panel_ref", "reference_ref", "selection_ref", "design_ref", "reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot", "reference_snapshot", "selection_snapshot", "selection_reader_snapshot", "design_snapshot", "layout_snapshot", "layout_state_snapshot", "X_F_snapshot", "pair_outcomes_snapshot", "auxiliary", "gmm_transfer")
+  for (nm in setdiff(ls(store, all.names = TRUE),
+      c(lifetime, "state", "producer_passes", "slice_passes", "batches")))
+    lockBinding(nm, store)
+  store
+}
+
+# Once the covariance producer has succeeded, its raw original-unit matrix
+# can serve the original GMM partition without regenerating any numerical IF.
+# Only the unused raw producer output/scratch is retired in this phase; the
+# caller retains covariance results, GMM consumers, diagnostics and all owners.
+cp04_retained_if_covariance_to_gmm <- function(store, backend, links, chunk_rows, retained, work, control) {
+  if (is.null(store) || !cp04_retained_if_phase_static_augmented(backend)) return(NULL)
+  if (!is.environment(store) || !identical(store$kind, "cp04_retained_if") ||
+      !identical(store$phase, "covariance") || !identical(store$state, "filled") ||
+      !identical(store$producer_passes, 1L) || !identical(store$slice_passes, 1L))
+    cp04_abort("Covariance transfer requires its completed original producer and Gram slice.", "integrity")
+  cp04_retained_if_check(store, backend, links, store$B, "core")
+  control <- validate_ipw_owner_control(control)
+  for (nm in c("retained", "work")) ipw_owner_int_bound(get(nm), nm, min_val = 0)
+  chunk_rows <- ipw_owner_int_bound(chunk_rows, "chunk_rows")
+  if (chunk_rows > store$N || chunk_rows > control$max_chunk_rows)
+    cp04_abort("Invalid covariance-to-GMM slice partition.", "input")
+  B_peak <- max(store$B, chunk_rows)
+  boundary <- cp04_retained_if_boundary_cost(backend, links, B_peak)
+  entries <- ipw_owner_safe_sum(c(1024, max(store$entries,
+    ipw_owner_safe_sum(c(cp04_retained_if_entries(store$N, store$L, B_peak), boundary$entries)))))
+  own <- ipw_owner_safe_sum(c(backend$accounting$owned_entries, backend$accounting$borrowed_entries))
+  # entries includes full raw ownership and four B_peak-by-L slice/copy
+  # buffers. No second N-by-L matrix or raw producer workspace is allocated.
+  total <- ipw_owner_safe_sum(c(retained, own, entries))
+  checks <- ipw_owner_safe_sum(c(16, ipw_owner_safe_product(16, ceiling(store$N / chunk_rows) + 1)))
+  slice_work <- ipw_owner_safe_sum(c(
+    ipw_owner_safe_product(64, ipw_owner_safe_product(store$N, store$L)),
+    ipw_owner_safe_product(checks, boundary$work)))
+  work_total <- ipw_owner_safe_sum(c(work, slice_work))
+  cap <- min(control$max_retained_entries, control$max_matrix_entries)
+  if (total > cap || work_total > control$max_work_ops) return(NULL)
+  if (exists("gmm_transfer", store, inherits = FALSE))
+    cp04_abort("Covariance storage was already considered for GMM transfer.", "integrity")
+  store$gmm_transfer <- list(chunk_rows = chunk_rows, entries = entries,
+    admission_total = total, work = slice_work, metadata_entries = boundary$entries, boundary_work = boundary$work,
+    max_slice_passes = store$slice_passes + 2L)
   store
 }
 
@@ -1233,14 +1350,17 @@ cp04_retained_if_check <- function(store, backend, links, B, scale) {
       !identical(is.null(backend$pair_outcomes), is.null(store$pair_outcomes_snapshot)) ||
       (!is.null(store$pair_outcomes_snapshot) && !gmm_sexp_aliases(backend$pair_outcomes, store$pair_outcomes_snapshot)))
     cp04_abort("Retained moment IF storage does not describe the backend's sealed custom covariates or outcomes.", "integrity")
-  if (!identical(as.integer(links), store$links) || !identical(scale, store$scale) || !isTRUE(B == store$B))
+  transfer <- store$gmm_transfer
+  partition_ok <- isTRUE(B == store$B) || (!is.null(transfer) &&
+    identical(store$state, "filled") && isTRUE(B == transfer$chunk_rows))
+  if (!identical(as.integer(links), store$links) || !identical(scale, store$scale) || !partition_ok)
     cp04_abort("Retained moment IF storage serves one link block, one scale and one row partition.", "integrity")
   list(id = ids, N = dom$N, n_A = dom$n_A, lambda = dom$lambda)
 }
 
 # One producer pass (the original plan and chunk loop; each chunk is stored raw
 # and handed on unchanged), then slice passes over the same row partition. A
-# locked raw-matrix binding retains the exact completed object; copy-on-modify
+# private raw-matrix reference retains the exact completed object; copy-on-modify
 # value, label or order changes cannot alias it. IDs come from the live reader,
 # checked against the compact source snapshots. The caller's preflight admitted the original replay
 # work; the fill/slice work is charged in addition.
@@ -1254,7 +1374,8 @@ cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, p
   if (identical(store$state, "reserved")) {
     ipw_owner_safe_sum(c(pre$work_ops_bound, store$work), ctrl$max_work_ops, "CP04 retained moment IF fill work")
     ipw_owner_check_matrix_dims(N, L, ctrl$max_matrix_entries, "CP04 retained moment IF")
-    plan <- chained_full_if_plan(backend, links, B)
+    plan <- chained_full_if_plan(backend, links, B, phase_store = store)
+    on.exit(augmented_adjoint_replay_release(plan), add = TRUE)
     store$state <- "filling"
     phi <- matrix(0, N, L); filled <- 0; cn <- NULL
     for (s in starts) {
@@ -1282,15 +1403,15 @@ cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, p
     if (filled != N) cp04_abort("The producer pass did not cover every roster row exactly once.", "integrity")
     colnames(phi) <- cn
     raw_ref <- new.env(parent = emptyenv()); raw_ref$phi <- phi
-    lockEnvironment(raw_ref, bindings = TRUE)
-    store$phi <- phi; store$raw_ref <- raw_ref; lockBinding("raw_ref", store)
+    lockEnvironment(raw_ref, bindings = FALSE)
+    store$phi <- phi; store$raw_ref <- raw_ref
     store$state <- "filled"; store$producer_passes <- store$producer_passes + 1L; store$batches <- length(starts)
     completed <- TRUE
     return(invisible(NULL))
   }
   if (!identical(store$state, "filled")) cp04_abort("Retained moment IF storage was not completely filled.", "integrity")
-  if (exists("max_slice_passes", store, inherits = FALSE) && !is.null(store$max_slice_passes) &&
-      store$slice_passes >= store$max_slice_passes)
+  slice_limit <- if (is.null(store$gmm_transfer)) store$max_slice_passes else store$gmm_transfer$max_slice_passes
+  if (!is.null(slice_limit) && store$slice_passes >= slice_limit)
     cp04_abort("Retained moment IF storage exceeded its admitted slice passes.", "integrity")
   ipw_owner_safe_sum(c(pre$work_ops_bound, store$work), ctrl$max_work_ops, "CP04 retained moment IF slice work")
   check_slice <- function() {
@@ -1298,10 +1419,10 @@ cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, p
     if (!identical(store$state, "filled"))
       cp04_abort("Retained moment IF storage was not completely filled.", "integrity")
     full <- store$phi
-    if (!exists("raw_ref", store, inherits = FALSE) || !bindingIsLocked("raw_ref", store) ||
+    if (!exists("raw_ref", store, inherits = FALSE) || bindingIsLocked("raw_ref", store) ||
         !is.environment(store$raw_ref) || !identical(parent.env(store$raw_ref), emptyenv()) ||
         !environmentIsLocked(store$raw_ref) || !exists("phi", store$raw_ref, inherits = FALSE) ||
-        !bindingIsLocked("phi", store$raw_ref) || !gmm_sexp_aliases(full, get("phi", store$raw_ref, inherits = FALSE)) ||
+        bindingIsLocked("phi", store$raw_ref) || !gmm_sexp_aliases(full, get("phi", store$raw_ref, inherits = FALSE)) ||
         !is.matrix(full) || !is.double(full) || nrow(full) != N || ncol(full) != L)
       cp04_abort("Retained moment IF storage lost its shape after the producer pass.", "integrity")
     st
@@ -1395,6 +1516,26 @@ cp04_retained_if_auxiliary_map <- function(store, backend, backend_ids) {
   col
 }
 
+# The existing backend gate for extending a whole-lifetime store through
+# auxiliary reporting. Share it with the earlier store-lifetime reservation:
+# expanding this gate must restore that phase's future-output charge too.
+cp04_retained_if_auxiliary_eligible <- function(backend) {
+  is.list(backend) && inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline", "cdid_ipw_raw_backend")) &&
+    is.null(backend$reference_ref) && !is.null(backend$complete_support)
+}
+
+# Static conditional backends cannot extend their store through auxiliary
+# reporting under the gate above. The unextended store is released after GMM,
+# before target IF transport or auxiliary output allocation, so that future
+# output is not concurrent with it. Every other reservation stays unchanged.
+cp04_retained_if_auxiliary_output_entries <- function(backend, numerical_transfer, N, n_auxiliary, n_ledger) {
+  if (!isTRUE(numerical_transfer) && is.list(backend) &&
+      inherits(backend, c("cdid_cp04_corollary1", "cdid_or_corollary1", "cdid_dr_corollary1")) &&
+      is.null(backend$reference_ref) && is.null(backend$layout) &&
+      !cp04_retained_if_auxiliary_eligible(backend)) return(0)
+  8 * N * (n_auxiliary + n_ledger)
+}
+
 # Admit the auxiliary extension of a RESERVED (unallocated) store or leave it
 # unextended (NULL). `backend_ids` are the requested reporting columns' backend
 # indices in their reporting order; `retained` is the auxiliary replay's
@@ -1411,9 +1552,8 @@ cp04_retained_if_auxiliary_admit <- function(store, backend, backend_ids, retain
   if (!is.environment(store) || !identical(store$kind, "cp04_retained_if") || !identical(store$state, "reserved") ||
       (exists("phase", store, inherits = FALSE) && !is.null(store$phase)) ||
       !is.null(store$auxiliary)) return(NULL)
-  if (!is.list(backend) || !inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline", "cdid_ipw_raw_backend")) ||
-      !identical(store$backend_ref, backend$ref) || !is.null(backend$reference_ref) ||
-      is.null(backend$complete_support)) return(NULL)
+  if (!cp04_retained_if_auxiliary_eligible(backend) ||
+      !identical(store$backend_ref, backend$ref)) return(NULL)
   if (!is.numeric(backend_ids) || is.object(backend_ids) || !is.null(dim(backend_ids)) || !length(backend_ids) ||
       anyNA(backend_ids) || any(backend_ids != floor(backend_ids)) || any(backend_ids < 1) ||
       any(backend_ids > length(backend$links)) || any(backend_ids %in% store$links)) return(NULL)
@@ -1514,10 +1654,10 @@ cp04_retained_if_auxiliary_slices <- function(store, backend, backend_ids, callb
         !isTRUE(store$lambda == 1) || !identical(as.double(store$N), as.double(store$n_A)))
       cp04_abort("Retained moment IF storage serves auxiliary columns only on the F = A, lambda = 1 frame.", "integrity")
     full <- store$phi
-    if (!exists("raw_ref", store, inherits = FALSE) || !bindingIsLocked("raw_ref", store) ||
+    if (!exists("raw_ref", store, inherits = FALSE) || bindingIsLocked("raw_ref", store) ||
         !is.environment(store$raw_ref) || !identical(parent.env(store$raw_ref), emptyenv()) ||
         !environmentIsLocked(store$raw_ref) || !exists("phi", store$raw_ref, inherits = FALSE) ||
-        !bindingIsLocked("phi", store$raw_ref) || !gmm_sexp_aliases(full, get("phi", store$raw_ref, inherits = FALSE)) ||
+        bindingIsLocked("phi", store$raw_ref) || !gmm_sexp_aliases(full, get("phi", store$raw_ref, inherits = FALSE)) ||
         !is.matrix(full) || !is.double(full) || nrow(full) != N || ncol(full) != L)
       cp04_abort("Retained moment IF storage lost its shape after the producer pass.", "integrity")
     st
@@ -1547,7 +1687,12 @@ cp04_retained_if_release <- function(store) {
   if (is.null(store)) return(list(status = "streamed"))
   aux <- store$auxiliary
   phase <- if (exists("phase", store, inherits = FALSE)) store$phase else NULL
-  lifetime <- if (!is.null(phase) && identical(phase, "covariance")) {
+  transfer <- store$gmm_transfer
+  lifetime <- if (!is.null(transfer)) {
+    paste("filled once by the covariance mean pass; the same raw original-unit matrix is sliced for the covariance",
+      "Gram pass and both GMM projection passes at their respective original partitions; released after GMM",
+      "and before target IF transport, auxiliary reporting and final diagnostic copying")
+  } else if (!is.null(phase) && identical(phase, "covariance")) {
     paste("reserved before allocation inside the covariance phase simultaneous envelope; filled by the covariance",
       "mean pass; sliced for the covariance Gram pass at the original covariance partition; released before",
       "allocating GMM consumers")
@@ -1568,11 +1713,17 @@ cp04_retained_if_release <- function(store) {
   rec <- c(
     list(status = if (identical(store$state, "filled")) "retained" else paste0("incomplete:", store$state)),
     if (is.null(phase)) list() else list(phase = phase),
+    if (is.null(transfer)) list() else list(mode = "covariance_to_gmm",
+      covariance_chunk_rows = store$B, gmm_chunk_rows = transfer$chunk_rows),
     list(scale = store$scale, n_rows = store$N, n_links = store$L, chunk_rows = store$B, n_batches = store$batches,
       producer_passes = store$producer_passes, slice_passes = store$slice_passes,
-      reserved_entries = store$entries, admission_total_entries = store$admission_total, cap_entries = store$cap,
-      snapshot_metadata_entries = store$metadata_entries, boundary_check_work_ops = store$boundary_work,
-      work_ops_bound = store$work,
+      reserved_entries = if (is.null(transfer)) store$entries else transfer$entries,
+      admission_total_entries = max(store$admission_total, store$producer_cell_peak, if (is.null(transfer)) 0 else transfer$admission_total),
+      cap_entries = store$cap,
+      snapshot_metadata_entries = if (is.null(transfer)) store$metadata_entries else max(store$metadata_entries, transfer$metadata_entries),
+      boundary_check_work_ops = if (is.null(transfer)) store$boundary_work else max(store$boundary_work, transfer$boundary_work),
+      work_ops_bound = ipw_owner_safe_sum(c(store$work, store$producer_cell_work, if (is.null(transfer)) 0 else transfer$work)),
+      producer_cell_store = store$producer_cell_accounting,
       auxiliary = if (is.null(aux)) list(status = "not_extended") else list(status = "extended",
         columns_requested = aux$columns_requested, columns_served = aux$columns_served,
         columns_streamed = aux$columns_streamed, slice_passes = aux$slice_passes,
@@ -1583,8 +1734,9 @@ cp04_retained_if_release <- function(store) {
   drop <- intersect(c("phi", "raw_ref", "id", "backend_snapshot", "backend_ref", "reader_ref", "frame_ref", "panel_ref",
     "reference_ref", "selection_ref", "design_ref", "reader_snapshot", "state_snapshot", "frame_snapshot", "panel_snapshot",
     "reference_snapshot", "selection_snapshot", "selection_reader_snapshot", "design_snapshot", "layout_snapshot", "layout_state_snapshot",
-    "X_F_snapshot", "pair_outcomes_snapshot", "auxiliary"), ls(store, all.names = TRUE))
-  for (nm in drop) if (bindingIsLocked(nm, store)) unlockBinding(nm, store)
+    "X_F_snapshot", "pair_outcomes_snapshot", "auxiliary", "gmm_transfer"), ls(store, all.names = TRUE))
+  # Clear the borrowed raw identity too, including any surviving holder alias.
+  if (is.environment(store$raw_ref)) store$raw_ref$phi <- NULL
   rm(list = drop, envir = store)
   store$state <- "released"
   rec
@@ -1606,6 +1758,7 @@ cp04_replay_links <- function(backend, links, callback, scale = "core", chunk_ro
   }
   # CP08 stage 4: one compact native plan per eligible complete-support replay.
   plan <- chained_full_if_plan(backend, links, B)
+  on.exit(augmented_adjoint_replay_release(plan), add = TRUE)
   for (s in seq.int(1L, N, by = B)) {
     callback(chained_full_if_chunk(backend, seq.int(s, min(N, s + B - 1L)), links, scale, plan))
     if (dom$is_raw) validate_ipw_raw_backend(backend)
@@ -1761,21 +1914,21 @@ cp04_stream_covariance <- function(backend, links, retained = 0) {
 
 # D60: every reference-input backend's diagnostics carry its recipe table,
 # extraction conventions, provenance, frozen bases and recipe repeat rates.
-cp04_public_diagnostics <- function(res, control) {
-  out <- cp04_public_diagnostics_route(res, control)
+cp04_public_diagnostics <- function(res, control, public_object = NULL) {
+  out <- cp04_public_diagnostics_route(res, control, public_object)
   b <- res$nuisance_registry$cp04
   if (!is.null(b$reference_ref) && is.null(out$reference_inputs))
     out$reference_inputs <- chained_reference_record(chained_backend_reference(b))
   out
 }
 
-cp04_public_diagnostics_route <- function(res, control) {
+cp04_public_diagnostics_route <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
   if (inherits(b, "cdid_reference_ipw_backend")) return(reference_ipw_public_diagnostics(res, control))
-  if (inherits(b, "cdid_augmented_backend")) return(augmented_public_diagnostics(res, control))
-  if (inherits(b, "cdid_imputation_backend")) return(imputation_public_diagnostics(res, control))
-  if (inherits(b, c("cdid_dr_baseline", "cdid_dr_corollary1"))) return(dr_public_diagnostics(res, control))
-  if (inherits(b, c("cdid_or_baseline", "cdid_or_corollary1"))) return(or_public_diagnostics(res, control))
+  if (inherits(b, "cdid_augmented_backend")) return(augmented_public_diagnostics(res, control, public_object))
+  if (inherits(b, "cdid_imputation_backend")) return(imputation_public_diagnostics(res, control, public_object))
+  if (inherits(b, c("cdid_dr_baseline", "cdid_dr_corollary1"))) return(dr_public_diagnostics(res, control, public_object))
+  if (inherits(b, c("cdid_or_baseline", "cdid_or_corollary1"))) return(or_public_diagnostics(res, control, public_object))
   # Reserve the compact copy before constructing lists; source factors are
   # borrowed, without owner/design/IF copies. Conservative header allowance.
   bound <- 4 * b$accounting$owned_entries + 4096

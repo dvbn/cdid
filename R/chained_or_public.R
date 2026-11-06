@@ -138,7 +138,7 @@ or_public_views_or_context <- function(method, views, reference) {
 or_public_fit <- function(method, reader, views, ctrl, retained, work,
                           automatic_chunk_rows = FALSE, outcome_recipe = NULL,
                           selection_model = "pair_logit", selection_pooling = "separate",
-                          reference = NULL) {
+                          reference = NULL, outcome_pooling = "pooled") {
   external <- max(0, retained - reader$accounting$borrowed_owner_entries)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   if (is.null(outcome_recipe) && !is.null(reference))
@@ -148,17 +148,18 @@ or_public_fit <- function(method, reader, views, ctrl, retained, work,
   tryCatch(if (identical(method, "baseline"))
     fit_or_baseline(reader, views, ctrl$owner_control, or_public_rank_tol(),
       outcome_recipe = outcome_recipe,
-      retained_external_entries = external, external_work_ops = work, reference = reference) else
+      retained_external_entries = external, external_work_ops = work, reference = reference, outcome_pooling = outcome_pooling,
+      automatic_chunk_rows = automatic_chunk_rows) else
     if (!is.null(reference)) fit_or_selection_models(reader, views, ctrl$owner_control, ctrl$glm_control,
       or_public_rank_tol(), outcome_recipe = outcome_recipe,
       retained_external_entries = external, external_work_ops = work,
       automatic_chunk_rows = automatic_chunk_rows,
-      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference) else
+      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference, outcome_pooling = outcome_pooling) else
     fit_or_corollary1(reader, views, ctrl$owner_control, ctrl$glm_control, or_public_rank_tol(),
       outcome_recipe = outcome_recipe,
       retained_external_entries = external, external_work_ops = work,
       automatic_chunk_rows = automatic_chunk_rows,
-      selection_model = selection_model, selection_pooling = selection_pooling),
+      selection_model = selection_model, selection_pooling = selection_pooling, outcome_pooling = outcome_pooling),
     cdid_or_wls_rank_error = function(e) {
       e$message <- paste0(conditionMessage(e), " Control-only support/rank or residual conditioning failure after common alias preprocessing; ",
         "no further terms, samples or moments were removed. This computation failure does not establish population ATT nonidentification.")
@@ -172,7 +173,7 @@ dr_public_fit <- function(method, reader, views, ctrl, retained, work,
                           automatic_chunk_rows = FALSE, outcome_recipe = NULL,
                           treatment_columns = NULL,
                           selection_model = "pair_logit", selection_pooling = "separate",
-                          reference = NULL) {
+                          reference = NULL, outcome_pooling = "pooled") {
   external <- max(0, retained - reader$accounting$borrowed_owner_entries)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   if (is.null(outcome_recipe) && !is.null(reference))
@@ -183,12 +184,12 @@ dr_public_fit <- function(method, reader, views, ctrl, retained, work,
     fit_dr_baseline(reader, views, ctrl$owner_control, ctrl$glm_control, or_public_rank_tol(),
       outcome_recipe = outcome_recipe, treatment_columns = treatment_columns,
       retained_external_entries = external, external_work_ops = work,
-      automatic_chunk_rows = automatic_chunk_rows, reference = reference) else
+      automatic_chunk_rows = automatic_chunk_rows, reference = reference, outcome_pooling = outcome_pooling) else
     fit_dr_corollary1(reader, views, ctrl$owner_control, ctrl$glm_control, or_public_rank_tol(),
       outcome_recipe = outcome_recipe, treatment_columns = treatment_columns,
       retained_external_entries = external, external_work_ops = work,
       automatic_chunk_rows = automatic_chunk_rows,
-      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference),
+      selection_model = selection_model, selection_pooling = selection_pooling, reference = reference, outcome_pooling = outcome_pooling),
     cdid_or_wls_rank_error = function(e) {
       e$message <- paste0(conditionMessage(e), " Control-only support/rank or residual conditioning failure after common alias preprocessing; ",
         "no further terms, samples or moments were removed. This computation failure does not establish population ATT nonidentification.")
@@ -212,7 +213,22 @@ chained_full_if_budget <- function(backend, B, links) {
 }
 # CP08 stage 4: the compact native plan of an eligible complete-support OR/DR
 # replay, built once per replay from the validated sealed backend (else NULL).
-chained_full_if_plan <- function(backend, links, B) {
+chained_full_if_plan <- function(backend, links, B, phase_store = NULL) {
+  if (inherits(backend, "cdid_augmented_backend")) return(augmented_adjoint_replay_plan(backend, links, B, phase_store))
+  if (inherits(backend, "cdid_dr_corollary1") && dr_separate(backend) && isTRUE(backend$uses_selection_models))
+    return(dr_conditional_replay_preparation(backend, links, B))
+  if (inherits(backend, c("cdid_or_baseline", "cdid_dr_baseline")) &&
+      identical(backend$outcome_pooling, "separate") && !is.null(backend$separate_complete))
+    return(separate_complete_native_plan(backend, links, B))
+  if (inherits(backend, "cdid_dr_baseline") && dr_separate(backend) &&
+      !isTRUE(backend$uses_selection_models) && is.null(backend$reference_ref) &&
+      is.null(backend$separate_complete)) return(dr_separate_sparse_replay_plan(backend, links, B))
+  if (inherits(backend, "cdid_or_baseline") && is.null(backend$complete_support) &&
+      is.null(backend$separate_complete) && is.null(backend$reference_ref))
+    return(or_sparse_native_plan(backend, links, B))
+  if (inherits(backend, "cdid_dr_baseline") && !dr_separate(backend) &&
+      !isTRUE(backend$uses_selection_models) && is.null(backend$complete_support) &&
+      is.null(backend$reference_ref)) return(dr_sparse_native_plan(backend, links, B))
   if (inherits(backend, "cdid_ipw_raw_backend")) return(ipw_raw_if_plan(backend, links, B))
   if (inherits(backend, c("cdid_reference_ipw_backend", "cdid_cp04_custom_backend", "cdid_augmented_backend",
       "cdid_imputation_backend")) || !is.list(backend) || is.null(backend$complete_support)) return(NULL)
@@ -224,10 +240,10 @@ chained_full_if_chunk <- function(backend, rows, links, scale, plan = NULL) {
   if (inherits(backend, "cdid_ipw_raw_backend")) return(evaluate_ipw_raw_if_chunk(backend, rows, links, scale = scale, plan = plan))
   if (inherits(backend, "cdid_reference_ipw_backend")) return(evaluate_reference_ipw_if_chunk(backend, rows, links, scale))
   if (inherits(backend, "cdid_cp04_custom_backend")) return(evaluate_cp04_custom_if_chunk(backend, rows, links, scale))
-  if (inherits(backend, "cdid_augmented_backend")) return(evaluate_augmented_if_chunk(backend, rows, links, scale))
+  if (inherits(backend, "cdid_augmented_backend")) return(evaluate_augmented_if_chunk(backend, rows, links, scale, plan = plan))
   if (inherits(backend, "cdid_imputation_backend")) return(evaluate_imputation_if_chunk(backend, rows, links, scale))
   if (inherits(backend, "cdid_dr_baseline")) return(evaluate_dr_baseline_if_chunk(backend, rows, links, scale, plan = plan))
-  if (inherits(backend, "cdid_dr_corollary1")) return(evaluate_dr_corollary1_if_chunk(backend, rows, links, scale))
+  if (inherits(backend, "cdid_dr_corollary1")) return(evaluate_dr_corollary1_if_chunk(backend, rows, links, scale, plan = plan))
   if (inherits(backend, "cdid_or_baseline")) return(evaluate_or_baseline_if_chunk(backend, rows, links, scale, plan = plan))
   if (inherits(backend, "cdid_or_corollary1")) return(evaluate_or_corollary1_if_chunk(backend, rows, links, scale))
   evaluate_cp04_if_chunk(backend, rows, links, scale)
@@ -241,12 +257,16 @@ chained_full_link_estimate <- function(backend, j) {
   f <- backend$treatments[[l$model]]; unname(f$means["T"] - f$means["M"])
 }
 
-or_public_diagnostics <- function(res, control) {
+or_public_diagnostics <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
-  bound <- 4 * b$accounting$owned_entries + 4096
-  cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
-    res$resource_accounting$initial_envelope_entries)), bound),
-    4 * bound, 8 * bound, bound, "OR public diagnostic copy")
+  bound <- if (cp04_field_diagnostics(b))
+    cp04_public_diagnostic_admit(res, control, public_object, "OR public diagnostic copy") else {
+    bound <- 4 * b$accounting$owned_entries + 4096
+    cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
+      4 * bound, 8 * bound, bound, "OR public diagnostic copy")
+    bound
+  }
+  local_blocks <- if (identical(b$outcome_pooling, "separate")) outcome_public_blocks(b) else NULL
   shared <- b$shared[intersect(c("p", "keep", "beta", "coefficients", "fit", "summary",
     "basis", "control_support_ids", "rss", "objective", "verification_scan"), names(b$shared))]
   records <- list(
@@ -255,7 +275,7 @@ or_public_diagnostics <- function(res, control) {
     regression = lapply(seq_along(b$regressions), function(j) {
       reg <- b$regressions[[j]]
       reg_compact <- reg[setdiff(names(reg), "qr")]
-      c(list(id = j, role = "local_intercept_block_of_single_joint_fit",
+      c(list(id = j, role = if (identical(b$outcome_pooling, "separate")) "distinct_comparison_outcome_fit" else "local_intercept_block_of_single_joint_fit",
         spec = b$regression_specs[[j]]), reg_compact)
     })
   )
@@ -268,6 +288,7 @@ or_public_diagnostics <- function(res, control) {
   )
   coefficients <- list(
     shared_slopes = b$shared$coefficients,
+    block_slopes = if (is.null(local_blocks)) NULL else lapply(local_blocks, `[[`, "beta"),
     local_intercepts = local_icpts,
     has_local_intercepts = isTRUE(b$outcome_recipe$intercept)
   )
@@ -289,7 +310,7 @@ or_public_diagnostics <- function(res, control) {
     mu = vapply(b$links, `[[`, numeric(1), "mu"),
     stringsAsFactors = FALSE
   )
-  diag_copy <- list(records = records, shared = shared, coefficients = coefficients,
+  diag_copy <- list(records = records, shared = shared, outcome_blocks = local_blocks, coefficients = coefficients,
     fitted_catalog = fitted_catalog, supports = supports_diag)
   if (unname(cp04_payload(diag_copy)["entries"]) > bound)
     cp04_abort("OR diagnostic copy bound underestimated.", "bound")
@@ -306,7 +327,7 @@ or_public_diagnostics <- function(res, control) {
     coefficients = coefficients,
     basis = list(common_design = if (is.null(b$reference_ref)) res$controls$or_basis else chained_backend_reference(b)$basis,
       pooled_control = b$shared$basis),
-    shared = shared,
+    shared = shared, outcome_pooling = outcome_public_mode(b$outcome_pooling), outcome_blocks = local_blocks,
     records = records,
     supports = supports_diag,
     links = b$links,
@@ -319,16 +340,27 @@ or_public_diagnostics <- function(res, control) {
       "and stored-calendar transition durations L_e = i_t - i_s; block records describe local intercept blocks of that single joint fit,",
       "not independent regression fits. Complete F-row influence functions with global slope dependencies. No treatment fits or numerical certificate."))
   # D60: recipe table, extraction conventions and provenance of the dated route.
+  if (!is.null(local_blocks)) {
+    out$outcome_model <- outcome_public_model("separate")
+    out$fit_structure <- "one outcome fit per unique comparison block"
+    out$basis$blocks <- lapply(local_blocks, `[[`, "basis")
+    out$interpretation <- paste("Comparison-specific outcome regressions with complete original-unit nuisance influence functions;",
+      "local slopes and prediction-preserving bases remain unrestricted across distinct comparison blocks.")
+  }
   if (!is.null(b$reference_ref)) out$reference_inputs <- chained_reference_record(chained_backend_reference(b))
-  out
+  cp04_public_diagnostic_check(out, b, bound)
 }
 
-dr_public_diagnostics <- function(res, control) {
+dr_public_diagnostics <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
-  bound <- 4 * b$accounting$owned_entries + 4096
-  cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
-    res$resource_accounting$initial_envelope_entries)), bound),
-    4 * bound, 8 * bound, bound, "DR public diagnostic copy")
+  bound <- if (cp04_field_diagnostics(b))
+    cp04_public_diagnostic_admit(res, control, public_object, "DR public diagnostic copy") else {
+    bound <- 4 * b$accounting$owned_entries + 4096
+    cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
+      4 * bound, 8 * bound, bound, "DR public diagnostic copy")
+    bound
+  }
+  local_blocks <- if (identical(b$outcome_pooling, "separate")) outcome_public_blocks(b) else NULL
   shared <- b$shared[intersect(c("p", "keep", "beta", "coefficients", "fit", "summary",
     "basis", "control_support_ids", "rss", "objective", "verification_scan"), names(b$shared))]
   records <- list(
@@ -337,7 +369,7 @@ dr_public_diagnostics <- function(res, control) {
     regression = lapply(seq_along(b$regressions), function(j) {
       reg <- b$regressions[[j]]
       reg_compact <- reg[setdiff(names(reg), "qr")]
-      c(list(id = j, role = "local_intercept_block_of_single_joint_fit",
+      c(list(id = j, role = if (identical(b$outcome_pooling, "separate")) "distinct_comparison_outcome_fit" else "local_intercept_block_of_single_joint_fit",
         spec = b$regression_specs[[j]]), reg_compact)
     }),
     treatment = lapply(seq_along(b$treatments), function(j)
@@ -352,6 +384,7 @@ dr_public_diagnostics <- function(res, control) {
   )
   coefficients <- list(
     shared_slopes = b$shared$coefficients,
+    block_slopes = if (is.null(local_blocks)) NULL else lapply(local_blocks, `[[`, "beta"),
     local_intercepts = local_icpts,
     has_local_intercepts = isTRUE(b$outcome_recipe$intercept),
     treatment = lapply(b$treatments, `[[`, "coefficients")
@@ -378,7 +411,7 @@ dr_public_diagnostics <- function(res, control) {
     mu_ipw = vapply(b$links, `[[`, numeric(1), "mu_ipw"),
     stringsAsFactors = FALSE
   )
-  diag_copy <- list(records = records, shared = shared, coefficients = coefficients,
+  diag_copy <- list(records = records, shared = shared, outcome_blocks = local_blocks, coefficients = coefficients,
     fitted_catalog = fitted_catalog, supports = supports_diag)
   if (unname(cp04_payload(diag_copy)["entries"]) > bound)
     cp04_abort("DR diagnostic copy bound underestimated.", "bound")
@@ -397,7 +430,7 @@ dr_public_diagnostics <- function(res, control) {
     coefficients = coefficients,
     basis = list(common_design = if (is.null(b$reference_ref)) res$controls$or_basis else chained_backend_reference(b)$basis,
       pooled_control = b$shared$basis),
-    shared = shared,
+    shared = shared, outcome_pooling = outcome_public_mode(b$outcome_pooling), outcome_blocks = local_blocks,
     records = records,
     supports = supports_diag,
     links = b$links,
@@ -409,6 +442,13 @@ dr_public_diagnostics <- function(res, control) {
       "and residualized Hajek IPW over deduplicated risk-set treatment propensity logits under the declared observation route;",
       "complete F-row influence functions with global OR slope, treatment propensity, and observation/selection paths.",
       "No numerical certificate."))
+  if (!is.null(local_blocks)) {
+    out$outcome_model <- outcome_public_model("separate")
+    out$fit_structure <- "one outcome fit per unique comparison block"
+    out$basis$blocks <- lapply(local_blocks, `[[`, "basis")
+    out$interpretation <- paste("Comparison-specific outcome regressions with complete original-unit nuisance influence functions;",
+      "local slopes and prediction-preserving bases remain unrestricted across distinct comparison blocks.")
+  }
   if (!is.null(b$reference_ref)) out$reference_inputs <- chained_reference_record(chained_backend_reference(b))
-  out
+  cp04_public_diagnostic_check(out, b, bound)
 }

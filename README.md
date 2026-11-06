@@ -4,15 +4,55 @@
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://davidbenatia.com/research/)
 
-The current CRAN release is 0.1.1. This repository contains version 1.1.0.1,
+The current CRAN release is 0.1.1. This repository contains version 1.2.0.0,
 which is being prepared for the next CRAN update.
 
 ## Installation
 
+Install directly from GitHub in a normal R session:
+
 ```r
-# install.packages("remotes")
+# Run once if remotes is not installed:
+install.packages("remotes")
 remotes::install_github("dvbn/cdid")
+library(cdid)
 ```
+
+You need **R 4.1.0 or later** and the official CRAN packages **did 2.5.1 or
+later** and **DRDID 1.4.0 or later**. `remotes` installs missing required
+dependencies and offers updates when needed. Allow updates to dependencies
+below these minimum versions. You do not need GitHub versions of `did` or
+`DRDID`.
+
+Installing from GitHub compiles `cdid`'s C code, so the usual tools for building
+R packages from source must be available:
+
+- **Windows:** [Rtools](https://cran.r-project.org/bin/windows/Rtools/)
+  matching your R version.
+- **macOS:** Xcode Command Line Tools; see the
+  [R for macOS tools](https://mac.r-project.org/tools/).
+- **Linux:** a C/C++ compiler and `make`, including tools needed by dependencies.
+
+No Docker, Homebrew installation of R, special project library or validation
+scripts are required. A standard CRAN installation of R is suitable.
+
+`cdid` 1.2.0.0 has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under
+R 4.5.2. R 4.5.2 is a tested version, not an installation requirement. Later
+versions of these dependencies are accepted but have not been comprehensively
+tested; compatibility and identical results are not guaranteed. The optional
+[pinned validation setup](https://github.com/dvbn/cdid/blob/main/validation/SETUP.md#optional-pinned-validation-setup)
+reproduces the tested dependency versions for checks of this revision; historical
+outputs retain their recorded dependency versions.
+
+If an error reports outdated `did` or `DRDID`, update them with
+`install.packages(c("did", "DRDID"))` and restart R before trying again.
+Modified forks of these packages may have different interfaces even when their
+version numbers exceed the minimum. An abrupt **"R session aborted"** can also
+come from incompatible local R installations and compiled packages. In that
+case, check [which R version RStudio uses](https://support.posit.co/hc/en-us/articles/200486138-Changing-R-versions-for-the-RStudio-Desktop-IDE)
+and reinstall affected dependencies with that R installation. For help, include
+`sessionInfo()` and installation output in an
+[issue](https://github.com/dvbn/cdid/issues).
 
 A short hands-on vignette covers an incomplete panel, estimation, diagnostics,
 aggregation and plotting. To include it when installing from GitHub, use
@@ -21,15 +61,15 @@ aggregation and plotting. To include it when installing from GitHub, use
 `vignette("cdid", package = "cdid")`. The [full user guide](https://github.com/dvbn/cdid/blob/main/docs/README.md)
 and [practical notebook](https://github.com/dvbn/cdid/blob/main/notebooks/cdid_practical_guide.qmd) provide more examples.
 
-`cdid` 1.1.0.1 requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`. If older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted but have not been tested, so it is not guaranteed that everything works with them or that results are identical. Installation compiles the package's C/C++ code and therefore needs a compiler toolchain: Rtools on Windows, the command-line developer tools on macOS, or a C/C++ compiler and `make` on Linux. The optional [pinned validation setup](https://github.com/dvbn/cdid/blob/main/validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions, for checks of this revision; historical outputs retain their recorded dependency versions.
-
 ## What the package does
 
 A treatment cohort is the set of units first treated in the same period. For cohort g and period t, ATT(g,t) is the average effect of the treatment in period t on the units of cohort g. [Callaway and Sant'Anna (2021, *Journal of Econometrics*)](https://doi.org/10.1016/j.jeconom.2020.12.001) define these effects for staggered adoption, estimate each one by comparing the cohort with units never treated or not yet treated, and aggregate them into summaries such as event studies. The `did` package implements their estimators, which adjust for covariates by outcome regression (OR), inverse probability weighting (IPW) or a doubly robust (DR) combination of the two.
 
 `cdid` extends this framework to incomplete panels with the chained DiD of ([Bellégo, Benatia and Dortet-Bernadet (2025, *Journal of Econometrics*)](https://doi.org/10.1016/j.jeconom.2024.105783), [arXiv](https://arxiv.org/abs/2301.01085)). `did` handles an unbalanced panel either by keeping only the units observed at every date or, with `allow_unbalanced_panel = TRUE`, through repeated cross section (RCS) estimators that compare outcome levels. Chained DiD instead uses the changes of each unit between the dates at which it is observed, and combines all available short DiD comparisons into the effects. The targets remain the ATT(g,t) of the cohorts of the original study population, including their units with missing outcomes, and the assumptions concern the missing changes rather than the missing levels, as explained below.
 
-Two adjustments are chosen separately. The treatment adjustment, chosen with `est_method`, makes each cohort comparable with its controls by IPW, OR or DR, as in `did` ([Treatment adjustment](https://github.com/dvbn/cdid/blob/main/docs/methods/treatment.md)). The adjustment for missing outcomes applies when attrition or other missingness depends on measured covariates related to the changes. With `selection = "conditional_mtar"`, `selection_est_method` chooses observation weighting, which weights each observed change by the inverse of its estimated probability of being observed at both dates (`"ipw"`), change imputation, which predicts the changes with a regression fitted to the observed changes (`"imputation"`), or the augmented correction, which combines the two and requires treatment DR (`"dr"`) ([Handling missing outcomes](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#how-to-adjust)). Treatment DR with the augmented correction is doubly robust in both layers: for the treatment, either the propensity model or the outcome regression may be misspecified, and for the missing outcomes, either the observation model or the imputation model, provided the other model of the layer and the remaining assumptions are correct ([Which models must be correct](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#which-models-must-be-correct)).
+Two adjustments are chosen separately. The treatment adjustment, chosen with `est_method`, makes each cohort comparable with its controls by IPW, OR or DR, as in `did` ([Treatment adjustment](https://github.com/dvbn/cdid/blob/main/docs/methods/treatment.md)). The adjustment for missing outcomes applies when attrition or other missingness depends on measured covariates related to the changes. With `selection = "conditional_mtar"`, `selection_est_method` chooses observation weighting, which weights each observed change by the inverse of its estimated probability of being observed at both dates (`"ipw"`), change imputation, which predicts the changes with a regression fitted to the observed changes (`"imputation"`), or the augmented correction, which combines the two (`"dr"`) and works with treatment IPW, OR or DR ([Handling missing outcomes](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#how-to-adjust)). Treatment DR with the augmented correction is doubly robust in both layers: for the treatment, either the propensity model or the outcome regression may be misspecified, and for the missing outcomes, either the observation model or the imputation model, provided the other model of the layer and the remaining assumptions are correct ([Which models must be correct](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#which-models-must-be-correct)).
+
+For treatment OR and DR, `outcome_pooling = "separate"` is the default: each distinct comparison has its own outcome coefficients. Explicit `"pooled"` shares slopes per calendar step across comparisons, with local intercepts, preserving the earlier specification. This choice is independent of the observation and imputation pooling settings ([Treatment adjustment](https://github.com/dvbn/cdid/blob/main/docs/methods/treatment.md#outcome-regression-or)).
 
 `cdid` also lets you choose between two parallel trends assumptions. PT-post, the default, assumes parallel trends from each cohort's reference period onward. PT-all, which `did` 2.5.1 (the tested version) does not offer, adds the same assumption from a chosen common start date up to each reference period, so that each of those earlier dates can also serve as a baseline. As in Bellégo, Benatia and Dortet-Bernadet (2025), short comparisons between observed dates are combined by the generalized method of moments (GMM), and the system is overidentified when several comparisons inform the same effect. Under PT-post this system already combines the comparisons that PT-post makes valid; PT-all adds to the same system the earlier restrictions that only its stronger assumption justifies. Valid restrictions can make more effects available or improve precision, but neither gain is guaranteed, and false restrictions can bias the estimates ([Parallel trends](https://github.com/dvbn/cdid/blob/main/docs/methods/parallel-trends.md#pt-all)). How cells before treatment are reported is a separate choice, `base_period`, which changes neither assumption. A future release will incorporate additional efficiency options.
 
@@ -54,7 +94,7 @@ Chained DiD can also be more precise than RCS comparisons when both are valid. D
 
 - Callaway, B. and Sant'Anna, P. H. C. (2021). Difference-in-Differences with Multiple Time Periods. *Journal of Econometrics*, 225(2), pages 200 to 230. <https://doi.org/10.1016/j.jeconom.2020.12.001>
 
-Chained IPW (`est_method = "ipw"`) and observation weighting for missing outcomes follow Bellégo, Benatia and Dortet-Bernadet. The package extends these papers with chained OR and DR, which carry the OR and DR approaches over to chained comparisons through one pooled regression of the controls' outcome changes, and with change imputation and PT-all. The [augmented correction](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#augmented-correction) for missing outcomes, which combines an observation model with a change imputation model and is used with treatment DR, is a further extension; an accompanying paper is about to be released. The methods pages in the reading path state the assumptions each extension needs.
+Chained IPW (`est_method = "ipw"`) and observation weighting for missing outcomes follow Bellégo, Benatia and Dortet-Bernadet. The package extends these papers with chained OR and DR, which carry the OR and DR approaches over to chained comparisons through regressions of the controls' outcome changes, fitted separately by comparison by default or pooled with `outcome_pooling = "pooled"`, and with change imputation and PT-all. The [augmented correction](https://github.com/dvbn/cdid/blob/main/docs/methods/missing-outcomes.md#augmented-correction) for missing outcomes, which combines an observation model with a change imputation model and can be used with treatment IPW, OR or DR, is a further extension; an accompanying paper is about to be released. The methods pages in the reading path state the assumptions each extension needs.
 
 ## Reading path
 
@@ -87,7 +127,7 @@ For hands-on exploration, use the [editable Quarto source](https://github.com/dv
 | 19 | [Results](https://github.com/dvbn/cdid/blob/main/docs/reference/results.md) | The contents of each result, the uncertainty rules, pretrend tests and export. |
 | 20 | [Diagnose errors and unavailable results](https://github.com/dvbn/cdid/blob/main/docs/help/troubleshooting.md) | Refused requests, failed fits, unavailable effects and surprising results. |
 
-This guide describes version 1.1.0.1. Numerical code output shown on the article pages comes from recorded runs, and each page states the version actually used. Analytical population values are labeled separately.
+This guide describes version 1.2.0.0. Numerical code output shown on the article pages comes from recorded runs, and each page states the version actually used. Analytical population values are labeled separately.
 
 ## Terms used in this guide
 

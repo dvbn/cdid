@@ -92,6 +92,8 @@ od_counted <- function(decline = FALSE) {
   n$logit <- n$search <- n$complete <- n$replay <- n$core <- 0L
   n$native <- setNames(integer(length(od_kernels)), od_kernels)
   addr <- lapply(od_kernels, api$or_baseline_native_kernel)
+  addr <- lapply(addr, cdid_test_native_address)
+  e$or_baseline_native_kernel <- cdid_test_native_calls_in(api$or_baseline_native_kernel, e)
   e$.Call <- function(.NAME, ...) {
     k <- which(vapply(addr, identical, logical(1), .NAME))
     if (length(k)) n$native[k] <- n$native[k] + 1L
@@ -406,7 +408,7 @@ test_that("independent references: raw-row intercept-only OR rows and the accept
     expect_lt(max(abs(unname(col(nm)) - unname(tb[[nm]]))), 2e-14, label = nm)
 })
 
-test_that("route facts are actual: every broken fact keeps the general route without raising or reading", {
+test_that("complete-route eligibility follows actual facts and broken facts preserve the general route", {
   d <- od_panel()
   wv <- 1 + (seq_len(41L) %% 3) / 4
   Xx <- cbind(`(Intercept)` = 1, x = seq_len(41L) %% 2)
@@ -435,11 +437,23 @@ test_that("route facts are actual: every broken fact keeps the general route wit
       }
       fit <- if (method == "or") od_or(v$fx, ec, recipe = rec) else od_dr(v$fx, ec, recipe = rec)
       gen <- if (method == "or") od_or(v$fx, od_general, recipe = rec) else od_dr(v$fx, od_general, recipe = rec)
-      cp09_eligible <- (nm == "other_pool" && method == "dr") || nm == "second_target"
+      cp09_eligible <- nm %in% c("other_pool", "second_target")
       if (cp09_eligible) {
         expect_false(is.null(fit$complete_support), info = paste(nm, method))
         expect_null(gen$complete_support, info = paste(nm, method))
         expect_gt(sum(ec$n$native), 0L, label = paste(nm, method))
+        if (nm == "other_pool" && method == "or") {
+          expect_identical(fit$complete_support$route, "complete_support")
+          expect_identical(fit$complete_support$control,
+            sort(unique(as.integer(unlist(lapply(fit$regression_specs, `[[`, "cohorts"))))))
+          expect_true(any(vapply(fit$regression_specs, function(s) length(s$support_ids) > 1L, logical(1))))
+          before <- ec$n$native[["C_gmm_cp08_or_if_chunk"]]
+          rows <- seq_len(v$fx$chunk); ids <- seq_along(fit$links)
+          actual <- ec$evaluate_or_baseline_if_chunk(fit, rows, ids)
+          reference <- api$evaluate_or_baseline_if_chunk(gen, rows, ids)
+          expect_identical(ec$n$native[["C_gmm_cp08_or_if_chunk"]], before + 1L)
+          expect_equal(actual$phi, reference$phi, tolerance = 1e-12)
+        }
         if (method == "dr") {
           n_grp <- if (nm == "second_target") 2L else 1L
           expect_identical(ec$n$logit, n_grp, info = nm)
