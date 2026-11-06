@@ -2,9 +2,9 @@
 
 `cdid` estimates group time average treatment effects ATT(g,t) with chained difference in differences (chained DiD). It builds upon the [`did` package](https://bcallaway11.github.io/did/) and extends it to panels in which some outcomes may be missing, by using the outcome changes between the dates at which each unit is observed.
 
-[CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://davidbenatia.com/research/)
+[CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://www.davidbenatia.com/research/)
 
-The current CRAN release is 0.1.1. This repository contains version 1.2.0.0,
+The current CRAN release is 0.1.1. This repository contains version 1.2.0.1,
 which is being prepared for the next CRAN update.
 
 ## Installation
@@ -36,7 +36,7 @@ R packages from source must be available:
 No Docker, Homebrew installation of R, special project library or validation
 scripts are required. A standard CRAN installation of R is suitable.
 
-`cdid` 1.2.0.0 has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under
+`cdid` 1.2.0.1 has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under
 R 4.5.2. R 4.5.2 is a tested version, not an installation requirement. Later
 versions of these dependencies are accepted but have not been comprehensively
 tested; compatibility and identical results are not guaranteed. The optional
@@ -127,7 +127,7 @@ For hands-on exploration, use the [editable Quarto source](https://github.com/dv
 | 19 | [Results](https://github.com/dvbn/cdid/blob/main/docs/reference/results.md) | The contents of each result, the uncertainty rules, pretrend tests and export. |
 | 20 | [Diagnose errors and unavailable results](https://github.com/dvbn/cdid/blob/main/docs/help/troubleshooting.md) | Refused requests, failed fits, unavailable effects and surprising results. |
 
-This guide describes version 1.2.0.0. Numerical code output shown on the article pages comes from recorded runs, and each page states the version actually used. Analytical population values are labeled separately.
+This guide describes version 1.2.0.1. Numerical code output shown on the article pages comes from recorded runs, and each page states the version actually used. Analytical population values are labeled separately.
 
 ## Terms used in this guide
 

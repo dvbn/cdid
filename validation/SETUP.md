@@ -1,10 +1,10 @@
 # Install cdid
 
-The GitHub repository is currently private; your account needs access to install from it.
+The GitHub repository is public; no special account access is needed to install from it.
 
 ## Usual installation
 
-Install `cdid` 1.2.0.0 from GitHub:
+Install `cdid` 1.2.0.1 from GitHub:
 
 ```r
 # install.packages("remotes")
@@ -13,7 +13,7 @@ remotes::install_github("dvbn/cdid")
 
 `cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
 
-This is all that is needed to use the package. Version 1.2.0.0 is the next release after 0.1.1 and is not yet available from CRAN.
+This is all that is needed to use the package. Version 1.2.0.1 is the next release after 0.1.1 and is not yet available from CRAN.
 
 ## Optional: pinned validation setup
 
@@ -47,7 +47,7 @@ Start a fresh R session and put the setup library first:
 
 ```r
 .libPaths(c(normalizePath("validation/.lib"), .libPaths()))  # from the repository root
-packageVersion("cdid")    # 1.2.0.0
+packageVersion("cdid")    # 1.2.0.1
 ?cdid::att_gt
 ```
 
@@ -73,3 +73,18 @@ No profiles, credentials or persistent environment settings are written.
 ### Tested platforms
 
 The installer has been exercised on macOS arm64 with R 4.5.2, before the version number was set to 1.0.0.0. Other platforms have not been checked. Setup checks installation only; it runs no estimation, tests or simulations.
+
+### Running package checks and the full test suite
+
+Ordinary `R CMD check` executes the bounded regression suite in `tests/testthat/test-cran-regression.R` via `tests/testthat.R`. All 172 comprehensive development, numerical-verification, and Monte Carlo test files remain packaged in `tests/testthat/` and are run unfiltered (`filter = NULL`) as a mandatory CI and validation gate.
+
+To run the complete unfiltered test suite against an installed `cdid` library (such as `check/cdid.Rcheck` after `R CMD check` or `validation/.lib` after `validation/setup.R --install`):
+
+```sh
+Rscript validation/run_full_tests.R \
+  --lib-loc=check/cdid.Rcheck \
+  --test-dir=check/cdid.Rcheck/tests/testthat \
+  --output-dir=full-tests
+```
+
+This step is for package verification and CI; end users do not need it to use `cdid`.
