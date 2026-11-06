@@ -153,7 +153,6 @@ jobs:
       - name: Check the identical archive, including its help manual
         shell: Rscript {0}
         env:
-          NOT_CRAN: 'true'
           _R_CHECK_LIMIT_CORES_: 'true'
         run: |
           dir.create("check")
@@ -164,11 +163,17 @@ jobs:
             expected <- strsplit(readLines("source-archive/SHA256SUMS"), " ")[[1L]][1L]
             stopifnot(identical(hash, expected))
             writeLines(c(paste("Archive SHA256:", hash), paste("rcmdcheck version:", as.character(utils::packageVersion("rcmdcheck"))), paste("HTML Tidy:", Sys.getenv("R_TIDYCMD")), paste("V8 version:", as.character(utils::packageVersion("V8"))), capture.output(sessionInfo())), "check/environment.txt")
+            check_started <- Sys.time()
             result <- rcmdcheck::rcmdcheck(path = archive, args = "--as-cran", check_dir = "check", timeout = 120 * 60, error_on = "never")
+            check_seconds <- as.numeric(difftime(Sys.time(), check_started, units = "secs"))
             saveRDS(result, "check/result.rds")
             writeLines(result$stdout, "check/stdout.txt")
             writeLines(result$stderr, "check/stderr.txt")
             writeLines(capture.output(print(result)), "check/summary.txt")
+            writeLines(sprintf("Overall package-check elapsed seconds: %.3f", check_seconds), "check/checktime.txt")
+            if (!is.finite(check_seconds) || check_seconds > 10 * 60) {
+              stop("Ordinary package check exceeded the ten-minute incoming-check budget; see checktime.txt")
+            }
             if (isTRUE(result$timeout) || result$status != 0L || length(result$errors) || length(result$warnings) || length(result$notes)) {
               stop("R CMD check requires zero errors, warnings and notes; see the retained logs and result.rds")
             }
@@ -183,3 +188,31 @@ jobs:
           path: check/
           retention-days: 7
           if-no-files-found: warn
+      - name: Run unfiltered complete installed test suite against checked archive
+        shell: Rscript {0}
+        env:
+          _R_CHECK_LIMIT_CORES_: 'true'
+        run: |
+          # Executes testthat::test_dir("check/cdid.Rcheck/tests/testthat",
+          # filter = NULL, package = "cdid", load_package = "installed",
+          # reporter = ..., stop_on_failure = TRUE, stop_on_warning = TRUE)
+          # against the installed package library in check/cdid.Rcheck.
+          status <- system2(
+            file.path(R.home("bin"), "Rscript"),
+            c(
+              "validation/run_full_tests.R",
+              "--lib-loc=check/cdid.Rcheck",
+              "--test-dir=check/cdid.Rcheck/tests/testthat",
+              "--output-dir=full-tests"
+            )
+          )
+          if (!identical(status, 0L)) {
+            stop(sprintf("Unfiltered full installed test suite failed with exit status %d", status))
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: full-tests-${{ matrix.config.os }}-${{ matrix.config.r }}
+          path: full-tests/
+          retention-days: 7
+          if-no-files-found: error
