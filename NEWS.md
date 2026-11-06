@@ -11,6 +11,7 @@
 * Update native object, attribute and binding access for newer R releases while retaining version-specific code for older R versions.
 * Use registered native entry points bound to the owning library, and release temporary inference buffers through private mutable storage without unlocking R bindings.
 * Update help and the practical guide to explain the two outcome specifications. Historical article outputs retain their recorded versions and explicitly request the pooled specification where used.
+* Clarify direct GitHub installation, source-build tools and local R troubleshooting, with the current dependency requirements.
 
 # cdid 1.1.0.1
 
