@@ -1,7 +1,7 @@
 # cdid 1.2.0.1
 
 * Use a bounded regression suite for standard `R CMD check`, with representative independent numerical and inference references across the public interface. The extensive development checks remain a separate required CI gate.
-* Retain all 172 comprehensive development, numerical-verification, and Monte Carlo test files unchanged in `tests/testthat/` and execute the complete unfiltered installed test suite (`filter = NULL`) as a mandatory gate across all four CI platforms and via `validation/run_full_tests.R`.
+* Retain all 172 comprehensive development, numerical-verification, and Monte Carlo test files in `tests/testthat/` and execute the complete unfiltered installed test suite (`filter = NULL`) as a mandatory gate across all four CI platforms and via `validation/run_full_tests.R`.
 * Update the author research URL in `README.md` to its canonical `https://www.davidbenatia.com/research/` address to avoid HTTP redirects during CRAN incoming checks.
 
 # cdid 1.2.0.0
