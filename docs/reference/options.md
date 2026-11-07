@@ -2,7 +2,7 @@
 
 This page is the guide's single definition of each argument: its default, accepted values, when it is active and how it interacts with other choices. The help pages `?cdid::att_gt`, `?cdid::aggte` and `?cdid::conditional_did_pretest` contain the complete text. The articles link here instead of repeating these definitions.
 
-> **Availability in proposed 1.3.0.0:** The static binary entry/exit/re-entry route (`dname` and its companion arguments `imputation_scale`, `switchers` and `switch_times`) is proposed for `cdid` 1.3.0.0 on the development pull request branch `codex/static-entry-exit-1.3.0.0` (`remotes::install_github("dvbn/cdid", ref = "codex/static-entry-exit-1.3.0.0")` before merge). The 1.2.0.1 submission is separate; version 1.3.0.0 has not been merged or submitted to CRAN.
+> **Availability in proposed 1.3.0.0:** The static binary entry/exit/re-entry route (`dname` and its companion arguments `imputation_scale`, `switchers` and `switch_times`) is proposed for `cdid` 1.3.0.0 on the development pull request branch `codex/static-entry-exit-1.3.0.0` (`remotes::install_github("dvbn/cdid", ref = "codex/static-entry-exit-1.3.0.0")` before merge). Version 1.2.0.1 is available on [CRAN](https://cran.r-project.org/package=cdid); version 1.3.0.0 has not been merged or submitted to CRAN.
 
 ## Signatures
 
@@ -284,3 +284,4 @@ The package requires `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuse
 [Guide home](../README.md) · [Package overview](../../README.md)
 
 </details>
+

@@ -4,7 +4,7 @@
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://www.davidbenatia.com/research/)
 
-This development branch proposes version 1.3.0.0, adding static binary entry, exit and re-entry estimation through `att_gt(dname = ...)`. It is separate from the submitted 1.2.0.1 version on `main` and has not been merged or submitted to CRAN.
+This development branch proposes version 1.3.0.0, adding static binary entry, exit and re-entry estimation through `att_gt(dname = ...)`. The released version **1.2.0.1** is available on [CRAN](https://cran.r-project.org/package=cdid). The proposed 1.3.0.0 version has not been merged or submitted to CRAN.
 
 ## Installation
 
@@ -17,14 +17,14 @@ remotes::install_github("dvbn/cdid", ref = "codex/static-entry-exit-1.3.0.0")
 library(cdid)
 ```
 
-To install the submitted cohort version 1.2.0.1 from `main`:
+To install the released version 1.2.0.1 from CRAN:
 
 ```r
-# Run once if remotes is not installed:
-install.packages("remotes")
-remotes::install_github("dvbn/cdid")
+install.packages("cdid")
 library(cdid)
 ```
+
+CRAN mirrors and platform binaries can update after the source release. Check `packageVersion("cdid")`; if an older version is still offered, install the current source with `install.packages("cdid", repos = "https://cran.r-project.org", type = "source")`, using the required build tools below.
 
 You need **R 4.1.0 or later** and the official CRAN packages **did 2.5.1 or
 later** and **DRDID 1.4.0 or later**. `remotes` installs missing required
@@ -32,8 +32,8 @@ dependencies and offers updates when needed. Allow updates to dependencies
 below these minimum versions. You do not need GitHub versions of `did` or
 `DRDID`.
 
-Installing from GitHub compiles `cdid`'s C code, so the usual tools for building
-R packages from source must be available:
+Installing from source, whether from GitHub or CRAN, compiles `cdid`'s C code,
+so the usual tools for building R packages from source must be available:
 
 - **Windows:** [Rtools](https://cran.r-project.org/bin/windows/Rtools/)
   matching your R version.
@@ -195,3 +195,4 @@ Have spare Codex subscription capacity and want to support cdid? Use your own ac
 ## Support the project
 
 If cdid is useful to your work, you can [buy me a coffee](https://buymeacoffee.com/dvbn).
+

@@ -4,7 +4,7 @@
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://www.davidbenatia.com/research/)
 
-This development branch proposes version 1.3.0.0, adding static binary entry, exit and re-entry estimation through `att_gt(dname = ...)`. It is separate from the submitted 1.2.0.1 version on `main` and has not been merged or submitted to CRAN.
+This development branch proposes version 1.3.0.0, adding static binary entry, exit and re-entry estimation through `att_gt(dname = ...)`. The released version **1.2.0.1** is available on [CRAN](https://cran.r-project.org/package=cdid). The proposed 1.3.0.0 version has not been merged or submitted to CRAN.
 
 ## Installation
 
@@ -15,14 +15,15 @@ Before merge, install proposed version 1.3.0.0 from the development pull request
 remotes::install_github("dvbn/cdid", ref = "codex/static-entry-exit-1.3.0.0")
 ```
 
-To install the submitted cohort version 1.2.0.1 from `main`:
+To install the released version 1.2.0.1 from CRAN:
 
 ```r
-# install.packages("remotes")
-remotes::install_github("dvbn/cdid")
+install.packages("cdid")
 ```
 
-`cdid` 1.3.0.0 requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`. If older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted but have not been tested, so it is not guaranteed that everything works with them or that results are identical. Installation compiles the package's C/C++ code and therefore needs a compiler toolchain: Rtools on Windows, the command-line developer tools on macOS, or a C/C++ compiler and `make` on Linux. The optional [pinned validation setup](../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions, for checks of this revision; historical outputs retain their recorded dependency versions.
+CRAN mirrors and platform binaries can update after the source release. Check `packageVersion("cdid")`; if an older version is still offered, install the current source with `install.packages("cdid", repos = "https://cran.r-project.org", type = "source")`, using the required build tools below.
+
+`cdid` 1.3.0.0 requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`. If older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted but have not been tested, so it is not guaranteed that everything works with them or that results are identical. Source installation compiles the package's C/C++ code and therefore needs a compiler toolchain: Rtools on Windows, the command-line developer tools on macOS, or a C/C++ compiler and `make` on Linux. The optional [pinned validation setup](../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions, for checks of this revision; historical outputs retain their recorded dependency versions.
 
 ## Can treatment stop?
 
@@ -144,3 +145,4 @@ See [Contributing](https://github.com/dvbn/cdid/blob/main/CONTRIBUTING.md) to su
 ## Support the project
 
 If cdid is useful to your work, you can [buy me a coffee](https://buymeacoffee.com/dvbn).
+
