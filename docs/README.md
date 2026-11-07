@@ -1,24 +1,52 @@
 # cdid for R <img src="../man/figures/logo.png" align="right" width="120" alt="cdid logo" />
 
-`cdid` estimates group time average treatment effects ATT(g,t) with chained difference in differences (chained DiD). It builds upon the [`did` package](https://bcallaway11.github.io/did/) and extends it to panels in which some outcomes may be missing, by using the outcome changes between the dates at which each unit is observed.
+`cdid` estimates treatment effects in panels with missing outcomes using chained difference in differences. It builds on the [`did` package](https://bcallaway11.github.io/did/). It supports both absorbing treatment, where units remain treated after adoption, and binary treatment that can stop and restart under a static model without lingering effects.
 
-[CRAN package page](https://cran.r-project.org/package=cdid)
+[CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://www.davidbenatia.com/research/)
 
-The current CRAN release is 0.1.1. This repository contains version 1.2.0.1,
-which is being prepared for the next CRAN update.
+This development branch proposes version 1.3.0.0, adding static binary entry, exit and re-entry estimation through `att_gt(dname = ...)`. It is separate from the submitted 1.2.0.1 version on `main` and has not been merged or submitted to CRAN.
 
 ## Installation
+
+Before merge, install proposed version 1.3.0.0 from the development pull request branch:
+
+```r
+# install.packages("remotes")
+remotes::install_github("dvbn/cdid", ref = "codex/static-entry-exit-1.3.0.0")
+```
+
+To install the submitted cohort version 1.2.0.1 from `main`:
 
 ```r
 # install.packages("remotes")
 remotes::install_github("dvbn/cdid")
 ```
 
-`cdid` 1.2.0.1 requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`. If older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted but have not been tested, so it is not guaranteed that everything works with them or that results are identical. Installation compiles the package's C/C++ code and therefore needs a compiler toolchain: Rtools on Windows, the command-line developer tools on macOS, or a C/C++ compiler and `make` on Linux. The optional [pinned validation setup](../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions, for checks of this revision; historical outputs retain their recorded dependency versions.
+`cdid` 1.3.0.0 requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`. If older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted but have not been tested, so it is not guaranteed that everything works with them or that results are identical. Installation compiles the package's C/C++ code and therefore needs a compiler toolchain: Rtools on Windows, the command-line developer tools on macOS, or a C/C++ compiler and `make` on Linux. The optional [pinned validation setup](../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions, for checks of this revision; historical outputs retain their recorded dependency versions.
+
+## Can treatment stop?
+
+`cdid` supports two treatment designs. They answer different questions and make different assumptions about treatment history.
+
+| | Absorbing treatment | Treatment that can stop and restart |
+| --- | --- | --- |
+| Example history | `0 0 1 1 1` | `0 1 1 0 1` |
+| Supply | `gname`: the first treatment date, with `0` for never-treated units | `dname`: treatment status, `0` or `1`, at each date |
+| Effect estimated | `ATT(g, t)`: the effect at date `t` for the cohort first treated at `g` | The effect at a switching date for units entering or leaving treatment |
+| Treatment-history assumption | Once treated, a unit remains treated; effects may evolve after adoption | Earlier treatment has no effect beyond current treatment status |
+| Summaries | Cohort, calendar and event-study summaries through `aggte()` | Entry/exit estimates and their switcher-weighted average in `fit$aggregate` |
+
+Use `gname` for staggered adoption when treatment is permanent. A policy adopted in year 3 can have a different effect in years 3, 4 and 5; the cohort route follows those effects over time.
+
+Use `dname` when units can enter treatment, leave it and return, **provided past treatment has no effect beyond current treatment status**. This is a static treatment model. Effects can still differ across units and dates; “static” does not mean one common effect. The method compares entrants with units that remain untreated, and exiters with units that remain treated, under the corresponding parallel-trends assumptions. Exit estimates are oriented as treatment effects, so a beneficial treatment need not produce a negative reported effect when a unit leaves it.
+
+Absorbing treatment does not by itself justify the static assumption. You can supply an absorbing history through `dname`, but that still requests switching-date effects under no carryover, rather than the cohort effects requested by `gname`. In chained panel mode, the package follows the argument you supply. Supply one treatment argument, not both. Explicit `mode = "ordinary"` delegates to `did` and ignores the static arguments.
+
+Missing outcomes are a separate issue. Both designs can use chained comparisons and, when needed, observation weighting, change imputation or their augmented combination. For `dname`, keep the treatment indicator known at every study date even when the outcome is missing. The [entry and exit guide](methods/static-entry-exit.md) explains the data requirements, assumptions and a runnable example.
 
 ## What the package does
 
-A treatment cohort is the set of units first treated in the same period. For cohort g and period t, ATT(g,t) is the average effect of the treatment in period t on the units of cohort g. [Callaway and Sant'Anna (2021, *Journal of Econometrics*)](https://doi.org/10.1016/j.jeconom.2020.12.001) define these effects for staggered adoption, estimate each one by comparing the cohort with units never treated or not yet treated, and aggregate them into summaries such as event studies. The `did` package implements their estimators, which adjust for covariates by outcome regression (OR), inverse probability weighting (IPW) or a doubly robust (DR) combination of the two.
+For the absorbing-treatment route, a treatment cohort is the set of units first treated in the same period. For cohort g and period t, ATT(g,t) is the average effect of the treatment in period t on the units of cohort g. [Callaway and Sant'Anna (2021, *Journal of Econometrics*)](https://doi.org/10.1016/j.jeconom.2020.12.001) define these effects for staggered adoption, estimate each one by comparing the cohort with units never treated or not yet treated, and aggregate them into summaries such as event studies. The `did` package implements their estimators, which adjust for covariates by outcome regression (OR), inverse probability weighting (IPW) or a doubly robust (DR) combination of the two.
 
 `cdid` extends this framework to incomplete panels with the chained DiD of ([Bellégo, Benatia and Dortet-Bernadet (2025, *Journal of Econometrics*)](https://doi.org/10.1016/j.jeconom.2024.105783), [arXiv](https://arxiv.org/abs/2301.01085)). `did` handles an unbalanced panel either by keeping only the units observed at every date or, with `allow_unbalanced_panel = TRUE`, through repeated cross section (RCS) estimators that compare outcome levels. Chained DiD instead uses the changes of each unit between the dates at which it is observed, and combines all available short DiD comparisons into the effects. The targets remain the ATT(g,t) of the cohorts of the original study population, including their units with missing outcomes, and the assumptions concern the missing changes rather than the missing levels, as explained below.
 
@@ -32,6 +60,7 @@ For treatment OR and DR, `outcome_pooling = "separate"` is the default: each dis
 
 - **Chained mode** is the default for panel data. It estimates the usable short comparisons between pairs of dates at which units are observed and combines them by GMM into the effects. A unit contributes the changes between its observed dates, so the panel does not need to be complete. An effect that these comparisons cannot recover, given cohort and control support and the assumptions, is reported as [unavailable with a reason](help/troubleshooting.md#an-effect-is-unavailable).
 - **Ordinary mode**, requested with `mode = "ordinary"` and used automatically for repeated cross sections, passes the call unchanged to `did`.
+
 
 Let us illustrate how Chained DiD works with changes within the same unit. Write the outcome of unit i at date t as $Y_{it} = \alpha_i + u_{it}$, where $\alpha_i$ is a fixed individual effect and $u_{it}$ holds everything that varies over time: trends, the treatment effect and noise. The change between two observed dates, $Y_{it} - Y_{is} = u_{it} - u_{is}$, contains no $\alpha_i$. Suppose that treated units with low $\alpha_i$, that is with persistently low outcomes, are more likely to leave the panel, while controls leave at random. The treated units still observed at later dates then have a higher mean $\alpha_i$, so comparing their outcome levels with earlier ones adds this change in composition to the treatment effect. Thus, if attrition depends only on $\alpha_i$ and $\alpha_i$ is unrelated to $u_{it} - u_{is}$, the treated units that remain still have the mean change of their cohort.
 
@@ -49,7 +78,9 @@ Chained DiD can also be more precise than RCS comparisons when both are valid. D
 
 - Callaway, B. and Sant'Anna, P. H. C. (2021). Difference-in-Differences with Multiple Time Periods. *Journal of Econometrics*, 225(2), pages 200 to 230. <https://doi.org/10.1016/j.jeconom.2020.12.001>
 
-Chained IPW (`est_method = "ipw"`) and observation weighting for missing outcomes follow Bellégo, Benatia and Dortet-Bernadet. The package extends these papers with chained OR and DR, which carry the OR and DR approaches over to chained comparisons through regressions of the controls' outcome changes, fitted separately by comparison by default or pooled with `outcome_pooling = "pooled"`, and with change imputation and PT-all. The [augmented correction](methods/missing-outcomes.md#augmented-correction) for missing outcomes, which combines an observation model with a change imputation model and can be used with treatment IPW, OR or DR, is a further extension; an accompanying paper is about to be released. The methods pages in the reading path state the assumptions each extension needs.
+- de Chaisemartin, C., D'Haultfoeuille, X., Pasquier, F., Sow, D. and Vazquez-Bare, G. (2026). Difference-in-Differences Estimators for Treatments Continuously Distributed at Every Period. Working paper, `arXiv:2201.06898v7` (revised 2026-07-22), static binary specialization. <https://arxiv.org/abs/2201.06898v7>
+
+Chained IPW (`est_method = "ipw"`) and observation weighting for missing outcomes follow Bellégo, Benatia and Dortet-Bernadet. The package extends these papers with chained OR and DR, which carry the OR and DR approaches over to chained comparisons through regressions of the controls' outcome changes, fitted separately by comparison by default or pooled with `outcome_pooling = "pooled"`, and with change imputation and PT-all. The [augmented correction](methods/missing-outcomes.md#augmented-correction) for missing outcomes, which combines an observation model with a change imputation model and can be used with treatment IPW, OR or DR, is a further extension; an accompanying paper is about to be released. In proposed version 1.3.0.0, the [static entry, exit and re-entry route](methods/static-entry-exit.md) (`dname`) cites Bellégo, Benatia and Dortet-Bernadet (2025) alongside de Chaisemartin, D'Haultfoeuille, Pasquier, Sow and Vazquez-Bare (2026), while the cohort (`gname`) and ordinary routes cite Callaway and Sant'Anna (2021). The methods pages in the reading path state the assumptions each extension needs.
 
 ## Reading path
 
@@ -81,8 +112,9 @@ For hands-on exploration, use the [editable Quarto source](../notebooks/cdid_pra
 | 18 | [Options](reference/options.md) | Every argument with its default, accepted values and when it is active. |
 | 19 | [Results](reference/results.md) | The contents of each result, the uncertainty rules, pretrend tests and export. |
 | 20 | [Diagnose errors and unavailable results](help/troubleshooting.md) | Refused requests, failed fits, unavailable effects and surprising results. |
+| — | [Static entry, exit and re-entry (`dname` route)](methods/static-entry-exit.md) | Static no-carryover binary transitions, missing-outcome adjustments, pooling and switcher-frequency aggregation (proposed in 1.3.0.0). |
 
-This guide describes version 1.2.0.1. Numerical code output shown on the article pages comes from recorded runs, and each page states the version actually used. Analytical population values are labeled separately.
+This guide describes proposed version 1.3.0.0. Numerical code output shown on the article pages comes from recorded runs, and each page states the version actually used. Analytical population values are labeled separately.
 
 ## Terms used in this guide
 
@@ -90,11 +122,12 @@ This guide describes version 1.2.0.1. Numerical code output shown on the article
 | --- | --- |
 | Study population | The population whose treatment effects the analysis describes. |
 | Unit table | One row per study unit, supplied through the `frame` argument, including units with one or no observed outcomes. Without `frame`, the units present in `data` form it. |
-| Treatment cohort | Units first treated in the same period. `gname` holds that period, and 0 marks units never treated. |
+| Treatment cohort (`gname`) | Units first treated in the same period. `gname` holds that period, and 0 marks units never treated. |
+| Static transition cell | On the `dname` route (proposed in 1.3.0.0), a transition date $t \ge t_2$ and prior binary state $d = D_{t-1} \in \{0, 1\}$, comparing switchers ($d \to 1 - d$) against same-prior-state stayers ($d \to d$) under static no-carryover potential outcomes. |
 | Units observed at both dates | The units whose outcomes are observed at both dates of a comparison. Only they contribute that change. |
 | Treatment adjustment | How each cohort is made comparable with its controls: IPW, OR or DR, chosen with `est_method`. |
 | Handling missing outcomes | The assumption made about missing outcomes and the way the package adjusts for them, chosen with the arguments that begin with `selection` and with `imputation_pooling`. |
-| PT-post and PT-all | Parallel trends from each cohort's reference period onward, and the same assumption with additional restrictions from a common start date. |
+| Cohort PT-post and PT-all | Parallel trends from each cohort's reference period onward, and the same assumption with additional restrictions from a common start date. |
 
 ## Roadmap
 

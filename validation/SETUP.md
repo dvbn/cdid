@@ -4,16 +4,16 @@ The GitHub repository is public; no special account access is needed to install 
 
 ## Usual installation
 
-Install `cdid` 1.2.0.1 from GitHub:
+Install `cdid` 1.3.0.0 from GitHub:
 
 ```r
 # install.packages("remotes")
-remotes::install_github("dvbn/cdid")
+remotes::install_github("dvbn/cdid", ref = "codex/static-entry-exit-1.3.0.0")
 ```
 
 `cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
 
-This is all that is needed to use the package. Version 1.2.0.1 is the next release after 0.1.1 and is not yet available from CRAN.
+This is all that is needed to use the package. Version 1.3.0.0 is proposed in the static entry/exit pull request. The commands above select that development branch; it has not been merged or submitted to CRAN. The earlier 1.2.0.1 submission is separate.
 
 ## Optional: pinned validation setup
 
@@ -32,7 +32,7 @@ The repository includes the unchanged CRAN source archives of these two versions
 ### Install with the setup script
 
 ```sh
-git clone https://github.com/dvbn/cdid.git cdid
+git clone --branch codex/static-entry-exit-1.3.0.0 --single-branch https://github.com/dvbn/cdid.git cdid
 cd cdid
 Rscript --vanilla validation/setup.R --project . --library validation/.lib --repository https://cloud.r-project.org --check-only
 Rscript --vanilla validation/setup.R --project . --library validation/.lib --repository https://cloud.r-project.org --install
@@ -47,7 +47,7 @@ Start a fresh R session and put the setup library first:
 
 ```r
 .libPaths(c(normalizePath("validation/.lib"), .libPaths()))  # from the repository root
-packageVersion("cdid")    # 1.2.0.1
+packageVersion("cdid")    # 1.3.0.0
 ?cdid::att_gt
 ```
 

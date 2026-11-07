@@ -4,9 +4,17 @@ Preparing longitudinal data carefully before calling `cdid::att_gt()` prevents c
 
 For an introduction to how chained difference in differences combines outcome changes across observation windows, see [Estimate treatment effects from incomplete panels](../examples/incomplete-panels.md), [Get started](../get-started.md), and [Coming from `did`](../from-did.md).
 
+## If treatment can stop and restart
+
+For the static binary `dname` model, supply a row for every unit and study date, with a known `0` or `1` treatment indicator even when the outcome is `NA`. Required covariates must be known at the transition reference dates. Units may already be treated at the first study date; their earlier adoption date is not needed for this static model. Missing treatment histories are not supported.
+
+The static model assumes no lingering effect of past treatment. Its input is the long `data` table, without a separate `frame` argument. The [entry and exit guide](../methods/static-entry-exit.md#what-your-input-needs) gives the complete input requirements and a runnable example.
+
+The rest of this page describes the absorbing-treatment `gname` interface, including its unit table, sampling weights and cohort reference dates.
+
 ## Core requirements for `data` and `frame`
 
-In chained mode, `cdid::att_gt()` reads a long panel data frame (`data`) and an optional table of study units (`frame`, referred to after first introduction as the unit table).
+On the cohort route, `cdid::att_gt()` reads a long panel data frame (`data`) and an optional table of study units (`frame`, referred to after first introduction as the unit table).
 
 For the simplest unweighted specification without covariates or clustering, the essential columns are a unit identifier, a finite numeric date, a numeric outcome with `NA` for missing values, and the unit's known first-treatment cohort (constant within unit, with `0` for never treated). Each unit/date pair must be unique. A balanced panel and an observed outcome at the reference date for every unit are not required. Valid columns, or two observed outcomes per unit, do not by themselves guarantee that the requested effects are estimable.
 

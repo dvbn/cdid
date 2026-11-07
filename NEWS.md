@@ -1,3 +1,12 @@
+# cdid 1.3.0.0
+
+* Add `att_gt(dname = ...)` for binary treatment that can stop and restart. This static model assumes no lingering effect of past treatment and estimates treatment effects for units entering or leaving treatment at each date. The existing `gname` interface retains absorbing-adoption cohort effects and their event-study summaries.
+* Combine observed outcome changes by chained GMM when outcomes are missing. Treatment histories and required reference covariates must remain known. Keep units with zero or one observed outcome in the study population and full-unit inference; report unsupported transitions with a reason.
+* Support treatment IPW, OR and DR with observation weighting, actual-change imputation or augmented missing-outcome correction. The treatment and missing-outcome choices remain separate. Observation probabilities can use pair logits or independent-date logits under the additional conditional-independence assumption.
+* Provide separate or shared slopes for observation and imputation models, and separate, pooled or explicitly grouped stayer outcome regressions. The options reference describes their static-model meanings.
+* Add static summaries, tidy tables and plots, with a switcher-weighted aggregate stored in `fit$aggregate`. `aggte()` remains for cohort effects. Static references combine Bellégo, Benatia and Dortet-Bernadet (2025) with the static binary specialization of de Chaisemartin et al. (2026).
+* Explain absorbing and reversible treatment designs in both READMEs, the hands-on vignette and a new entry/exit guide. Extend representative ordinary package checks while keeping every cohort and static test in the mandatory complete CI suite.
+
 # cdid 1.2.0.1
 
 * Use a bounded regression suite for standard `R CMD check`, with representative independent numerical and inference references across the public interface. The extensive development checks remain a separate required CI gate.
