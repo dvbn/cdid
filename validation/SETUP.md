@@ -4,16 +4,22 @@ The GitHub repository is public; no special account access is needed to install 
 
 ## Usual installation
 
-Install `cdid` 1.2.0.1 from GitHub:
+Install `cdid` 1.2.0.1 from [CRAN](https://cran.r-project.org/package=cdid):
+
+```r
+install.packages("cdid")
+```
+
+The GitHub installation is also available:
 
 ```r
 # install.packages("remotes")
 remotes::install_github("dvbn/cdid")
 ```
 
-`cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
+`cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Source installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
 
-This is all that is needed to use the package. Version 1.2.0.1 is the next release after 0.1.1 and is not yet available from CRAN.
+This is all that is needed to use the package. Version 1.2.0.1 was published on CRAN on November 7, 2026. Mirrors and platform binaries may update later; check `packageVersion("cdid")` and, if needed, install the source with `install.packages("cdid", repos = "https://cran.r-project.org", type = "source")`.
 
 ## Optional: pinned validation setup
 
@@ -88,3 +94,4 @@ Rscript validation/run_full_tests.R \
 ```
 
 This step is for package verification and CI; end users do not need it to use `cdid`.
+
