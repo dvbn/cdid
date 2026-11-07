@@ -237,7 +237,7 @@ Fits can also stop because a numeric workspace or work limit would be exceeded, 
 
 ## Tested versions and dependencies
 
-The package requires `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0. Later versions are accepted, but it is not guaranteed that everything works with them or that results are unchanged; a result records the `did` version it was computed with in `fit$chained$versions`. The metadata declares R 4.1.0 or later and imports `did`, `DRDID` and the base package `parallel`; that declaration is not a completed minimum-version or platform-support validation. `ggplot2`, which `did` uses for its plots, is needed for `ggdid()`. The [installation](../../README.md#installation) instructions use `remotes::install_github("dvbn/cdid")`; the optional [pinned validation setup](../../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions.
+The package requires `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0. Later versions are accepted, but it is not guaranteed that everything works with them or that results are unchanged; a result records the `did` version it was computed with in `fit$chained$versions`. The metadata declares R 4.1.0 or later and imports `did`, `DRDID` and the base package `parallel`; that declaration is not a completed minimum-version or platform-support validation. `ggplot2`, which `did` uses for its plots, is needed for `ggdid()`. The [installation](../../README.md#installation) instructions use `install.packages("cdid")` for the CRAN release, with `remotes::install_github("dvbn/cdid")` as an alternative; the optional [pinned validation setup](../../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions.
 
 ---
 
@@ -272,3 +272,4 @@ The package requires `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuse
 [Guide home](../README.md) · [Package overview](../../README.md)
 
 </details>
+

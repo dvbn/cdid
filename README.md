@@ -4,12 +4,20 @@
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://www.davidbenatia.com/research/)
 
-The current CRAN release is 0.1.1. This repository contains version 1.2.0.1,
-which is being prepared for the next CRAN update.
+`cdid` **1.2.0.1 is available on [CRAN](https://cran.r-project.org/package=cdid)**, published November 7, 2026. The `main` branch of this repository contains the same package version.
 
 ## Installation
 
-Install directly from GitHub in a normal R session:
+Install the released version from CRAN in a normal R session:
+
+```r
+install.packages("cdid")
+library(cdid)
+```
+
+Check the installed version with `packageVersion("cdid")`. CRAN mirrors and platform binaries can update after the source release. If an older version is still offered, install the current source from the main CRAN server with `install.packages("cdid", repos = "https://cran.r-project.org", type = "source")`, using the build tools listed below.
+
+To install from GitHub instead:
 
 ```r
 # Run once if remotes is not installed:
@@ -24,8 +32,8 @@ dependencies and offers updates when needed. Allow updates to dependencies
 below these minimum versions. You do not need GitHub versions of `did` or
 `DRDID`.
 
-Installing from GitHub compiles `cdid`'s C code, so the usual tools for building
-R packages from source must be available:
+Installing from source, whether from GitHub or CRAN, compiles `cdid`'s C code,
+so the usual tools for building R packages from source must be available:
 
 - **Windows:** [Rtools](https://cran.r-project.org/bin/windows/Rtools/)
   matching your R version.
@@ -54,8 +62,8 @@ and reinstall affected dependencies with that R installation. For help, include
 `sessionInfo()` and installation output in an
 [issue](https://github.com/dvbn/cdid/issues).
 
-A short hands-on vignette covers an incomplete panel, estimation, diagnostics,
-aggregation and plotting. To include it when installing from GitHub, use
+A short hands-on vignette covering an incomplete panel, estimation, diagnostics,
+aggregation and plotting is included in the CRAN package. To include it when installing from GitHub, use
 `remotes::install_github("dvbn/cdid", build_vignettes = TRUE)` with `knitr`,
 `rmarkdown` and Pandoc available. Open it with
 `vignette("cdid", package = "cdid")`. The [full user guide](https://github.com/dvbn/cdid/blob/main/docs/README.md)
@@ -160,3 +168,4 @@ Have spare Codex subscription capacity and want to support cdid? Use your own ac
 ## Support the project
 
 If cdid is useful to your work, you can [buy me a coffee](https://buymeacoffee.com/dvbn).
+
