@@ -2,6 +2,8 @@
 
 This page is the guide's single definition of each argument: its default, accepted values, when it is active and how it interacts with other choices. The help pages `?cdid::att_gt`, `?cdid::aggte` and `?cdid::conditional_did_pretest` contain the complete text. The articles link here instead of repeating these definitions.
 
+> **Availability in proposed 1.3.0.0:** The static binary entry/exit/re-entry route (`dname` and its companion arguments `imputation_scale`, `switchers` and `switch_times`) is proposed for `cdid` 1.3.0.0 on the development pull request branch `codex/static-entry-exit-1.3.0.0` (`remotes::install_github("dvbn/cdid", ref = "codex/static-entry-exit-1.3.0.0")` before merge). Version 1.2.0.1 is available on [CRAN](https://cran.r-project.org/package=cdid); version 1.3.0.0 has not been merged or submitted to CRAN.
+
 ## Signatures
 
 These signature blocks describe the interface; they are not stand-alone example calls. Worked examples elsewhere in the guide show the corresponding output.
@@ -21,7 +23,9 @@ cdid::att_gt(
   selection_justification = NULL, selection_est_method = "ipw",
   imputation_pooling = "separate", gmm_weighting = c("optimal", "identity"),
   gmm_covariance = "tikhonov", pt_assumption = c("post", "all"),
-  pt_start = NULL, control = NULL, outcome_pooling = "separate"
+  pt_start = NULL, control = NULL, outcome_pooling = "separate",
+  dname = NULL, imputation_scale = "per_period",
+  switchers = "both", switch_times = NULL
 )
 
 cdid::aggte(
@@ -54,7 +58,8 @@ In `att_gt()`, arguments before `...` retain the names and order of `did` 2.5.1.
 | `yname` | required | name of a numeric outcome column | Observed values must be finite. Keep missing outcomes as `NA`. |
 | `tname` | required | name of a finite numeric date column | The stored calendar is the sorted set of dates present in the data. OR/imputation durations count positions in it; event time and anticipation cutoffs use numeric date values. |
 | `idname` | `NULL` | name of the unit identifier column | Required, because units are aligned by identity. |
-| `gname` | required | name of the column holding each unit's first treatment period | Known, constant within each panel unit. Use a finite positive treatment date on the time scale of `tname`, or 0 for never treated. The treatment date need not be a stored row. |
+| `gname` | required (when `dname = NULL`) | name of the column holding each unit's first treatment period | Known, constant within each panel unit. Use a finite positive treatment date on the time scale of `tname`, or 0 for never treated. The treatment date need not be a stored row. Retains the cohort `ATT(g, t)` route. |
+| `dname` | `NULL` | `NULL` or name of a binary period treatment column ($D_{it} \in \{0, 1\}$) | Static no-carryover entry/exit/re-entry panel route proposed in 1.3.0.0 (returns `cdid_static_att_gt`). In chained panel mode, selects the static route even if the binary treatment is absorbing; specifying both `gname` and `dname` is refused. Ordinary mode ignores static arguments. Requires complete known binary $D_{i,1:T}$ across all panel dates for every unit; units with zero or one observed outcome $Y_{it}$ remain in the study population and original-unit influence functions. See [Static entry, exit and re-entry](../methods/static-entry-exit.md). |
 | `data` | required | a data frame with one row per unit and date | Each ID/date pair must be unique. A balanced panel and an observed reference-date outcome for every unit are not required. See [Prepare your panel](../help/prepare-data.md) and [Investigate missingness](../help/investigate-missingness.md). |
 | `panel` | `TRUE` | `TRUE` or `FALSE` | Chained mode requires `TRUE`. With `mode = NULL`, `FALSE` selects ordinary mode. |
 | `allow_unbalanced_panel` | `NULL` | `NULL`, `TRUE` or `FALSE` | `NULL` retains the full unit table, including units with no observed change. Units with repeated observations supply changes. `FALSE` is refused. In ordinary mode `NULL` means `did`'s default `FALSE`. |
@@ -69,10 +74,10 @@ The unit table `frame` is described with the [chained arguments](#chained-argume
 
 | Argument | Default | Accepted values | Notes for chained mode |
 | --- | --- | --- | --- |
-| `est_method` | `"dr"` | `"dr"`, `"ipw"`, `"reg"` or a custom IPW function | Any other string is refused before the data are read; nothing is substituted. |
-| `outcome_pooling` | `"separate"` | `"separate"` or `"pooled"` | Counterfactual untreated-change regression for `est_method = "reg"` or `"dr"`. Separate fits have comparison-specific slopes; pooled fits share slopes across blocks. Independent of selection and imputation pooling. |
+| `est_method` | `"dr"` | `"dr"`, `"ipw"`, `"reg"` or a custom IPW function (cohort `gname` only) | Any other string is refused before the data are read; nothing is substituted. On the static `dname` route, built-in `"dr"`, `"ipw"` and `"reg"` are supported and custom function callbacks are refused. |
+| `outcome_pooling` | `"separate"` | `"separate"` or `"pooled"` (plus explicit cell partitions on the static `dname` route) | Counterfactual outcome-change regression for `est_method = "reg"` or `"dr"` (inactive and never evaluated when `est_method = "ipw"`). Separate fits have comparison-specific slopes; pooled fits share slopes across blocks with local intercepts. On the static `dname` route, an explicit named character vector (`cell_id -> block_id`) or named list of `cell_id` vectors partitioning transition cells (including optional extra non-target stayer training cells) is also accepted; explicit partitions are static-only. Independent of selection and imputation pooling. |
 | `xformla` | `NULL` | one sided formula, such as `~ x1 + x2` | The design must have at least one column: `~ 1` and `~ 0 + x` are accepted, `~ 0` is refused. Covariates must be fixed within units or are read at reference dates. |
-| `...` | | | Passed to a custom `est_method` function; refused when `est_method` is a string. |
+| `...` | | | Passed to a custom `est_method` function; refused when `est_method` is a string or on the static `dname` route. |
 
 A custom function has `did`'s panel IPW interface `f(y1, y0, D, covariates, i.weights, inffunc = TRUE, ...)` and returns a list with a finite scalar `ATT` and a finite vector or one-column matrix `att.inf.func` with one entry per supplied row, in that order. Under observation weighting with `selection = "conditional_mtar"`, it must also return `log_weight_gradient`. [Treatment adjustment](../methods/treatment.md#custom-ipw-functions) explains these requirements and the models behind the three string methods.
 
@@ -82,20 +87,23 @@ A custom function has `did`'s panel IPW interface `f(y1, y0, D, covariates, i.we
 | --- | --- | --- | --- |
 | `mode` | `NULL` | `NULL`, `"chained"` or `"ordinary"` | Always. `NULL` selects chained mode for `panel = TRUE` and ordinary mode otherwise. |
 | `frame` | `NULL` | the unit table: a data frame with one row per study unit, matched to `data` by `idname` | Chained mode. Without it, the units in `data` form the study population. |
-| `selection` | `"none"` | `"none"`, `"conditional_mtar"`, or the legacy name `"corollary1"` | Chained mode. `"corollary1"` means `"conditional_mtar"` with `selection_model = "pair_logit"`. |
+| `selection` | `"none"` | `"none"`, `"conditional_mtar"`, or the legacy name `"corollary1"` | Chained mode. On the cohort `gname` route only, `"corollary1"` means `"conditional_mtar"` with `selection_model = "pair_logit"`. Static `dname` accepts only `"none"` or `"conditional_mtar"`. |
 | `selection_est_method` | `"ipw"` | `"ipw"` (observation weighting), `"imputation"` (change imputation) or `"dr"` (augmented correction) | `"imputation"` and `"dr"` require `selection = "conditional_mtar"` and a built-in `est_method` (`"ipw"`, `"reg"` or `"dr"`). |
 | `selection_model` | `"pair_logit"` | `"pair_logit"` or `"independent_period_logit"` | An active conditional-MTAR correction with `selection_est_method` equal to `"ipw"` or `"dr"`. Never evaluated under `"imputation"`. A nondefault value with `selection = "none"` is refused. |
-| `selection_pooling` | `"separate"` | `"separate"`, `"within_cohort"` or `"across_cohorts"` | As for `selection_model`. |
+| `selection_pooling` | `"separate"` | Cohort `gname`: `"separate"`, `"within_cohort"` or `"across_cohorts"`. Static `dname`: `"separate"`, `"within_group"` or `"pooled"` | As for `selection_model`. Local intercepts are retained per pair/date and cohort or role population whenever `selection_xformla` includes an intercept. |
 | `selection_xformla` | `NULL`, which inherits `xformla` | one sided formula | An observation model is fitted (`"ipw"` or `"dr"`). Never evaluated under `"imputation"`. |
-| `selection_universe` | `"F"` | `"F"` (whole unit table), `"B"` (units observed at least once) or `"A"` (units observed at least twice) | `"B"` and `"A"` only with observation weighting and `selection_model = "pair_logit"`. |
-| `selection_rho` | `NULL` | `NULL` or the name of a unit table column of known normalized density ratios | Only with `"B"` or `"A"`. |
-| `selection_justification` | `NULL` | a nonempty character string | Required with `"B"` or `"A"`. |
-| `imputation_pooling` | `"separate"` | `"separate"`, `"within_cohort"` or `"across_cohorts"` | `selection_est_method` is `"imputation"` or `"dr"`; otherwise never evaluated. |
-| `gmm_weighting` | `"optimal"` | `"optimal"`, its alias `"two_step"`, or `"identity"` | Chained mode. |
+| `selection_universe` | `"F"` | `"F"` (whole unit table), `"B"` (units observed at least once) or `"A"` (units observed at least twice) | `"B"` and `"A"` only on the cohort `gname` route with observation weighting and `selection_model = "pair_logit"`; the static `dname` route requires `"F"`. |
+| `selection_rho` | `NULL` | `NULL` or the name of a unit table column of known normalized density ratios | Only with `"B"` or `"A"` (cohort `gname` route only). |
+| `selection_justification` | `NULL` | a nonempty character string | Required with `"B"` or `"A"` (cohort `gname` route only). |
+| `imputation_pooling` | `"separate"` | Cohort `gname`: `"separate"`, `"within_cohort"` or `"across_cohorts"`. Static `dname`: `"separate"`, `"within_group"` or `"pooled"` | `selection_est_method` is `"imputation"` or `"dr"`; otherwise never evaluated. Local intercepts are retained when `xformla` includes an intercept. |
+| `imputation_scale` | `"per_period"` | `"per_period"` or `"per_change"` | Static `dname` route when `selection_est_method` is `"imputation"` or `"dr"`; otherwise never evaluated. `"per_period"` multiplies non-intercept covariate slopes by the stored-calendar index gap $L_k = u_{\text{idx}} - s_{\text{idx}}$; `"per_change"` leaves them unscaled. |
+| `switchers` | `"both"` | `"both"`, `"entry"` or `"exit"` | Static `dname` route: selects both transition directions ($0 \to 1$ and $1 \to 0$), entry only ($D_{t-1} = 0 \to D_t = 1$), or exit only ($D_{t-1} = 1 \to D_t = 0$). |
+| `switch_times` | `NULL` | `NULL` or a vector of panel transition dates in $t_2, \dots, t_T$ | Static `dname` route: `NULL` automatically includes all transition cells in the requested direction(s) with at least one switcher ($n_{\text{switchers}} \ge 1$). Explicit dates retain all requested directions at those dates (keeping zero-switcher cells as `available = FALSE` with `support_status = "empty_switchers"`). |
+| `gmm_weighting` | `"optimal"` | `"optimal"`, its alias `"two_step"`, or `"identity"` | Chained mode (both cohort `gname` and static `dname` routes). |
 | `gmm_covariance` | `"tikhonov"` | `"tikhonov"` | Validated in chained mode; the handler is used under `gmm_weighting = "optimal"`. |
-| `pt_assumption` | `"post"` | `"post"` or `"all"` | Chained mode. |
-| `pt_start` | `NULL` | one finite numeric date of the stored calendar | Required under `"all"`; a non-`NULL` value is refused under `"post"`. |
-| `control` | `NULL` | a named list, see [The control list](#the-control-list) | Chained mode. |
+| `pt_assumption` | `"post"` | `"post"` or `"all"` | Cohort `gname` route (`"all"` is inapplicable and refused on the static `dname` route). |
+| `pt_start` | `NULL` | one finite numeric date of the stored calendar | Required under cohort `"all"`; a non-`NULL` value is refused under `"post"` and on the static `dname` route. |
+| `control` | `NULL` | a named list, see [The control list](#the-control-list) | Chained mode (both cohort `gname` and static `dname` routes). |
 
 ## Handling missing outcomes
 
@@ -170,7 +178,7 @@ With `selection = "conditional_mtar"`, all nine built-in combinations of treatme
 | `"dr"` | supported | supported | supported |
 | custom IPW function | supported with `log_weight_gradient` | refused | refused |
 
-With `selection = "none"`, `selection_est_method` stays at `"ipw"` and all of `"ipw"`, `"reg"`, `"dr"` and a custom function are supported. `selection_universe = "B"` or `"A"` is available only in the first column, with `selection_model = "pair_logit"`. Refused requests stop with an error before estimation; no other combination is substituted.
+With `selection = "none"`, `selection_est_method` stays at `"ipw"` and all of `"ipw"`, `"reg"`, `"dr"` and a custom function (cohort `gname` route) are supported. On the static `dname` route, `selection = "none"` runs the baseline no-equation estimator and `selection = "conditional_mtar"` supports all nine built-in combinations of `est_method` (`"ipw"`, `"reg"`, `"dr"`) and `selection_est_method` (`"ipw"`, `"imputation"`, `"dr"`). `selection_universe = "B"` or `"A"` is available only on the cohort `gname` route in the first column, with `selection_model = "pair_logit"`. Refused requests stop with an error before estimation; no other combination is substituted. See [Static entry, exit and re-entry](../methods/static-entry-exit.md) for the static `dname` route details.
 
 ## Changing covariates and weights
 
@@ -190,7 +198,7 @@ Covariates and sampling weights that are constant within each unit and agree wit
 
 | Argument | Default | Meaning for chained results |
 | --- | --- | --- |
-| `MP` | required | A result of `att_gt()`. Chained results are aggregated from their stored state without refitting; ordinary results go to `did::aggte()` unchanged. |
+| `MP` | required | A cohort result of `att_gt()` (`cdid_MP` or `MP`). Chained cohort results are aggregated from their stored state without refitting; ordinary results go to `did::aggte()` unchanged. Static `cdid_static_att_gt` results (`dname` route) store their switcher-frequency weighted aggregate directly in `fit$aggregate` and are refused by `aggte()`. |
 | `type` | `"group"` | `"simple"`, `"group"`, `"dynamic"` or `"calendar"`. |
 | `balance_e`, `min_e`, `max_e` | `NULL`, `-Inf`, `Inf` | Event time selectors with `did`'s conventions. For the calendar type they are ignored with `did`'s warning. The result records how they were applied. |
 | `na.rm` | `FALSE` | `FALSE`: an aggregate that needs an unavailable cell is `NA`, and the missing cells are named. `TRUE`: the aggregate is computed over the available cells and labelled as a restricted target. |
@@ -231,13 +239,16 @@ Refusals are errors that inherit class `cdid_error`. The most common classes are
 | `cdid_chained_public_control_error` | an invalid `control` list |
 | `cdid_custom_ipw_error` | malformed or nonfinite output of a custom IPW function |
 | `cdid_chained_request_no_inffunc_error` | `aggte()` on a result fitted with `compute_inffunc = FALSE` |
+| `cdid_static_*` / `cdid_static_error` | invalid static `dname` request (for example missing binary treatment values, inapplicable cohort options, invalid `switchers`, `switch_times`, `imputation_scale` or `outcome_pooling` partition) |
 | `cdid_untested_upstream` | loading the package with `did` older than 2.5.1 or `DRDID` older than 1.4.0 |
+
+`aggte()` on a static result gives the upstream error that an `MP` object is required. Use `fit$aggregate` for the static switcher-weighted average.
 
 Fits can also stop because a numeric workspace or work limit would be exceeded, or because a model fit, covariance or solve is invalid. Such failures concern the computation; they are not conclusions about whether an effect is identified in the population. Nothing is dropped or relaxed to make a fit succeed.
 
 ## Tested versions and dependencies
 
-The package requires `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0. Later versions are accepted, but it is not guaranteed that everything works with them or that results are unchanged; a result records the `did` version it was computed with in `fit$chained$versions`. The metadata declares R 4.1.0 or later and imports `did`, `DRDID` and the base package `parallel`; that declaration is not a completed minimum-version or platform-support validation. `ggplot2`, which `did` uses for its plots, is needed for `ggdid()`. The [installation](../../README.md#installation) instructions use `remotes::install_github("dvbn/cdid")`; the optional [pinned validation setup](../../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions.
+The package requires `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0. Later versions are accepted, but it is not guaranteed that everything works with them or that results are unchanged; a result records the `did` version it was computed with in `fit$chained$versions`. The metadata declares R 4.1.0 or later and imports `did`, `DRDID` and the base package `parallel`; that declaration is not a completed minimum-version or platform-support validation. `ggplot2`, which `did` uses for its plots, is needed for `ggdid()`. The [installation](../../README.md#installation) instructions use `remotes::install_github("dvbn/cdid", ref = "codex/static-entry-exit-1.3.0.0")` for this proposed 1.3.0.0 pull request branch (or `remotes::install_github("dvbn/cdid")` for `main`); the optional [pinned validation setup](../../validation/SETUP.md#optional-pinned-validation-setup) installs exactly the tested versions.
 
 ---
 
@@ -268,7 +279,9 @@ The package requires `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuse
 | 18 | **Options** (this page) |
 | 19 | [Results](results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| — | [Static entry, exit and re-entry (`dname` route)](../methods/static-entry-exit.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 
 </details>
+

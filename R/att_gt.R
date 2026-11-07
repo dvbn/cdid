@@ -13,7 +13,8 @@ upstream_att_gt_formals <- c(
 cdid_chained_only_formals <- c("mode", "frame", "selection", "selection_model", "selection_pooling",
                                "selection_xformla", "selection_universe", "selection_rho", "selection_justification",
                                "selection_est_method", "imputation_pooling",
-                               "gmm_weighting", "gmm_covariance", "pt_assumption", "pt_start", "control", "outcome_pooling")
+                               "gmm_weighting", "gmm_covariance", "pt_assumption", "pt_start", "control",
+                               "outcome_pooling", "dname", "imputation_scale", "switchers", "switch_times")
 
 att_gt <- function(yname,
                    tname,
@@ -54,9 +55,69 @@ att_gt <- function(yname,
                    pt_assumption = c("post", "all"),
                    pt_start = NULL,
                    control = NULL,
-                   outcome_pooling = "separate") {
+                   outcome_pooling = "separate",
+                   dname = NULL,
+                   imputation_scale = "per_period",
+                   switchers = "both",
+                   switch_times = NULL) {
   env <- environment()
   mode <- check_mode(mode)
+  if (identical(mode, "ordinary")) {
+    # Chained-only arguments (including `control` and static `dname` options)
+    # are neither forwarded nor evaluated here. did has no NULL sentinel: an
+    # explicit NULL means did's default, FALSE. The replacement stays lazy, so
+    # the argument is evaluated by did when did first needs it.
+    return(forward_call(
+      quote(did::att_gt), upstream_att_gt_formals, env,
+      override = list(allow_unbalanced_panel = quote(
+        if (is.null(allow_unbalanced_panel)) FALSE else allow_unbalanced_panel
+      ))
+    ))
+  }
+
+  has_dname <- !arg_missing("dname", env)
+  dname_val <- if (has_dname) dname else NULL
+  if (!is.null(dname_val)) {
+    has_gname <- !arg_missing("gname", env) && !identical(substitute(gname, env), NULL) && !is.null(gname)
+    if (has_gname) {
+      cdid_abort(
+        "Cannot specify both 'gname' (absorbing cohort timing) and 'dname' (period treatment indicator); choose one.",
+        c("cdid_static_routing_error", "cdid_chained_request_input_error")
+      )
+    }
+    return(static_public_att_gt(
+      yname = yname, tname = tname, idname = idname, dname = dname_val,
+      xformla = xformla, data = data, panel = panel,
+      allow_unbalanced_panel = allow_unbalanced_panel,
+      control_group = control_group, anticipation = anticipation,
+      weightsname = weightsname, fix_weights = fix_weights,
+      alp = alp, bstrap = bstrap, cband = cband, biters = biters,
+      clustervars = clustervars, est_method = est_method,
+      base_period = base_period, faster_mode = faster_mode,
+      print_details = print_details, pl = pl, cores = cores,
+      compute_inffunc = compute_inffunc,
+      dots = as.list(substitute(list(...)))[-1L],
+      dots_eval = function() list(...),
+      mode = mode, frame = frame,
+      selection = selection, selection_model = selection_model,
+      selection_pooling = selection_pooling,
+      selection_xformla = selection_xformla,
+      selection_universe = selection_universe,
+      selection_rho = selection_rho,
+      selection_justification = selection_justification,
+      selection_est_method = selection_est_method,
+      imputation_pooling = imputation_pooling,
+      gmm_weighting = gmm_weighting, gmm_covariance = gmm_covariance,
+      pt_assumption = pt_assumption, pt_start = pt_start,
+      control = control,
+      outcome_pooling = outcome_pooling,
+      imputation_scale = imputation_scale,
+      switchers = switchers,
+      switch_times = switch_times,
+      env = env, call = sys.call()
+    ))
+  }
+
   if (is.null(mode)) {
     # Only `panel` is needed to resolve the default mode.
     mode <- if (check_panel(panel)) "chained" else "ordinary"
@@ -73,6 +134,13 @@ att_gt <- function(yname,
         if (is.null(allow_unbalanced_panel)) FALSE else allow_unbalanced_panel
       ))
     ))
+  }
+
+  if (arg_missing("gname", env) || identical(substitute(gname, env), NULL)) {
+    cdid_abort(
+      "Must specify either 'gname' (cohort adoption date) or 'dname' (period binary treatment indicator).",
+      c("cdid_static_routing_error", "cdid_chained_request_input_error")
+    )
   }
 
   # OR preprocessing records the maximum absolute reconstruction discrepancy

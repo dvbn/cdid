@@ -4,22 +4,26 @@
 \alias{cdid-package}
 \title{cdid: The Chained Difference-in-Differences}
 \description{
-cdid 1.2.0.0, an update of the package after version 0.1.1, is a small layer on
-the did package. It keeps did's \code{att_gt()} and \code{aggte()} interface and
-adds an estimation mode for panel data with missing outcomes.
+cdid extends the did package. It keeps did's \code{att_gt()} and \code{aggte()} interface and
+adds chained estimation for panels with missing outcomes.
 
 \itemize{
   \item \code{mode = "ordinary"} delegates unchanged to \code{did::att_gt()}
     and \code{did::aggte()}. This is also the default for repeated cross
     sections.
+  \item Supplying \code{dname} to \code{att_gt()} selects a static binary
+    treatment model allowing entry, exit and re-entry, with no carryover from
+    past treatment. Supplying \code{gname} retains absorbing-adoption cohort
+    effects, which may evolve after treatment. See \code{\link{att_gt}}.
   \item Chained estimation (Bellego, Benatia and Dortet-Bernadet, 2025)
     is the default for panel data. Built-in doubly robust \code{est_method="dr"}
     (the default), \code{est_method="ipw"}, and control-mean outcome regression
     \code{est_method="reg"} are supported, with baseline (\code{selection = "none"})
-    or conditional-MTAR (\code{"conditional_mtar"} / legacy \code{"corollary1"})
+    or conditional-MTAR (\code{"conditional_mtar"}; the cohort-only legacy alias
+    is \code{"corollary1"})
     missing-outcome handling via observation weighting (\code{selection_est_method = "ipw"}),
     change imputation (\code{"imputation"}) or the augmented correction (\code{"dr"}).
-    Custom panel IPW callbacks support baseline selection and, when they return
+    Custom cohort-panel IPW callbacks support baseline selection and, when they return
     \code{log_weight_gradient}, conditional-MTAR observation weighting
     (\code{selection_est_method = "ipw"}).
 }
@@ -36,12 +40,14 @@ Quick navigation for offline help:
 \itemize{
   \item \code{\link{att_gt}}: estimate group-time average treatment effects from
     long panel data (\code{data}) and an optional study-population unit table
-    (\code{frame}). Returns a \code{cdid_MP} object in chained mode.
-  \item \code{\link{aggte}}: aggregate a fitted result into \code{"simple"},
+    (\code{frame}) on the cohort route. Returns a \code{cdid_MP}
+    object for chained cohort effects, or \code{cdid_static_att_gt} for
+    static switching-date effects.
+  \item \code{\link{aggte}}: aggregate a fitted cohort result into \code{"simple"},
     \code{"group"}, \code{"dynamic"} or \code{"calendar"} summaries without
     refitting (\code{cdid_AGGTEobj} in chained mode).
   \item \code{\link{conditional_did_pretest}}: run the chained conditional
-    pretrend test on panel data (or \pkg{did}'s \code{conditional_did_pretest()} in
+    pretrend test on cohort panel data (or \pkg{did}'s \code{conditional_did_pretest()} in
     ordinary mode).
   \item \code{\link{reexports}}: \code{\link{tidy}}, \code{\link{glance}} and
     \code{\link{ggdid}} generics re-exported from \pkg{did}, with chained S3
