@@ -19,6 +19,11 @@ list with finite scalar \code{ATT} and finite length-\eqn{m_\ell} vector (or
 \code{est_method} strings are refused with an explanatory error before the data
 is touched; built-in IPW is never substituted for them. For repeated cross
 sections (\code{panel = FALSE}) the default resolves to ordinary mode.
+Supplying \code{dname} instead of \code{gname} selects the static no-carryover
+binary entry, exit and re-entry panel estimator adapting the static binary
+specialization of de Chaisemartin, D'Haultfoeuille, Pasquier, Sow and
+Vazquez-Bare (2026) with the chained GMM framework of Bellego, Benatia and
+Dortet-Bernadet (2025).
 }
 \usage{
 att_gt(
@@ -63,7 +68,11 @@ att_gt(
   pt_assumption = c("post", "all"),
   pt_start = NULL,
   control = NULL,
-  outcome_pooling = "separate"
+  outcome_pooling = "separate",
+  dname = NULL,
+  imputation_scale = "per_period",
+  switchers = "both",
+  switch_times = NULL
 )
 }
 \arguments{
@@ -154,7 +163,10 @@ controls counterfactual outcome-regression slopes. Inactive and never evaluated
 under \code{selection_est_method = "imputation"}, which uses
 \code{imputation_pooling} instead. Under \code{selection_est_method = "dr"} it
 pools the observation-probability slopes and is independent of
-\code{imputation_pooling}.}
+\code{imputation_pooling}. On the static \code{dname} route, the approved names
+are \code{"separate"}, \code{"within_group"} (share slopes within one fixed
+switch-date/direction/role population) and \code{"pooled"} (share slopes across
+these populations). Pair/date/role intercepts remain separate.}
 \item{selection_est_method}{Chained-only observation-correction method, separate
 from the treatment comparison method \code{est_method}: \code{"ipw"} (default,
 the existing probability-weighted correction, unchanged), \code{"imputation"}
@@ -181,7 +193,15 @@ covariates and sampling weights are part of the comparison's fit identity.
 Identical fits are reused. This setting is independent of
 \code{selection_pooling} and \code{imputation_pooling}; it changes neither
 treatment IPW nor ordinary mode. See \sQuote{Control-mean outcome regression
-and doubly robust estimation}.}
+and doubly robust estimation}. On the static \code{dname} route (active when
+\code{est_method} is \code{"reg"} or \code{"dr"}, inactive and never evaluated
+when \code{est_method = "ipw"}), supported values are \code{"separate"}
+(default, one stayer slope vector per transition cell), \code{"pooled"} (one
+shared slope vector across all declared cells with cell-specific intercepts),
+or an explicit named character vector / block list partitioning transition
+cell IDs (which may include extra non-target stayer training cells); those
+explicit intermediate partitions are static-only and are refused on the
+cohort \code{gname} route.}
 
 \item{imputation_pooling}{Slope pooling of the actual-change imputation model,
 used only when \code{selection_est_method = "imputation"} or \code{"dr"}
@@ -191,7 +211,9 @@ pairs) or \code{"across_cohorts"} (one slope vector across all needed cells).
 Local cohort/pair intercepts are kept whenever \code{xformla} has an intercept.
 Pooling is an explicit model restriction, never an automatic fallback; it can
 be wrong, for example when treated cohorts' dynamics differ across pairs.
-Ordinary mode neither evaluates nor forwards it.}
+Ordinary mode neither evaluates nor forwards it. On the static \code{dname}
+route, pooling names are \code{"separate"}, \code{"within_group"} and
+\code{"pooled"}, as for \code{selection_pooling}, with local intercepts.}
 \item{frame, selection, selection_xformla, gmm_weighting, gmm_covariance, pt_assumption, pt_start}{
   Chained-only: an optional unit frame with population or sampling information
   (one row per population unit, matched to \code{data} by \code{idname};
@@ -245,12 +267,85 @@ Ordinary mode neither evaluates nor forwards it.}
   Unknown entries and objects are refused. The universal per-fit error
   guarantee and its \code{relative_accuracy} override are deferred; supplying
   that entry raises \code{cdid_chained_public_accuracy_deferred}. Ordinary mode never evaluates it.}
+
+\item{dname}{\code{NULL} (default) or a character string naming the binary
+  period treatment column \eqn{D_{it} \in \{0, 1\}}. In chained panel mode,
+  when \code{dname = NULL},
+  \code{att_gt()} runs the cohort \code{gname} path unchanged. When
+  \code{dname} is non-\code{NULL}, \code{att_gt()} routes to the static
+  no-carryover entry/exit/re-entry panel estimator for arbitrary binary
+  treatment histories (including absorbing adoption as a special case) and
+  returns a \code{cdid_static_att_gt} object. Built-in static treatment methods
+  are \code{est_method = "dr"} (default), \code{"reg"} and \code{"ipw"};
+  \code{selection = "none"} uses the baseline no-equation route, while
+  \code{selection = "conditional_mtar"} activates observation weighting
+  (\code{selection_est_method = "ipw"}, with \code{"pair_logit"} or
+  \code{"independent_period_logit"}), actual-change imputation
+  (\code{selection_est_method = "imputation"}) or the augmented observation
+  correction (\code{selection_est_method = "dr"}), each supported across all
+  three built-in treatment methods (\code{"ipw"}, \code{"reg"} and \code{"dr"}).
+  Specifying both \code{gname} and \code{dname} is refused with a diagnostic
+  error. Every included study unit must have a complete known binary treatment
+  sequence across all panel dates and complete required reference covariates;
+  missing outcomes \eqn{Y_{it}} (including zero- and single-outcome units) are
+  retained in the study population and original-unit influence functions.
+  Explicit \code{mode = "ordinary"} delegates to \pkg{did} before evaluating
+  static arguments.}
+
+\item{imputation_scale}{Static-route actual-change imputation scaling when
+  \code{dname} is non-\code{NULL} and \code{selection_est_method} is
+  \code{"imputation"} or \code{"dr"} (inactive and never evaluated otherwise):
+  \code{"per_period"} (default, non-intercept covariate design columns multiplied by panel index gap
+  \eqn{L_k = u_{\mathrm{idx}} - s_{\mathrm{idx}}}) or \code{"per_change"}
+  (unscaled covariate slopes on each pair change).}
+
+\item{switchers}{Static-route transition direction filter when \code{dname} is
+  non-\code{NULL}: \code{"both"} (default, both entry \eqn{0 \to 1} and exit
+  \eqn{1 \to 0} transitions), \code{"entry"} (\eqn{D_{t-1} = 0 \to D_t = 1}
+  only), or \code{"exit"} (\eqn{D_{t-1} = 1 \to D_t = 0} only).}
+
+\item{switch_times}{\code{NULL} (default) or a vector of panel transition dates
+  \eqn{t \in \{t_2, \dots, t_T\}} when \code{dname} is
+  non-\code{NULL}. When \code{NULL}, all transition dates with at least one
+  observed switcher in the requested direction(s) are included automatically.
+  At an explicitly requested date, every requested direction is retained;
+  omitted \code{switchers} and explicit \code{switchers = "both"} are equivalent.
+  Explicitly requested cells with zero switchers are retained in the result as
+  \code{available = FALSE} (\code{support_status = "empty_switchers"}) rather
+  than silently dropped.}
 }
 \value{
 In ordinary mode, the \code{MP} object returned by \code{did::att_gt()},
 unchanged. did records the delegated call (for example
 \code{did::att_gt(yname = yname, ...)}) as \code{DIDparams$call}, so
 printed summaries show that call.
+
+When \code{dname} is non-\code{NULL}, a \code{cdid_static_att_gt} object reporting
+the sign-oriented static switch-time treatment effects
+\eqn{\hat{\tau}_c = \sigma_c \hat{\theta}_c} (\eqn{\sigma_c = 1 - 2d \in \{+1, -1\}})
+for each declared transition cell \eqn{c = (t, d)}, their analytical and/or
+common-sign Rademacher multiplier bootstrap standard errors and simultaneous
+sup-\eqn{t} confidence bands (via \code{chained_cluster_multiplier()}), the
+full original-unit influence function matrix \code{inffunc} when
+\code{compute_inffunc = TRUE}, the switcher-frequency weighted aggregate
+\code{aggregate} (with its random switch-share influence function), role-graph
+support metadata \code{graphs}, route-specific bibliographic metadata
+\code{references} (citing Bellego, Benatia and Dortet-Bernadet 2025 alongside
+de Chaisemartin, D'Haultfoeuille, Pasquier, Sow and Vazquez-Bare 2026), and
+methods for \code{print()}, \code{summary()}, \code{\link{tidy}}(),
+\code{\link{glance}}(), \code{\link{ggdid}}() and \code{plot()}. Static
+transition cells are not cohort \code{ATT(g, t)} parameters, so
+\code{\link{aggte}}() refuses \code{cdid_static_att_gt} objects.
+
+Static inference retains the existing \code{att_gt} flag law:
+\code{bstrap = FALSE} gives analytical pointwise intervals, including when
+\code{cband = TRUE}; bootstrap standard errors with \code{cband = FALSE}
+use pointwise normal intervals. Any unavailable declared cell prevents a
+full-family band or aggregate over a silently reduced family.
+\code{compute_inffunc = FALSE} gives point estimates without inference.
+Validity requires compatible link moments, regular interior nuisance roots
+with inactive clipping in population, fixed finite support and many independent
+units or clusters. It supplies no few-cluster or Monte Carlo coverage guarantee.
 
 In chained mode with \code{est_method = "dr"}, \code{est_method = "reg"}, \code{est_method = "ipw"} or a custom IPW callback
 function, a \code{cdid_MP} object (inheriting \code{MP}, built with did's
@@ -436,6 +531,14 @@ Difference-in-Differences. \emph{Journal of Econometrics} 248, 105783.
 Callaway, B. and Sant'Anna, P. H. C. (2021). Difference-in-Differences with
 Multiple Time Periods. \emph{Journal of Econometrics} 225(2), 200--230.
 \doi{10.1016/j.jeconom.2020.12.001}
+
+de Chaisemartin, C., D'Haultfoeuille, X., Pasquier, F., Sow, D. and
+Vazquez-Bare, G. (2026). Difference-in-Differences Estimators for Treatments
+Continuously Distributed at Every Period. Working paper, arXiv:2201.06898v7
+(revised 2026-07-22), static binary specialization (cited alongside Bellego,
+Benatia and Dortet-Bernadet 2025 on the \code{dname} route;
+cohort \code{gname} and \code{mode = "ordinary"} routes retain Callaway and
+Sant'Anna 2021).
 }
 \section{Reference dates and changing weights (chained mode)}{
 Calls whose covariates and sampling weights pass the existing static checks
@@ -564,6 +667,39 @@ ch_aug <- cdid::att_gt(yname = "lemp", tname = "year", idname = "countyreal",
                        bstrap = FALSE, cband = FALSE)
 ch_aug$chained$selection[c("method", "selection_model", "selection_pooling",
                            "imputation_pooling", "selection_formula_inherited")]
+
+# Static no-carryover binary entry/exit/re-entry route (dname):
+set.seed(20261106)
+n_u <- 200
+n_t <- 4
+paths <- rbind(c(0L, 0L, 0L, 0L), c(0L, 1L, 1L, 0L),
+               c(1L, 1L, 0L, 1L), c(1L, 0L, 0L, 1L),
+               c(1L, 1L, 1L, 1L))
+pid <- sample.int(nrow(paths), size = n_u, replace = TRUE)
+x_u <- rnorm(n_u)
+a_u <- rnorm(n_u, sd = 0.5)
+st_df <- data.frame(
+  id = rep(seq_len(n_u), each = n_t),
+  time = rep(seq_len(n_t), times = n_u),
+  x = rep(x_u, each = n_t),
+  d = as.integer(t(paths[pid, ]))
+)
+y_lat <- rep(a_u, each = n_t) + (0.3 + 0.2 * st_df$x) * st_df$time +
+  1.5 * st_df$d + rnorm(nrow(st_df), sd = 0.4)
+st_df$y <- ifelse(runif(nrow(st_df)) < plogis(0.8 + 0.4 * st_df$x), y_lat, NA_real_)
+
+st_fit <- cdid::att_gt(yname = "y", tname = "time", idname = "id",
+                       dname = "d", xformla = ~x, data = st_df,
+                       est_method = "dr", selection = "conditional_mtar",
+                       selection_est_method = "dr",
+                       selection_model = "pair_logit",
+                       selection_pooling = "within_group",
+                       imputation_pooling = "within_group",
+                       imputation_scale = "per_period",
+                       outcome_pooling = "separate",
+                       switchers = "both", bstrap = FALSE, cband = FALSE)
+summary(st_fit)
+st_fit$aggregate
 }
 }
 
@@ -904,4 +1040,83 @@ rate ranges and the numbers of capped or floored rows among the route diagnostic
 Treatment summaries include the largest fitting weight; selection-weighted
 outcome-regression supports include the largest WLS weight, and augmented cells
 include the largest observed correction weight \eqn{w a_U/\max(q, 10^{-6})}{w a_U/max(q, 1e-6)}.
+}
+
+\section{Static entry, exit and re-entry (dname route)}{
+Supplying
+\code{dname} instead of \code{gname} estimates static no-carryover binary
+transition effects, adapting the static binary specialization of de
+Chaisemartin, D'Haultfoeuille, Pasquier, Sow and Vazquez-Bare (2026,
+arXiv:2201.06898v7, revised 2026-07-22; not their dynamic intertemporal paper)
+to complete and incomplete panels using the chained GMM framework of Bellego,
+Benatia and Dortet-Bernadet (2025). In chained panel mode, supplying \code{dname} selects this static
+route even when the binary treatment column is absorbing; \code{gname} retains
+the cohort \code{ATT(g, t)} route.
+
+Causal benchmark: potential outcomes satisfy no carryover / no treatment-history
+effects, \eqn{Y_{it}(d_1, \dots, d_t) = Y_{it}(d_t) \in \{Y_{it}(0), Y_{it}(1)\}}.
+Units may enter (\eqn{0 \to 1}), exit (\eqn{1 \to 0}) and re-enter treatment
+across panel dates, but lasting dynamic effects from earlier treatment are
+excluded. Each transition cell \eqn{c = (t, d)} at date \eqn{t \ge t_2} (with
+adjacent reference date \eqn{t - 1}) and prior state \eqn{d = D_{i,t-1} \in \{0, 1\}}
+compares switchers \eqn{G_c = \{i : D_{i,t-1} = d, D_{it} = 1 - d\}} against
+same-prior-state stayers \eqn{C_c = \{i : D_{i,t-1} = d, D_{it} = d\}},
+reporting \eqn{\hat{\tau}_c = \sigma_c \hat{\theta}_c} with
+\eqn{\sigma_c = 1 - 2d \in \{+1, -1\}}.
+
+Data and graph requirements: every included unit must have a complete known
+binary treatment path \eqn{D_i = (D_{i1}, \dots, D_{iT}) \in \{0, 1\}^T} across
+all panel dates and complete required reference covariates (\code{xformla} and,
+when active, \code{selection_xformla}; unit-constant or read at reference date
+\eqn{t - 1}). Outcomes \eqn{Y_{it}} may be missing in general patterns across
+dates under valid missing-outcome, parallel-trends and overlap assumptions.
+Units with zero or one observed outcome are retained in the study population of
+size \eqn{n}, role counts, active observation/imputation models and the
+\eqn{n}-row original-unit influence functions. For each role \eqn{a \in \{G, C\}},
+all date pairs \eqn{(s, u)} with \eqn{s < u} and at least one observed unit
+(\eqn{n_{\mathrm{observed, role}} \ge 1}) are retained across all connected
+components without pruning; a target cell is available only when
+\eqn{n_{\mathrm{switchers}, c} \ge 1}, \eqn{n_{\mathrm{stayers}, c} \ge 1},
+and both role graphs connect \eqn{t - 1} and \eqn{t}. Overidentified pairs are
+combined by GMM (\code{gmm_weighting = "optimal"} / \code{"two_step"} with
+\code{gmm_covariance = "tikhonov"}, or \code{"identity"}).
+
+Adjustments and pooling: \code{selection = "none"} (\code{selection_est_method = "ipw"})
+runs the baseline no-equation route. When all outcomes are observed
+(\code{all(O == 1)}), \code{att_gt(dname = ...)} dispatches directly to the
+complete-data baseline kernel (\code{static_complete_fit}, reporting
+\code{diagnostics$backend_status = "accepted_static_complete_fit_integration"}
+and \code{diagnostics$gmm_executed = FALSE}); when outcomes are missing, it
+combines observed pair changes through the chained GMM backend
+(\code{static_missing_fit}, \code{diagnostics$gmm_executed = TRUE}). Its sufficient observation assumption is
+constant pair-observation probability across reference covariates within each
+fixed role population, together with conditional mean-change representativeness
+of the observed pairs. Conditional representativeness alone does not establish
+this baseline route when observation depends on the covariates.
+\code{selection = "conditional_mtar"}
+supports observation weighting (\code{selection_est_method = "ipw"} with
+\code{selection_model = "pair_logit"} or \code{"independent_period_logit"}),
+actual-change imputation (\code{selection_est_method = "imputation"} with
+\code{imputation_scale = "per_period"} or \code{"per_change"}), and augmented
+observation correction (\code{selection_est_method = "dr"}), each supported
+with all three built-in treatment methods (\code{est_method = "ipw"},
+\code{"reg"}, \code{"dr"}). On the static route, \code{selection_pooling} and
+\code{imputation_pooling} accept \code{"separate"} (default),
+\code{"within_group"} (shared within one fixed transition cell and
+switcher/stayer role population) and \code{"pooled"} (shared across role
+populations), with local intercepts; \code{outcome_pooling} accepts
+\code{"separate"} (default), \code{"pooled"}, or an explicit named character
+vector / list partition of transition cell IDs (including optional non-target
+stayer training cells).
+
+Aggregation, references and qualifications: the switcher-frequency weighted
+aggregate across the declared target set \eqn{A} and its random switch-share
+influence function are stored in \code{result$aggregate} (unavailable when any
+declared cell in \eqn{A} is unavailable); \code{\link{aggte}}() remains
+cohort-only. Static summaries and \code{result$references} cite Bellego,
+Benatia and Dortet-Bernadet (2025) alongside de Chaisemartin et al. (2026), not
+Callaway and Sant'Anna (2021). Exact finite-sample parity with other software
+holds only where target, data, model, pooling, weights and variance
+normalization match, and no finite-sample unbiasedness, few-cluster validity or
+Monte Carlo coverage guarantee is claimed.
 }

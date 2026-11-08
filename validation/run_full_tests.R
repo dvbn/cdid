@@ -54,12 +54,13 @@ if (!is.null(lib_loc)) {
                       normalizePath(file.path(lib_loc, "cdid"), winslash = "/", mustWork = TRUE)))
 }
 
-# Match testthat's file discovery; this revision ships 172 original files and
-# the bounded regression file. Root's archive hash audit authenticates contents.
+# Match testthat's file discovery; this revision ships all 185 test files,
+# including both bounded regression files.
 test_files <- sort(list.files(test_dir, pattern = "^test.*\\.[rR]$", full.names = FALSE))
-if (length(test_files) != 173L || !"test-cran-regression.R" %in% test_files) {
+if (length(test_files) != 185L ||
+    !all(c("test-cran-regression.R", "test-cran-regression-static.R") %in% test_files)) {
   stop(sprintf(
-    "Expected all 173 packaged testthat files (including cran-regression) in '%s', found %d.",
+    "Expected all 185 packaged testthat files (including both bounded regression files) in '%s', found %d.",
     test_dir, length(test_files)
   ))
 }

@@ -114,7 +114,7 @@ testthat::test_that("att_gt adds selection_est_method and imputation_pooling as 
   testthat::expect_identical(f$imputation_pooling, "separate")
   testthat::expect_identical(f$est_method, "dr")
   testthat::expect_identical(f$selection, "none")
-  testthat::expect_identical(utils::tail(names(f), 2L), c("control", "outcome_pooling"))
+  testthat::expect_identical(names(f)[match("control", names(f)) + 0:1], c("control", "outcome_pooling"))
   testthat::expect_identical(f$outcome_pooling, "separate")
 })
 

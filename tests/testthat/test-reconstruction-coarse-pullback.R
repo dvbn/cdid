@@ -131,7 +131,13 @@ testthat::test_that("coarse scalar assembly preserves original solves/cache deci
     offset <- length(point) - length(fit$links); N <- nrow(a$Y)
     for (i in c(1L, N)) {
       delta <- rep(-1, N); delta[i] <- N - 1
-      derivative <- (reference(a, fit, 1 + 1e-6 * delta) - reference(a, fit, 1 - 1e-6 * delta)) / 2e-6
+      # A fourth-order stencil avoids subtractive noise at structurally zero
+      # derivatives without weakening the independent derivative comparison.
+      h <- 5e-5
+      derivative <- (-reference(a, fit, 1 + 2 * h * delta) +
+        8 * reference(a, fit, 1 + h * delta) -
+        8 * reference(a, fit, 1 - h * delta) +
+        reference(a, fit, 1 - 2 * h * delta)) / (12 * h)
       testthat::expect_equal(fast$phi[i, ], derivative[offset + 3:1], tolerance = 1e-5)
     }
   }

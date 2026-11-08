@@ -12,7 +12,10 @@ package: \code{did::ggdid}, \code{did::tidy} and \code{did::glance} (the
 results (\code{cdid_MP} and \code{cdid_AGGTEobj}), \pkg{cdid} registers S3
 methods for \code{print()}, \code{summary()}, \code{tidy()}, \code{glance()} and
 \code{ggdid()} that extend upstream output with chained support and inference
-metadata. \code{conditional_did_pretest()} is cdid's own wrapper (see
+metadata. Static entry/exit results (\code{cdid_static_att_gt}) have their own
+methods for these same functions, returning transition effects and their
+switcher-weighted average. See \code{\link{att_gt}} for this route.
+\code{conditional_did_pretest()} is cdid's own wrapper (see
 \code{\link{conditional_did_pretest}}): chained by default for panels, and
 \pkg{did}'s \code{conditional_did_pretest()} unchanged in ordinary mode.
 }

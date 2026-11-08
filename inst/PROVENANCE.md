@@ -2,7 +2,7 @@
 
 ## Package and authorship
 
-This is version 1.2.0.0 of the existing `cdid` package maintained by David Benatia. It is
+This is version 1.3.0.0 of the existing `cdid` package maintained by David Benatia. It is
 an update of the package after version 0.1.1 on CRAN (version 1.0.0.0 was an intermediate
 development release not submitted to CRAN). The title and author list in DESCRIPTION are
 retained: David Benatia (maintainer), Christophe Bellégo, Joel Cuerrier and Vincent
@@ -53,3 +53,14 @@ https://doi.org/10.1016/j.jeconom.2020.12.001
 
 Sant'Anna, P. H. C. and Zhao, J. (2020). Doubly Robust Difference-in-Differences
 Estimators. *Journal of Econometrics*. https://doi.org/10.1016/j.jeconom.2020.06.003
+
+
+## Static binary treatment
+
+The `dname` interface adds static binary treatment entry, exit and re-entry.
+It applies the static binary specialization of de Chaisemartin, D'Haultfoeuille,
+Pasquier, Sow and Vazquez-Bare (2026), arXiv:2201.06898v7, with chained
+within-unit outcome comparisons for missing outcomes. Its R implementation and
+independent numerical test references were written for this project. No Stata
+implementation source is included. The absorbing-adoption `gname` interface
+continues to use its existing cohort targets and reference conventions.

@@ -15,7 +15,7 @@ knitr::opts_chunk$set(
 )
 ```
 
-`cdid` estimates group-time average treatment effects (`att_gt()`) and their aggregations (`aggte()`) in panel data with missing outcomes using the chained difference-in-differences of Bellégo, Benatia and Dortet-Bernadet (2025) (<https://doi.org/10.1016/j.jeconom.2024.105783>). It builds on the `did` interface of Callaway and Sant'Anna (2021) and uses chained estimation by default for panel data (`mode = "chained"`), while `mode = "ordinary"` delegates unchanged to `did`.
+`cdid` estimates treatment effects in panels with missing outcomes using chained difference-in-differences (Bellégo, Benatia and Dortet-Bernadet, 2025, <https://doi.org/10.1016/j.jeconom.2024.105783>). It builds on the `did` interface of Callaway and Sant'Anna (2021). The first example uses absorbing adoption (`gname`); Section 6 introduces binary treatment that can stop and restart (`dname`) under a static model without carryover. Panel estimation is chained by default, while `mode = "ordinary"` delegates unchanged to `did`.
 
 ## 1. Synthetic incomplete panel and unit table
 
@@ -141,4 +141,69 @@ Beyond the baseline specification above, `cdid` supports:
 - **Covariate-dependent missingness (`selection = "conditional_mtar"`):** observation weighting (`selection_est_method = "ipw"` with `selection_model = "pair_logit"` or `"independent_period_logit"`), actual-change imputation (`selection_est_method = "imputation"`), or their augmented combination (`selection_est_method = "dr"` with treatment IPW, OR or DR), with configurable slope pooling (`selection_pooling`, `imputation_pooling`), separate selection formulas (`selection_xformla`), and subset fitting universes (`selection_universe`).
 - **Parallel trends, weights, clustering, and pretests:** additional untreated-trend restrictions from an explicit common start date (`pt_assumption = "all"` with `pt_start`), reference-date covariates and `fix_weights`, clustered inference (`clustervars`), and the chained conditional pretrend test (`cdid::conditional_did_pretest()`).
 
-See the installed help pages (`?cdid::att_gt`, `?cdid::aggte`, `?cdid::conditional_did_pretest`, `?cdid::reexports`) and the repository documentation at <https://github.com/dvbn/cdid>, especially `docs/help/prepare-data.md`, `docs/help/investigate-missingness.md`, `docs/methods/missing-outcomes.md`, and the companion notebook.
+
+## 6. When treatment can stop and restart
+
+The example above uses `gname`: after their first treatment date, units remain treated. The resulting cohort effects can be followed over time and aggregated into an event study.
+
+For a history such as `0, 1, 0, 1`, supply current binary treatment through `dname` instead. This requests a static model: earlier treatment has no lingering effect beyond current status, although effects can differ across units and dates. It compares entrants with units that remain untreated and exiters with units that remain treated, under the corresponding parallel-trends assumptions. Both directions are reported as treatment effects, `Y(1) - Y(0)`.
+
+Keep treatment known at every study date, including rows with missing outcomes. The example below has a treatment effect of 1.5, allows exit and re-entry, and makes observation depend on `x`. It combines treatment DR (`est_method`) with augmented missing-outcome correction (`selection_est_method`). These are separate choices.
+
+```{r static-entry-exit}
+set.seed(20261106)
+n_st <- 320
+t_st <- 4
+d_paths <- rbind(
+  c(0L, 0L, 0L, 0L),
+  c(0L, 1L, 1L, 0L),
+  c(1L, 1L, 0L, 1L),
+  c(1L, 0L, 0L, 1L),
+  c(1L, 1L, 1L, 1L)
+)
+path_idx <- sample.int(nrow(d_paths), size = n_st, replace = TRUE)
+x_st <- rnorm(n_st)
+alpha_st <- rnorm(n_st, sd = 0.5)
+
+static_panel <- data.frame(
+  id = rep(seq_len(n_st), each = t_st),
+  time = rep(seq_len(t_st), times = n_st),
+  x = rep(x_st, each = t_st),
+  d = as.integer(t(d_paths[path_idx, ]))
+)
+y_st_latent <- rep(alpha_st, each = t_st) +
+  (0.3 + 0.2 * static_panel$x) * static_panel$time +
+  1.5 * static_panel$d +
+  rnorm(nrow(static_panel), sd = 0.4)
+static_panel$y <- ifelse(
+  runif(nrow(static_panel)) < plogis(0.8 + 0.4 * static_panel$x),
+  y_st_latent,
+  NA_real_
+)
+
+fit_static <- cdid::att_gt(
+  yname = "y",
+  tname = "time",
+  idname = "id",
+  dname = "d",
+  xformla = ~ x,
+  data = static_panel,
+  est_method = "dr",
+  selection = "conditional_mtar",
+  selection_est_method = "dr",
+  selection_model = "pair_logit",
+  selection_pooling = "within_group",
+  imputation_pooling = "within_group",
+  imputation_scale = "per_period",
+  outcome_pooling = "separate",
+  switchers = "both",
+  bstrap = FALSE,
+  cband = FALSE
+)
+summary(fit_static)
+fit_static$aggregate[c("estimate", "se", "ci_lower", "ci_upper", "total_switchers")]
+```
+
+The static model adapts the binary specialization of de Chaisemartin et al. (2026), <https://arxiv.org/abs/2201.06898v7>, using chained comparisons for missing outcomes. Its switcher-weighted average is stored in `fit_static$aggregate`; `aggte()` remains for cohort effects. See the entry and exit guide in the repository for the model assumptions and other treatment and missing-outcome adjustments.
+
+See the installed help pages (`?cdid::att_gt`, `?cdid::aggte`, `?cdid::conditional_did_pretest`, `?cdid::reexports`) and the repository documentation at <https://github.com/dvbn/cdid>, especially `docs/help/prepare-data.md`, `docs/help/investigate-missingness.md`, `docs/methods/missing-outcomes.md`, `docs/methods/static-entry-exit.md`, and the companion notebook.

@@ -171,8 +171,13 @@ testthat::test_that("generic ordinary reconstruction preserves full F numerical 
     zero <- which(rowSums(a$obs) == 0L)[1L]; single <- which(rowSums(a$obs) == 1L)[1L]
     for (i in c(zero, single)) {
       delta <- rep(-1, N); delta[i] <- N - 1
-      derivative <- tail((reference(a, fit, 1 + 1e-6 * delta) - reference(a, fit, 1 - 1e-6 * delta)) / 2e-6,
-        length(fit$links))
+      # The fourth-order stencil reduces cancellation noise near zero while
+      # retaining the independent empirical-frequency refit and tolerance.
+      h <- 5e-5
+      derivative <- tail((-reference(a, fit, 1 + 2 * h * delta) +
+        8 * reference(a, fit, 1 + h * delta) -
+        8 * reference(a, fit, 1 - h * delta) +
+        reference(a, fit, 1 - 2 * h * delta)) / (12 * h), length(fit$links))
       testthat::expect_equal(actual[i, ], derivative[links], tolerance = 1e-5)
     }
     owned <- fit$accounting$owned_entries + fit$accounting$borrowed_entries

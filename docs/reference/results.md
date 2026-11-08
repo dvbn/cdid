@@ -6,11 +6,31 @@ This page describes what the fitted objects contain, how to read their tables an
 
 | Function | Result in chained mode | Methods |
 | --- | --- | --- |
-| `att_gt()` | `cdid_MP`, which inherits `did`'s `MP` | `print()`, `summary()`, `tidy()`, `glance()`, `ggdid()`, and `aggte()` for aggregation |
+| `att_gt(gname = ...)` | `cdid_MP`, which inherits `did`'s `MP` | `print()`, `summary()`, `tidy()`, `glance()`, `ggdid()`, and `aggte()` for aggregation |
+| `att_gt(dname = ...)` | `cdid_static_att_gt` | `print()`, `summary()`, `tidy()`, `glance()`, `ggdid()` and `plot()`; the aggregate is stored in the result |
 | `aggte()` | `cdid_AGGTEobj`, which inherits `did`'s `AGGTEobj` | `print()`, `summary()`, `tidy()`, `glance()`, `ggdid()` (except for the simple type) |
 | `conditional_did_pretest()` | `cdid_MP.TEST`, which inherits `did`'s `MP.TEST` | `print()`, `summary()` |
 
-In ordinary mode each function returns `did`'s own object, unchanged. For each chained class, `print()` and `summary()` give the same display. The `att_gt()` and `aggte()` displays show `did`'s summary table under a heading that names the chained estimator, without `did`'s citation line, followed by a short chained record. For `att_gt()` the record gives the available and requested cells with the reasons for unavailable ones, the units of the unit table, the correction for missing outcomes, the parallel trends assumption and `base_period`, the GMM weighting and any covariance regularization, the inference actually performed and the pretrend test or the reason it is unavailable. For `aggte()` it gives the available and intended aggregates, every restricted or unavailable target with its reason, the bins used and excluded by the overall summary, the parallel trends assumption and the inference, and, when they apply, nondefault event-time selectors, unknown cohort shares or shares taken as masses at the first stored date. The heading shows the package versions and both paper references once. Interval family codes, the numerical policy and resource profile remain in the result without being printed, as listed below. The conditional-test display reports its CvM test and status.
+In ordinary mode each function returns `did`'s own object, unchanged. For the cohort chained classes, `print()` and `summary()` give the same display. The `att_gt()` and `aggte()` displays show `did`'s summary table under a heading that names the chained estimator, without `did`'s citation line, followed by a short chained record. For `att_gt()` the record gives the available and requested cells with the reasons for unavailable ones, the units of the unit table, the correction for missing outcomes, the parallel trends assumption and `base_period`, the GMM weighting and any covariance regularization, the inference actually performed and the pretrend test or the reason it is unavailable. For `aggte()` it gives the available and intended aggregates, every restricted or unavailable target with its reason, the bins used and excluded by the overall summary, the parallel trends assumption and the inference, and, when they apply, nondefault event-time selectors, unknown cohort shares or shares taken as masses at the first stored date. The heading shows the package versions and both paper references once. Interval family codes, the numerical policy and resource profile remain in the result without being printed, as listed below. The conditional-test display reports its CvM test and status.
+
+## Static entry and exit results
+
+With `dname`, `att_gt()` returns switching-date effects rather than cohort effects. `summary(fit)` displays them, `tidy(fit)` exports the transition table, `glance(fit)` gives one summary row, and `ggdid(fit)` plots the available entry and exit estimates.
+
+| Field | Contents |
+| --- | --- |
+| `target_id`, `t`, `t_prev`, `d`, `direction` | Transition identifier, switching date, preceding stored date, prior treatment state and entry/exit direction |
+| `att`, `theta_hat` | Treatment effect on the treated-versus-untreated scale, and the raw switcher-minus-stayer contrast; the exit contrast is sign-reversed in `att` |
+| `available`, `support_status`, `support_reason` | Whether each declared transition can be estimated and why a target is unavailable |
+| `se`, `analytical_se`, `bootstrap_se` | Reported, analytical and multiplier standard errors, according to the inference requested |
+| `V_analytical` | Estimated covariance of the static cell estimates; `analytical_se` is `sqrt(diag(V_analytical))`. This differs from the cohort matrix scaling described below. |
+| `inffunc`, `unit_id`, `n` | One influence-function row per original study unit, aligned with `unit_id`, and the full study-unit count |
+| `aggregate` | Switcher-weighted estimate, standard error, intervals, availability and full-unit influence function for the declared transition family |
+| `request`, `diagnostics`, `graphs`, `inference`, `references` | Active settings, unit/role counts, backend execution status (`backend_status`, `gmm_executed`, `backend_diagnostics`), pair-graph support, inference record and route-specific references |
+
+Use `fit$aggregate` for the static average. `aggte()` remains a cohort aggregation function. An unavailable declared cell also makes the declared static average unavailable; the package does not silently change its target family. See the [entry and exit guide](../methods/static-entry-exit.md#read-the-result) for an example and the sign convention.
+
+The remaining sections describe cohort `gname` objects and their aggregation and pretrend tests.
 
 ## Group time results
 
@@ -155,7 +175,9 @@ The reported uncertainty rests on large sample approximations: enough independen
 
 ## Point estimates only
 
-With `compute_inffunc = FALSE`, `att_gt()` returns the same point estimates as with `TRUE`, but `inffunc`, `V_analytical`, `W` and `Wpval` are `NULL`, `se` is `NA`, `c` is the pointwise normal value, the recorded `bstrap` and `cband` are `FALSE`, `fit$chained$inference$kind` is `"not_computed"` and the pretrend test status is `"not_computed"`. `aggte()` refuses such a result.
+With `compute_inffunc = FALSE`, `att_gt()` returns the same point estimates as with `TRUE`, without allocating unit-level influence functions or analytical covariance matrices. For cohort results, `inffunc`, `V_analytical`, `W` and `Wpval` are `NULL`, `se` is `NA`, and `c` is the pointwise normal value. The recorded `bstrap` and `cband` are `FALSE`; `fit$chained$inference$kind` and the pretrend test status are `"not_computed"`. `aggte()` refuses such a result.
+
+Static `dname` results record `fit$inference$compute_inffunc = FALSE` and `fit$inference$se_reported = "none_compute_inffunc_false"`. Their influence functions, covariance and standard errors are unavailable, as described in the static result fields above.
 
 ## Pretrend tests
 

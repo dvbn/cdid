@@ -1,7 +1,7 @@
 Package: cdid
 Type: Package
 Title: The Chained Difference-in-Differences
-Version: 1.2.0.1
+Version: 1.3.0.0
 Authors@R: 
     c(
       person("David", "Benatia", email = "david.benatia@hec.ca", role = c("cre", "aut")),
@@ -25,13 +25,20 @@ Description: Estimates group-time average treatment effects in panels with
     chosen common start date (PT-all); and a chained conditional pretrend test
     through conditional_did_pretest(). Ordinary mode delegates unchanged to
     the Callaway and Sant'Anna (2021) <doi:10.1016/j.jeconom.2020.12.001>
-    estimators in 'did'.
+    estimators in 'did'. Supplying dname to att_gt() estimates static
+    no-carryover entry, exit and re-entry transition effects and their
+    switcher-frequency aggregate for binary treatments in complete and
+    incomplete panels, adapting the static binary specialization of de
+    Chaisemartin, D'Haultfoeuille, Pasquier, Sow and Vazquez-Bare (2026)
+    <doi:10.48550/arXiv.2201.06898> with baseline or conditional-MTAR
+    observation weighting, change imputation and augmented correction across
+    treatment IPW, OR and DR.
 License: GPL-3
 URL: https://github.com/dvbn/cdid
 BugReports: https://github.com/dvbn/cdid/issues
 Depends: R (>= 4.1.0)
 Imports: did (>= 2.5.1), DRDID (>= 1.4.0), parallel
-Suggests: testthat (>= 3.0.0), digest, ggplot2, knitr, rmarkdown,
+Suggests: testthat (>= 3.0.0), codetools, digest, ggplot2, knitr, rmarkdown,
     generics, jsonlite, waldo, withr
 VignetteBuilder: knitr
 Config/testthat/edition: 3
