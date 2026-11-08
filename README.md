@@ -1,6 +1,6 @@
 # cdid for R <img src="man/figures/logo.png" align="right" width="120" alt="cdid logo" />
 
-`cdid` estimates treatment effects in panels with missing outcomes using chained difference in differences. It builds on the [`did` package](https://bcallaway11.github.io/did/). It supports both absorbing treatment, where units remain treated after adoption, and binary treatment that can stop and restart under a static model without lingering effects.
+`cdid` estimates treatment effects in complete and incomplete panels using chained difference in differences. It builds on the [`did` package](https://bcallaway11.github.io/did/). It supports both absorbing treatment, where units remain treated after adoption, and binary treatment that can stop and restart under a static model without lingering effects.
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://www.davidbenatia.com/research/)
 
@@ -89,7 +89,7 @@ Use `dname` when units can enter treatment, leave it and return, **provided past
 
 Absorbing treatment does not by itself justify the static assumption. You can supply an absorbing history through `dname`, but that still requests switching-date effects under no carryover, rather than the cohort effects requested by `gname`. In chained panel mode, the package follows the argument you supply. Supply one treatment argument, not both. Explicit `mode = "ordinary"` delegates to `did` and ignores the static arguments.
 
-Missing outcomes are a separate issue. Both designs can use chained comparisons and, when needed, observation weighting, change imputation or their augmented combination. For `dname`, keep the treatment indicator known at every study date even when the outcome is missing. The [entry and exit guide](docs/methods/static-entry-exit.md) explains the data requirements, assumptions and a runnable example.
+Missing outcomes are a separate issue. On complete panels with `selection = "none"`, `dname` uses the direct complete-data static estimator on adjacent changes; when outcomes are missing or `selection = "conditional_mtar"` is requested, both designs use chained comparisons and, when needed, observation weighting, change imputation or their augmented combination. For `dname`, keep the treatment indicator known at every study date even when the outcome is missing. The [entry and exit guide](docs/methods/static-entry-exit.md) explains the data requirements, assumptions and a runnable example.
 
 ## What the package does
 

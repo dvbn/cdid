@@ -26,7 +26,7 @@ With `dname`, `att_gt()` returns switching-date effects rather than cohort effec
 | `V_analytical` | Estimated covariance of the static cell estimates; `analytical_se` is `sqrt(diag(V_analytical))`. This differs from the cohort matrix scaling described below. |
 | `inffunc`, `unit_id`, `n` | One influence-function row per original study unit, aligned with `unit_id`, and the full study-unit count |
 | `aggregate` | Switcher-weighted estimate, standard error, intervals, availability and full-unit influence function for the declared transition family |
-| `request`, `diagnostics`, `graphs`, `inference`, `references` | Active settings, unit/role counts, pair-graph support, inference record and route-specific references |
+| `request`, `diagnostics`, `graphs`, `inference`, `references` | Active settings, unit/role counts, backend execution status (`backend_status`, `gmm_executed`, `backend_diagnostics`), pair-graph support, inference record and route-specific references |
 
 Use `fit$aggregate` for the static average. `aggte()` remains a cohort aggregation function. An unavailable declared cell also makes the declared static average unavailable; the package does not silently change its target family. See the [entry and exit guide](../methods/static-entry-exit.md#read-the-result) for an example and the sign convention.
 
@@ -175,7 +175,9 @@ The reported uncertainty rests on large sample approximations: enough independen
 
 ## Point estimates only
 
-With `compute_inffunc = FALSE`, `att_gt()` returns the same point estimates as with `TRUE`, but `inffunc`, `V_analytical`, `W` and `Wpval` are `NULL`, `se` is `NA`, `c` is the pointwise normal value, the recorded `bstrap` and `cband` are `FALSE`, `fit$chained$inference$kind` is `"not_computed"` and the pretrend test status is `"not_computed"`. `aggte()` refuses such a result.
+With `compute_inffunc = FALSE`, `att_gt()` returns the same point estimates as with `TRUE`, without allocating unit-level influence functions or analytical covariance matrices. For cohort results, `inffunc`, `V_analytical`, `W` and `Wpval` are `NULL`, `se` is `NA`, and `c` is the pointwise normal value. The recorded `bstrap` and `cband` are `FALSE`; `fit$chained$inference$kind` and the pretrend test status are `"not_computed"`. `aggte()` refuses such a result.
+
+Static `dname` results record `fit$inference$compute_inffunc = FALSE` and `fit$inference$se_reported = "none_compute_inffunc_false"`. Their influence functions, covariance and standard errors are unavailable, as described in the static result fields above.
 
 ## Pretrend tests
 

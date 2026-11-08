@@ -97,29 +97,33 @@ compare_static_public_complete <- function(panel,
                                                     rank_tol,
                                                     compute_inffunc) {
   if (!all(panel$O == 1L) || !identical(fit_obj$route, "baseline") ||
-      length(avail_target_ids) < 1L || length(non_target_ids) > 0L) {
+      length(avail_target_ids) < 1L) {
     return(list(
       checked = FALSE,
       reason = if (!all(panel$O == 1L)) {
         "panel_has_missing_outcomes"
       } else if (!identical(fit_obj$route, "baseline")) {
         "active_observation_correction_route"
-      } else if (length(non_target_ids) > 0L) {
-        "non_target_or_training_cells_present"
       } else {
         "no_available_target_cells"
       }
     ))
   }
 
-  comp_cells <- vector("list", length(avail_target_ids))
-  names(comp_cells) <- avail_target_ids
-  or_blocks_comp <- if (!is.null(fit_obj$or_blocks)) {
-    fit_obj$or_blocks[avail_target_ids]
+  or_Needed <- identical(est_method, "reg") || identical(est_method, "dr")
+  non_target_use <- if (or_Needed && length(non_target_ids) > 0L) {
+    as.character(non_target_ids)
   } else {
-    stats::setNames(avail_target_ids, avail_target_ids)
+    character(0)
   }
-  for (cid in avail_target_ids) {
+  all_or_ids <- c(avail_target_ids, non_target_use)
+  or_blocks_all <- if (!is.null(fit_obj$or_blocks)) {
+    fit_obj$or_blocks[all_or_ids]
+  } else {
+    stats::setNames(all_or_ids, all_or_ids)
+  }
+
+  build_complete_cell_for_id <- function(cid, allow_empty_sw = FALSE) {
     cl <- all_cand_cells[[cid]]
     dy <- as.double(panel$Y[, cl$t_idx] - panel$Y[, cl$t_prev_idx])
     des <- static_extract_reference_design(
@@ -136,7 +140,7 @@ compare_static_public_complete <- function(panel,
     if (ncol(Z_safe) > 0L) {
       Z_safe[cl$R == 0L, ] <- 0.0
     }
-    comp_cells[[cid]] <- static_complete_cell(
+    static_complete_cell(
       cell_id = cid,
       d = cl$d,
       sigma = cl$sigma,
@@ -150,32 +154,102 @@ compare_static_public_complete <- function(panel,
       Z = Z_safe,
       X_or_tilde = X_safe,
       Z_or = Z_safe,
-      or_block = or_blocks_comp[[cid]]
+      or_block = or_blocks_all[[cid]],
+      allow_empty_switchers = allow_empty_sw
     )
+  }
+
+  comp_cells <- lapply(avail_target_ids, build_complete_cell_for_id, allow_empty_sw = FALSE)
+  names(comp_cells) <- avail_target_ids
+  non_target_comp_cells <- if (length(non_target_use) > 0L) {
+    out_nt <- lapply(non_target_use, build_complete_cell_for_id, allow_empty_sw = TRUE)
+    names(out_nt) <- non_target_use
+    out_nt
+  } else {
+    NULL
   }
 
   comp_fit <- static_complete_fit(
     cells = comp_cells,
-    or_blocks = or_blocks_comp,
+    or_blocks = or_blocks_all,
     method = est_method,
     glm_control = glm_control,
     rank_tol = rank_tol,
     unit_id = panel$unit_id,
     cluster = NULL,
     aggregate_cells = avail_target_ids,
-    aggregate_signs = fit_obj$sigma
+    aggregate_signs = fit_obj$sigma,
+    non_target_or_cells = non_target_comp_cells,
+    materialize_if = isTRUE(compute_inffunc)
   )
 
-  diff_tau <- max(abs(as.double(fit_obj$tau_hat[avail_target_ids]) - as.double(comp_fit$tau_hat[avail_target_ids])))
-  diff_theta <- max(abs(as.double(fit_obj$theta_hat[avail_target_ids]) - as.double(comp_fit$theta_hat[avail_target_ids])))
+  gs <- static_public_build_graphs_and_support(
+    panel = panel,
+    all_cand_cells = all_cand_cells,
+    target_ids = avail_target_ids,
+    non_target_ids = non_target_use
+  )
+  gmm_bounds_test <- gmm_bounds_control(
+    max_matrix_entries = 1e7,
+    max_batch_rows = panel$n,
+    max_targets = max(1L, length(avail_target_ids)),
+    max_open_clusters = panel$n,
+    allow_materialize_if = isTRUE(compute_inffunc),
+    max_materialized_if_entries = 1e7
+  )
+  gmm_acc_test <- static_graph_gmm_accuracy_control(
+    max_target_error_abs = chained_public_staging_envelope(),
+    max_target_error_se = NA_real_,
+    require_matching_scale = FALSE,
+    max_loading_error_abs = NULL
+  )
+  gen_fit <- static_missing_fit(
+    panel = panel,
+    target_cells = avail_target_ids,
+    all_cells = all_cand_cells[all_or_ids],
+    or_blocks = if (or_Needed) or_blocks_all else NULL,
+    role_graphs = gs$role_graphs_fit,
+    treatment_formula = if (est_method %in% c("ipw", "dr")) xformla_use else NULL,
+    outcome_formula = if (or_Needed) xformla_use else NULL,
+    selection_formula = NULL,
+    imputation_formula = NULL,
+    method = est_method,
+    route = "baseline",
+    weighting = "optimal",
+    glm_control = glm_control,
+    rank_tol = rank_tol,
+    bounds = gmm_bounds_test,
+    accuracy = gmm_acc_test,
+    cluster = NULL,
+    centered = FALSE,
+    aggregate_cells = avail_target_ids,
+    aggregate_signs = fit_obj$sigma[avail_target_ids],
+    materialize_if = isTRUE(compute_inffunc)
+  )
+
+  diff_tau <- max(
+    max(abs(as.double(fit_obj$tau_hat[avail_target_ids]) - as.double(comp_fit$tau_hat[avail_target_ids]))),
+    max(abs(as.double(fit_obj$tau_hat[avail_target_ids]) - as.double(gen_fit$tau_hat[avail_target_ids])))
+  )
+  diff_theta <- max(
+    max(abs(as.double(fit_obj$theta_hat[avail_target_ids]) - as.double(comp_fit$theta_hat[avail_target_ids]))),
+    max(abs(as.double(fit_obj$theta_hat[avail_target_ids]) - as.double(gen_fit$theta_hat[avail_target_ids])))
+  )
   diff_phi <- if (isTRUE(compute_inffunc) && !is.null(fit_obj$phi_tau)) {
-    max(abs(as.matrix(fit_obj$phi_tau[, avail_target_ids, drop = FALSE]) -
-              as.matrix(comp_fit$phi_tau[, avail_target_ids, drop = FALSE])))
+    max(
+      max(abs(as.matrix(fit_obj$phi_tau[, avail_target_ids, drop = FALSE]) -
+                as.matrix(comp_fit$phi_tau[, avail_target_ids, drop = FALSE]))),
+      max(abs(as.matrix(fit_obj$phi_tau[, avail_target_ids, drop = FALSE]) -
+                as.matrix(gen_fit$phi_tau[, avail_target_ids, drop = FALSE])))
+    )
   } else {
     NA_real_
   }
-  diff_agg <- if (!is.null(fit_obj$aggregate) && !is.null(comp_fit$aggregate)) {
-    abs(as.double(fit_obj$aggregate$delta_hat) - as.double(comp_fit$aggregate$delta_hat))
+  diff_agg <- if (!is.null(fit_obj$aggregate) && !is.null(comp_fit$aggregate) && !is.null(gen_fit$aggregate)) {
+    max(
+      abs(as.double(fit_obj$aggregate$delta_hat) - as.double(comp_fit$aggregate$delta_hat)),
+      abs(as.double(fit_obj$aggregate$delta_hat) - as.double(gen_fit$aggregate$delta_hat))
+    )
   } else {
     NA_real_
   }
@@ -192,14 +266,235 @@ compare_static_public_complete <- function(panel,
 
 complete_reduction_for_result <- function(res, data, formula) {
   panel <- static_panel_data(data, "id", "time", "y", "d")
+  cand_cells <- if (!is.null(res$fit$all_cells)) res$fit$all_cells else res$fit$cells
   compare_static_public_complete(
     panel = panel, fit_obj = res$fit, avail_target_ids = res$target_id,
     non_target_ids = res$request$non_target_or_cells,
-    all_cand_cells = res$fit$cells, xformla_use = formula,
+    all_cand_cells = cand_cells, xformla_use = formula,
     est_method = res$request$est_method,
     glm_control = list(epsilon = 1e-12, maxit = 50L, trace = FALSE),
     rank_tol = 1e-7, compute_inffunc = TRUE
   )
+}
+
+
+compare_static_public_against_general_route <- function(res,
+                                                        data,
+                                                        formula,
+                                                        clustervars = NULL,
+                                                        seed = NULL,
+                                                        tol = 1e-11) {
+  expect_s3_class(res$fit, "cdid_static_complete_fit")
+  expect_identical(res$diagnostics$backend_status, "accepted_static_complete_fit_integration")
+  expect_false(res$diagnostics$gmm_executed)
+  expect_identical(res$diagnostics$backend_diagnostics$backend, "static_complete_fit")
+  expect_identical(res$diagnostics$backend_diagnostics$backend_status, "accepted_static_complete_fit_integration")
+  expect_false(res$diagnostics$backend_diagnostics$gmm_executed)
+  expect_identical(
+    res$diagnostics$backend_diagnostics$gmm_execution_status,
+    "not_applicable_complete_data_baseline_reduction"
+  )
+  expect_true(is.na(res$diagnostics$backend_diagnostics$n_links))
+  expect_true(is.na(res$diagnostics$backend_diagnostics$overid_df))
+  expect_null(res$diagnostics$backend_diagnostics$gmm_diagnostics)
+
+  panel <- static_panel_data(data, "id", "time", "y", "d")
+  avail_target_ids <- res$target_id[res$available]
+  non_target_ids <- res$request$non_target_or_cells
+  cand_obj <- static_transition_cells(
+    panel,
+    t = rep(panel$dates_num[-1L], each = 2L),
+    d = rep(0:1, length(panel$dates_num) - 1L),
+    cell_id = as.vector(rbind(
+      paste0("t", panel$date_labels[-1L], "_entry"),
+      paste0("t", panel$date_labels[-1L], "_exit")
+    ))
+  )
+  all_cand_cells <- cand_obj$cells
+  or_blocks_use <- res$fit$or_blocks
+  all_fit_ids <- c(avail_target_ids, non_target_ids)
+  use_or <- identical(res$request$est_method, "reg") || identical(res$request$est_method, "dr")
+  gs <- static_public_build_graphs_and_support(
+    panel = panel,
+    all_cand_cells = all_cand_cells,
+    target_ids = res$target_id,
+    non_target_ids = non_target_ids
+  )
+  all_declared_available <- all(res$available)
+  comp_if <- isTRUE(res$request$compute_inffunc)
+
+  gmm_bounds_test <- gmm_bounds_control(
+    max_matrix_entries = 1e7,
+    max_batch_rows = panel$n,
+    max_targets = max(1L, length(avail_target_ids)),
+    max_open_clusters = panel$n,
+    allow_materialize_if = comp_if,
+    max_materialized_if_entries = 1e7
+  )
+  gmm_acc_test <- static_graph_gmm_accuracy_control(
+    max_target_error_abs = chained_public_staging_envelope(),
+    max_target_error_se = NA_real_,
+    require_matching_scale = FALSE,
+    max_loading_error_abs = NULL
+  )
+  gen_fit <- static_missing_fit(
+    panel = panel,
+    target_cells = avail_target_ids,
+    all_cells = all_cand_cells[all_fit_ids],
+    or_blocks = if (use_or) or_blocks_use[all_fit_ids] else NULL,
+    role_graphs = gs$role_graphs_fit,
+    treatment_formula = if (res$request$est_method %in% c("ipw", "dr")) formula else NULL,
+    outcome_formula = if (use_or) formula else NULL,
+    selection_formula = NULL,
+    imputation_formula = NULL,
+    method = res$request$est_method,
+    route = "baseline",
+    weighting = res$request$gmm_weighting$requested,
+    glm_control = list(epsilon = 1e-12, maxit = 50L, trace = FALSE),
+    rank_tol = 1e-7,
+    bounds = gmm_bounds_test,
+    accuracy = gmm_acc_test,
+    cluster = NULL,
+    centered = FALSE,
+    aggregate_cells = if (all_declared_available) avail_target_ids else NULL,
+    aggregate_signs = if (all_declared_available) res$sigma[avail_target_ids] else NULL,
+    materialize_if = comp_if
+  )
+
+  J <- length(res$target_id)
+  att_gen <- stats::setNames(rep(NA_real_, J), res$target_id)
+  theta_gen <- stats::setNames(rep(NA_real_, J), res$target_id)
+  att_gen[avail_target_ids] <- as.double(gen_fit$tau_hat[avail_target_ids])
+  theta_gen[avail_target_ids] <- as.double(gen_fit$theta_hat[avail_target_ids])
+
+  expect_identical(is.na(res$att), is.na(att_gen))
+  expect_equal(res$att[avail_target_ids], att_gen[avail_target_ids], tolerance = tol)
+  expect_equal(res$theta_hat[avail_target_ids], theta_gen[avail_target_ids], tolerance = tol)
+  expect_identical(res$available, !is.na(att_gen))
+
+  if (comp_if) {
+    inffunc_gen <- matrix(
+      NA_real_,
+      nrow = panel$n,
+      ncol = J,
+      dimnames = list(as.character(panel$unit_id), res$target_id)
+    )
+    phi_avail_gen <- as.matrix(gen_fit$phi_tau[, avail_target_ids, drop = FALSE])
+    inffunc_gen[, avail_target_ids] <- phi_avail_gen
+    expect_equal(
+      res$inffunc[, avail_target_ids, drop = FALSE],
+      inffunc_gen[, avail_target_ids, drop = FALSE],
+      tolerance = tol
+    )
+
+    cl_vec <- if (!is.null(clustervars)) {
+      static_public_extract_clusters(data, panel, "id", clustervars)$cluster_vec
+    } else {
+      NULL
+    }
+    agg_est_gen <- if (all_declared_available && !is.null(gen_fit$aggregate)) {
+      as.double(gen_fit$aggregate$delta_hat)
+    } else {
+      NULL
+    }
+    agg_if_gen <- if (all_declared_available && !is.null(gen_fit$aggregate) && !is.null(gen_fit$aggregate$phi)) {
+      as.double(gen_fit$aggregate$phi)
+    } else {
+      NULL
+    }
+    if (!is.null(seed) && isTRUE(res$bstrap)) {
+      set.seed(seed)
+    }
+    inf_gen <- static_public_inference(
+      estimates = att_gen[avail_target_ids],
+      if_matrix = phi_avail_gen,
+      unit_ids = panel$unit_id,
+      cluster_vec = cl_vec,
+      alp = res$alp,
+      bstrap = res$bstrap,
+      cband = res$cband,
+      biters = res$biters,
+      agg_estimate = agg_est_gen,
+      agg_if = agg_if_gen,
+      all_declared_available = all_declared_available
+    )
+
+    zcrit <- stats::qnorm(1.0 - res$alp / 2.0)
+    expect_equal(
+      res$V_analytical[avail_target_ids, avail_target_ids, drop = FALSE],
+      inf_gen$V_analytical[avail_target_ids, avail_target_ids, drop = FALSE],
+      tolerance = tol
+    )
+    expect_equal(
+      res$analytical_se[avail_target_ids],
+      inf_gen$analytical_se[avail_target_ids],
+      tolerance = tol
+    )
+    if (!isTRUE(res$bstrap) || !is.null(seed)) {
+      expect_equal(res$se[avail_target_ids], inf_gen$se[avail_target_ids], tolerance = tol)
+      expect_equal(
+        res$ci_lower[avail_target_ids],
+        att_gen[avail_target_ids] - zcrit * inf_gen$se[avail_target_ids],
+        tolerance = tol
+      )
+      expect_equal(
+        res$ci_upper[avail_target_ids],
+        att_gen[avail_target_ids] + zcrit * inf_gen$se[avail_target_ids],
+        tolerance = tol
+      )
+    }
+    if (isTRUE(res$bstrap) && !is.null(seed)) {
+      expect_equal(
+        res$bootstrap_se[avail_target_ids],
+        inf_gen$bootstrap_se[avail_target_ids],
+        tolerance = tol
+      )
+      if (isTRUE(res$cband) && all_declared_available) {
+        expect_equal(res$cband_crit_val, inf_gen$cband_crit_val, tolerance = tol)
+        expect_equal(
+          res$cband_lower[avail_target_ids],
+          att_gen[avail_target_ids] - inf_gen$cband_crit_val * inf_gen$se[avail_target_ids],
+          tolerance = tol
+        )
+        expect_equal(
+          res$cband_upper[avail_target_ids],
+          att_gen[avail_target_ids] + inf_gen$cband_crit_val * inf_gen$se[avail_target_ids],
+          tolerance = tol
+        )
+      }
+    }
+  } else {
+    expect_null(res$inffunc)
+    expect_null(res$V_analytical)
+  }
+
+  expect_identical(res$aggregate$available, all_declared_available)
+  if (all_declared_available) {
+    expect_equal(res$aggregate$estimate, as.double(gen_fit$aggregate$delta_hat), tolerance = tol)
+    expect_equal(res$aggregate$weights, gen_fit$aggregate$omega_hat, tolerance = tol)
+    expect_identical(res$aggregate$total_switchers, as.integer(gen_fit$aggregate$total_switchers))
+    expect_equal(res$aggregate$Pi_hat, as.double(gen_fit$aggregate$Pi_hat), tolerance = tol)
+    if (comp_if) {
+      zcrit <- stats::qnorm(1.0 - res$alp / 2.0)
+      expect_equal(as.double(res$aggregate$inffunc), as.double(gen_fit$aggregate$phi), tolerance = tol)
+      expect_equal(res$aggregate$analytical_se, inf_gen$agg_analytical_se, tolerance = tol)
+      if (!isTRUE(res$bstrap) || !is.null(seed)) {
+        expect_equal(res$aggregate$se, inf_gen$agg_se, tolerance = tol)
+        expect_equal(res$aggregate$ci_lower, agg_est_gen - zcrit * inf_gen$agg_se, tolerance = tol)
+        expect_equal(res$aggregate$ci_upper, agg_est_gen + zcrit * inf_gen$agg_se, tolerance = tol)
+      }
+      if (isTRUE(res$bstrap) && !is.null(seed)) {
+        expect_equal(res$aggregate$bootstrap_se, inf_gen$agg_bootstrap_se, tolerance = tol)
+      }
+    } else {
+      expect_null(res$aggregate$inffunc)
+    }
+  } else {
+    expect_true(is.na(res$aggregate$estimate))
+    expect_null(res$aggregate$inffunc)
+  }
+
+  invisible(TRUE)
 }
 
 test_that("independent static public inference reference has zero production symbols and att_gt signature is exact", {
@@ -563,6 +858,7 @@ test_that("complete-data all-pair static route reduces to static_complete_fit an
       expect_lt(red$max_abs_diff_theta, 1e-11)
       expect_lt(red$max_abs_diff_phi_tau, 1e-11)
       expect_lt(red$max_abs_diff_aggregate, 1e-11)
+      compare_static_public_against_general_route(res, df_c, ~ x1 + x2, tol = 1e-11)
     }
     # Single-cell complete-data reduction on the 4-period panel (all 6 pairs retained)
     res_single <- att_gt(
@@ -577,6 +873,7 @@ test_that("complete-data all-pair static route reduces to static_complete_fit an
     expect_lt(red_s$max_abs_diff_theta, 1e-11)
     expect_lt(red_s$max_abs_diff_phi_tau, 1e-11)
     expect_lt(red_s$max_abs_diff_aggregate, 1e-11)
+    compare_static_public_against_general_route(res_single, df_c, ~ x1 + x2, tol = 1e-11)
   }
 
   # 2-period absorbing entry equivalence with chained cohort pipeline (and att_gt(gname=...) when did is present)
@@ -604,6 +901,7 @@ test_that("complete-data all-pair static route reduces to static_complete_fit an
     expect_true(isTRUE(red_2p$checked))
     expect_lt(red_2p$max_abs_diff_tau, 1e-12)
     expect_lt(red_2p$max_abs_diff_phi_tau, 1e-12)
+    compare_static_public_against_general_route(r_d, df_2p, ~ x1, tol = 1e-12)
 
     if (requireNamespace("did", quietly = TRUE)) {
       r_g <- att_gt(
@@ -614,6 +912,259 @@ test_that("complete-data all-pair static route reduces to static_complete_fit an
       expect_equal(unname(r_d$att), unname(r_g$att), tolerance = 1e-11)
       expect_equal(unname(r_d$se), unname(r_g$se), tolerance = 1e-11)
       expect_equal(as.double(r_d$inffunc[, 1L]), as.double(r_g$inffunc[, 1L]), tolerance = 1e-11)
+    }
+  }
+})
+
+test_that("complete-data native baseline dispatch matches general route across non-target OR partitions, directions, clustering, seeded bootstrap, unavailable targets, point-only, and selection routes", {
+  fix <- make_static_public_fixture()
+  df_c <- fix$complete
+
+  # 1. Custom OR partition with non-target OR training cells (U \ A) on complete data
+  #    including both a non-empty switcher cell (t4_entry) and a stayer-only cell (t4_exit)
+  part_nt <- c(t3_entry = "b_entry", t3_exit = "b_exit", t4_entry = "b_entry", t4_exit = "b_exit")
+  for (meth in c("ipw", "reg", "dr")) {
+    res_nt <- att_gt(
+      yname = "y", tname = "time", idname = "id", dname = "d",
+      xformla = ~ x1 + x2, data = df_c,
+      est_method = meth, outcome_pooling = part_nt,
+      switch_times = 3, switchers = "both",
+      bstrap = FALSE, cband = FALSE
+    )
+    expect_identical(res_nt$target_id, c("t3_entry", "t3_exit"))
+    expect_identical(
+      res_nt$request$non_target_or_cells,
+      if (identical(meth, "ipw")) character(0) else c("t4_entry", "t4_exit")
+    )
+    red_nt <- complete_reduction_for_result(res_nt, df_c, ~ x1 + x2)
+    expect_true(isTRUE(red_nt$checked))
+    expect_lt(red_nt$max_abs_diff_tau, 1e-11)
+    expect_lt(red_nt$max_abs_diff_phi_tau, 1e-11)
+    compare_static_public_against_general_route(res_nt, df_c, ~ x1 + x2, tol = 1e-11)
+  }
+
+  # 2. Direction filters (up/entry, down/exit, both) across IPW/reg/DR on complete data
+  for (sw_dir in c("entry", "exit", "both")) {
+    for (meth in c("ipw", "reg", "dr")) {
+      res_dir <- att_gt(
+        yname = "y", tname = "time", idname = "id", dname = "d",
+        xformla = ~ x1, data = df_c,
+        est_method = meth, switchers = sw_dir,
+        bstrap = FALSE, cband = FALSE
+      )
+      compare_static_public_against_general_route(res_dir, df_c, ~ x1, tol = 1e-11)
+    }
+  }
+
+  # 3. Unit-level and clustered seeded multiplier bootstrap + simultaneous confidence bands
+  for (meth in c("ipw", "reg", "dr")) {
+    set.seed(812L)
+    res_bs_u <- att_gt(
+      yname = "y", tname = "time", idname = "id", dname = "d",
+      xformla = ~ x1 + x2, data = df_c,
+      est_method = meth, outcome_pooling = "pooled",
+      bstrap = TRUE, cband = TRUE, biters = 150
+    )
+    compare_static_public_against_general_route(
+      res_bs_u, df_c, ~ x1 + x2, clustervars = NULL, seed = 812L, tol = 1e-11
+    )
+
+    set.seed(813L)
+    res_bs_cl <- att_gt(
+      yname = "y", tname = "time", idname = "id", dname = "d",
+      xformla = ~ x1 + x2, data = df_c, clustervars = "cluster",
+      est_method = meth, outcome_pooling = "pooled",
+      bstrap = TRUE, cband = TRUE, biters = 150
+    )
+    compare_static_public_against_general_route(
+      res_bs_cl, df_c, ~ x1 + x2, clustervars = "cluster", seed = 813L, tol = 1e-11
+    )
+    expect_equal(res_bs_u$att, res_bs_cl$att, tolerance = 1e-14)
+    expect_equal(res_bs_u$inffunc, res_bs_cl$inffunc, tolerance = 1e-14)
+    expect_false(isTRUE(all.equal(res_bs_u$V_analytical, res_bs_cl$V_analytical)))
+  }
+
+  # 4. Unavailable targets on complete data (partial unavailability and all-unavailable)
+  set.seed(814L)
+  res_partial_unavail <- att_gt(
+    yname = "y", tname = "time", idname = "id", dname = "d",
+    xformla = ~ x1, data = df_c,
+    est_method = "dr", switchers = "both", switch_times = c(3, 4),
+    bstrap = TRUE, cband = TRUE, biters = 120
+  )
+  expect_identical(res_partial_unavail$target_id, c("t3_entry", "t3_exit", "t4_entry", "t4_exit"))
+  expect_identical(unname(res_partial_unavail$available), c(TRUE, TRUE, TRUE, FALSE))
+  expect_identical(unname(res_partial_unavail$support_status), c("ok", "ok", "ok", "empty_switchers"))
+  expect_true(is.na(res_partial_unavail$att[["t4_exit"]]))
+  expect_true(is.na(res_partial_unavail$cband_crit_val))
+  expect_false(res_partial_unavail$aggregate$available)
+  expect_true(is.na(res_partial_unavail$aggregate$estimate))
+  compare_static_public_against_general_route(
+    res_partial_unavail, df_c, ~ x1, seed = 814L, tol = 1e-11
+  )
+
+  res_all_unavail <- att_gt(
+    yname = "y", tname = "time", idname = "id", dname = "d",
+    xformla = ~ x1, data = df_c,
+    est_method = "dr", switchers = "exit", switch_times = 4,
+    bstrap = FALSE, cband = FALSE
+  )
+  expect_identical(res_all_unavail$target_id, "t4_exit")
+  expect_identical(unname(res_all_unavail$available), FALSE)
+  expect_identical(unname(res_all_unavail$support_status), "empty_switchers")
+  expect_null(res_all_unavail$fit)
+  expect_identical(res_all_unavail$diagnostics$backend_status, "accepted_static_complete_fit_integration")
+  expect_null(res_all_unavail$diagnostics$backend_diagnostics)
+  expect_false(res_all_unavail$diagnostics$gmm_executed)
+
+  # 5. Point-only (compute_inffunc = FALSE) on complete data does not materialize IF/cov matrices
+  for (meth in c("ipw", "reg", "dr")) {
+    res_full_c <- att_gt(
+      yname = "y", tname = "time", idname = "id", dname = "d",
+      xformla = ~ x1 + x2, data = df_c,
+      est_method = meth, outcome_pooling = part_nt,
+      switch_times = 3, switchers = "both",
+      bstrap = FALSE, cband = FALSE, compute_inffunc = TRUE
+    )
+    res_pt_c <- att_gt(
+      yname = "y", tname = "time", idname = "id", dname = "d",
+      xformla = ~ x1 + x2, data = df_c,
+      est_method = meth, outcome_pooling = part_nt,
+      switch_times = 3, switchers = "both",
+      bstrap = FALSE, cband = FALSE, compute_inffunc = FALSE
+    )
+    compare_static_public_against_general_route(res_pt_c, df_c, ~ x1 + x2, tol = 1e-11)
+    expect_equal(res_pt_c$att, res_full_c$att, tolerance = 1e-14)
+    expect_equal(res_pt_c$theta_hat, res_full_c$theta_hat, tolerance = 1e-14)
+    expect_equal(res_pt_c$aggregate$estimate, res_full_c$aggregate$estimate, tolerance = 1e-14)
+    expect_null(res_pt_c$inffunc)
+    expect_null(res_pt_c$V_analytical)
+    expect_null(res_pt_c$aggregate$inffunc)
+    expect_null(res_pt_c$fit$phi_theta)
+    expect_null(res_pt_c$fit$phi_tau)
+    expect_null(res_pt_c$fit$cov_theta)
+    expect_null(res_pt_c$fit$cov_tau)
+    expect_null(res_pt_c$fit$vhat_theta)
+    expect_null(res_pt_c$fit$vhat_tau)
+    expect_null(res_pt_c$fit$aggregate$phi)
+    if (!is.null(res_pt_c$fit$nuisance$logit)) {
+      for (lf in res_pt_c$fit$nuisance$logit) {
+        expect_null(lf$score_matrix)
+        expect_null(lf$ell_gamma)
+      }
+    }
+    if (!is.null(res_pt_c$fit$nuisance$or)) {
+      expect_null(res_pt_c$fit$nuisance$or$block_slope_scores)
+      expect_null(res_pt_c$fit$nuisance$or$block_ell_slope)
+      expect_null(res_pt_c$fit$nuisance$or$ell_alpha)
+    }
+  }
+
+  # Workspace & counted_work_limit checks remain active on complete-data baseline route
+  expect_error(
+    att_gt(
+      yname = "y", tname = "time", idname = "id", dname = "d",
+      xformla = ~ x1, data = df_c,
+      control = list(counted_work_limit = 10),
+      bstrap = FALSE, cband = FALSE
+    ),
+    class = "cdid_static_work_limit_error"
+  )
+  expect_error(
+    att_gt(
+      yname = "y", tname = "time", idname = "id", dname = "d",
+      xformla = ~ x1, data = df_c,
+      control = list(numeric_workspace_bytes = 16),
+      bstrap = FALSE, cband = FALSE
+    ),
+    class = "cdid_gmm_bound_error"
+  )
+
+  # 6. Selected imputation/selection models on complete data are NOT redirected to static_complete_fit
+  res_imp_c <- att_gt(
+    yname = "y", tname = "time", idname = "id", dname = "d",
+    xformla = ~ x1 + x2, data = df_c,
+    est_method = "dr",
+    selection = "conditional_mtar",
+    selection_est_method = "imputation",
+    bstrap = FALSE, cband = FALSE
+  )
+  expect_s3_class(res_imp_c$fit, "cdid_static_missing_fit")
+  expect_identical(res_imp_c$diagnostics$backend_status, "accepted_static_missing_fit_integration")
+  expect_true(res_imp_c$diagnostics$gmm_executed)
+  expect_identical(res_imp_c$request$route, "imputation")
+
+  for (sel_m in c("ipw", "dr")) {
+    expect_error(
+      att_gt(
+        yname = "y", tname = "time", idname = "id", dname = "d",
+        xformla = ~ x1 + x2, data = df_c,
+        est_method = "dr",
+        selection = "conditional_mtar",
+        selection_est_method = sel_m,
+        bstrap = FALSE, cband = FALSE
+      ),
+      class = "cdid_cp04_separation_error"
+    )
+  }
+
+  # 7. ggdid.cdid_static_att_gt has no unbound .data global variable
+  expect_false(
+    ".data" %in% codetools::findGlobals(ggdid.cdid_static_att_gt, merge = FALSE)$variables
+  )
+})
+
+test_that("complete baseline admission funds non-target OR cells in point-only and full-IF modes", {
+  df_c <- make_static_public_fixture()$complete
+  part_nt <- c(t3_entry = "b_entry", t3_exit = "b_exit", t4_entry = "b_entry", t4_exit = "b_exit")
+  fit_with_budget <- function(materialize_if, workspace_bytes = NULL) {
+    att_gt(
+      yname = "y", tname = "time", idname = "id", dname = "d",
+      xformla = ~ 1, data = df_c, est_method = "reg",
+      outcome_pooling = part_nt, switch_times = 3, switchers = "both",
+      bstrap = FALSE, cband = FALSE, compute_inffunc = materialize_if,
+      control = if (is.null(workspace_bytes)) NULL else list(numeric_workspace_bytes = workspace_bytes)
+    )
+  }
+
+  # N=96, U=4, J=2: each fitted/residual matrix has 384 entries.
+  # 1536 bytes admits each design and target IF (192 entries), but not U.
+  # 3072 admits either OR matrix individually; 8192 admits their sum plus G.
+  # The latter still cannot fund the live inputs, outputs and kernel scratch.
+  expect_length(unique(df_c$id), 96L)
+  for (materialize_if in c(FALSE, TRUE)) {
+    for (workspace_bytes in c(1536, 3072, 8192)) {
+      expect_error(
+        fit_with_budget(materialize_if, workspace_bytes),
+        class = "cdid_gmm_bound_error"
+      )
+    }
+
+    res_default <- fit_with_budget(materialize_if)
+    res_funded <- fit_with_budget(materialize_if, 2^24)
+    expect_s3_class(res_funded$fit, "cdid_static_complete_fit")
+    expect_identical(res_funded$request$non_target_or_cells, c("t4_entry", "t4_exit"))
+    expect_equal(dim(res_funded$fit$nuisance$or$fitted), c(96L, 4L))
+    expect_equal(dim(res_funded$fit$nuisance$or$residuals), c(96L, 4L))
+    expect_equal(res_funded$att, res_default$att, tolerance = 1e-12)
+    expect_equal(res_funded$theta_hat, res_default$theta_hat, tolerance = 1e-12)
+    expect_equal(res_funded$aggregate$estimate, res_default$aggregate$estimate, tolerance = 1e-12)
+    expect_equal(res_funded$inffunc, res_default$inffunc, tolerance = 1e-12)
+    expect_equal(res_funded$V_analytical, res_default$V_analytical, tolerance = 1e-12)
+    expect_equal(res_funded$aggregate$inffunc, res_default$aggregate$inffunc, tolerance = 1e-12)
+    if (materialize_if) {
+      expect_equal(dim(res_funded$fit$nuisance$or$ell_alpha), c(96L, 4L))
+      expect_false(is.null(res_funded$fit$aggregate$joint_cov))
+    } else {
+      expect_null(res_funded$inffunc)
+      expect_null(res_funded$V_analytical)
+      expect_null(res_funded$fit$phi_theta)
+      expect_null(res_funded$fit$phi_tau)
+      expect_null(res_funded$fit$cov_theta)
+      expect_null(res_funded$fit$cov_tau)
+      expect_null(res_funded$fit$aggregate$joint_if)
+      expect_null(res_funded$fit$aggregate$joint_cov)
+      expect_null(res_funded$fit$nuisance$or$ell_alpha)
     }
   }
 })

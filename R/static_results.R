@@ -334,6 +334,9 @@ print.summary.cdid_static_att_gt <- function(x, ...) {
   }
   cat("  GMM weighting: ", x$request$gmm_weighting$canonical,
       " (requested: \"", x$request$gmm_weighting$requested, "\")\n", sep = "")
+  if (identical(x$diagnostics$backend_status, "accepted_static_complete_fit_integration")) {
+    cat("  Backend execution: native complete-data baseline kernel (direct cell contrasts; pair-graph GMM not needed)\n")
+  }
   cat("  Study population: n = ", x$diagnostics$n_units, " units across T = ", x$diagnostics$n_dates,
       " dates (repeat-Y: ", x$diagnostics$n_repeat_outcome_units,
       ", single-Y: ", x$diagnostics$n_single_outcome_units,
@@ -387,6 +390,7 @@ ggdid.cdid_static_att_gt <- function(object, ...) {
       "cdid_static_plot_error"
     )
   }
+  .data <- NULL
   td <- tidy.cdid_static_att_gt(object)
   td_avail <- td[td$available & is.finite(td$estimate), , drop = FALSE]
   td_avail$direction_label <- ifelse(
@@ -400,12 +404,12 @@ ggdid.cdid_static_att_gt <- function(object, ...) {
     ggplot2::aes(
       x = .data$time,
       y = .data$estimate,
-       color = .data$direction_label,
+      color = .data$direction_label,
       shape = .data$direction_label
     )
   ) +
     ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
-    ggplot2::geom_point( position = ggplot2::position_dodge(width = 0.2), size = 2.6) +
+    ggplot2::geom_point(position = ggplot2::position_dodge(width = 0.2), size = 2.6) +
     ggplot2::geom_errorbar(
       ggplot2::aes(ymin = .data$conf.low, ymax = .data$conf.high),
       width = 0.15,

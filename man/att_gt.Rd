@@ -1048,8 +1048,8 @@ Supplying
 transition effects, adapting the static binary specialization of de
 Chaisemartin, D'Haultfoeuille, Pasquier, Sow and Vazquez-Bare (2026,
 arXiv:2201.06898v7, revised 2026-07-22; not their dynamic intertemporal paper)
-to incomplete panels using the chained GMM framework of Bellego, Benatia and
-Dortet-Bernadet (2025). In chained panel mode, supplying \code{dname} selects this static
+to complete and incomplete panels using the chained GMM framework of Bellego,
+Benatia and Dortet-Bernadet (2025). In chained panel mode, supplying \code{dname} selects this static
 route even when the binary treatment column is absorbing; \code{gname} retains
 the cohort \code{ATT(g, t)} route.
 
@@ -1082,7 +1082,13 @@ combined by GMM (\code{gmm_weighting = "optimal"} / \code{"two_step"} with
 \code{gmm_covariance = "tikhonov"}, or \code{"identity"}).
 
 Adjustments and pooling: \code{selection = "none"} (\code{selection_est_method = "ipw"})
-runs the baseline no-equation route. Its sufficient observation assumption is
+runs the baseline no-equation route. When all outcomes are observed
+(\code{all(O == 1)}), \code{att_gt(dname = ...)} dispatches directly to the
+complete-data baseline kernel (\code{static_complete_fit}, reporting
+\code{diagnostics$backend_status = "accepted_static_complete_fit_integration"}
+and \code{diagnostics$gmm_executed = FALSE}); when outcomes are missing, it
+combines observed pair changes through the chained GMM backend
+(\code{static_missing_fit}, \code{diagnostics$gmm_executed = TRUE}). Its sufficient observation assumption is
 constant pair-observation probability across reference covariates within each
 fixed role population, together with conditional mean-change representativeness
 of the observed pairs. Conditional representativeness alone does not establish

@@ -966,17 +966,27 @@ test_that("explicit IF materialization obeys bounds while callback-only inferenc
   }
 })
 
-test_that("admitted link_if_reader batch reuse computes q/j IFs once per batch and low-budget calls decline reuse with identical results", {
+test_that("admitted link_if_reader batch reuse computes q/j and reconstructed OR IFs once per batch and low-budget calls decline reuse with identical results", {
   fx <- build_interior_date_fixture()
 
-  ns <- environment(static_observation_adapter_fit)
-  orig_nuisance_if <- get("static_nuisance_if", envir = ns)
-  was_locked <- base::bindingIsLocked("static_nuisance_if", ns)
-  if (was_locked) base::unlockBinding("static_nuisance_if", ns)
+  ns_ad <- environment(static_observation_adapter_fit)
+  orig_nuisance_if <- get("static_nuisance_if", envir = ns_ad)
+  was_locked_ad <- base::bindingIsLocked("static_nuisance_if", ns_ad)
+  if (was_locked_ad) base::unlockBinding("static_nuisance_if", ns_ad)
+
+  ns_mf <- environment(static_missing_fit)
+  orig_recon_or_fit <- get("static_reconstructed_or_fit", envir = ns_mf)
+  was_locked_mf <- base::bindingIsLocked("static_reconstructed_or_fit", ns_mf)
+  if (was_locked_mf) base::unlockBinding("static_reconstructed_or_fit", ns_mf)
+
   on.exit({
-    if (base::bindingIsLocked("static_nuisance_if", ns)) base::unlockBinding("static_nuisance_if", ns)
-    assign("static_nuisance_if", orig_nuisance_if, envir = ns)
-    if (was_locked) base::lockBinding("static_nuisance_if", ns)
+    if (base::bindingIsLocked("static_nuisance_if", ns_ad)) base::unlockBinding("static_nuisance_if", ns_ad)
+    assign("static_nuisance_if", orig_nuisance_if, envir = ns_ad)
+    if (was_locked_ad) base::lockBinding("static_nuisance_if", ns_ad)
+
+    if (base::bindingIsLocked("static_reconstructed_or_fit", ns_mf)) base::unlockBinding("static_reconstructed_or_fit", ns_mf)
+    assign("static_reconstructed_or_fit", orig_recon_or_fit, envir = ns_mf)
+    if (was_locked_mf) base::lockBinding("static_reconstructed_or_fit", ns_mf)
   }, add = TRUE)
 
   sel_calls <- 0L
@@ -988,10 +998,28 @@ test_that("admitted link_if_reader batch reuse computes q/j IFs once per batch a
       imp_calls <<- imp_calls + 1L
     }
     orig_nuisance_if(fit, ids)
-  }, envir = ns)
-  if (was_locked) base::lockBinding("static_nuisance_if", ns)
+  }, envir = ns_ad)
+  if (was_locked_ad) base::lockBinding("static_nuisance_if", ns_ad)
 
-  run_fit <- function(bounds_arg, mat_if = TRUE) {
+  or_calls <- 0L
+  or_last_rows <- NULL
+  or_last_tensor <- NULL
+  or_last_cells <- NULL
+  assign("static_reconstructed_or_fit", function(...) {
+    res <- orig_recon_or_fit(...)
+    raw_cb <- res$if_callback
+    res$if_callback <- function(rows = seq_len(res$n), include_chi_A_tensor = FALSE) {
+      or_calls <<- or_calls + 1L
+      or_last_rows <<- rows
+      or_last_tensor <<- include_chi_A_tensor
+      or_last_cells <<- res$cell_ids
+      raw_cb(rows = rows, include_chi_A_tensor = include_chi_A_tensor)
+    }
+    res
+  }, envir = ns_mf)
+  if (was_locked_mf) base::lockBinding("static_reconstructed_or_fit", ns_mf)
+
+  run_fit <- function(bounds_arg, mat_if = TRUE, cluster_arg = NULL) {
     static_missing_fit(
       panel = fx$panel,
       target_cells = fx$t_cells,
@@ -1013,24 +1041,35 @@ test_that("admitted link_if_reader batch reuse computes q/j IFs once per batch a
       rank_tol = 1e-10,
       bounds = bounds_arg,
       accuracy = fx$acc,
+      cluster = cluster_arg,
       materialize_if = mat_if,
       aggregate_cells = c("c_3_0", "c_3_1"),
       aggregate_signs = c(1, -1)
     )
   }
 
-  # 1. Funded workspace budget admits batch reuse: 64 units / 15 batch_rows = 5 batches per pass
-  #    across 4 replay passes (2 covariance + 2 unit IF projection passes) -> 20 calls per fit
-  sel_calls <- 0L; imp_calls <- 0L
+  # 1. Funded workspace budget admits both q/j and compact OR batch reuse:
+  #    64 units / 15 batch_rows = 5 batches per pass across 4 replay passes
+  #    (2 covariance + 2 unit IF projection passes) -> 20 calls per fit (1 per batch,
+  #    instead of J = 2 calls per batch without OR reuse).
+  J_targets <- length(fx$t_cells$cell_ids)
+  expect_identical(J_targets, 2L)
+  sel_calls <- 0L; imp_calls <- 0L; or_calls <- 0L
   fit_funded <- run_fit(fx$bounds, mat_if = TRUE)
   n_batches_per_pass <- as.integer(ceiling(fx$panel$n / fx$bounds$max_batch_rows))
   expect_identical(n_batches_per_pass, 5L)
   expect_identical(sel_calls, 4L * n_batches_per_pass)
   expect_identical(imp_calls, 4L * n_batches_per_pass)
+  expect_identical(or_calls, 4L * n_batches_per_pass)
+  expect_identical(or_last_cells, c("c_3_0", "c_3_1", "c_4_0"))
+  expect_identical(or_last_tensor, FALSE)
 
   env_funded <- environment(fit_funded$link_if_callback)
   expect_true(isTRUE(env_funded$reuse_nuisance_if))
+  expect_true(isTRUE(env_funded$reuse_or_if))
   budget_info <- env_funded$nuisance_batch_budget
+  expect_true(isTRUE(budget_info$qj_admitted))
+  expect_true(isTRUE(budget_info$or_admitted))
   expect_identical(
     budget_info$Pq,
     length(fit_funded$nuisance$observation$selection_fit$layout$param_keys)
@@ -1039,6 +1078,25 @@ test_that("admitted link_if_reader batch reuse computes q/j IFs once per batch a
     budget_info$Pj,
     length(fit_funded$nuisance$observation$imputation_fit$layout$param_keys)
   )
+  expect_identical(budget_info$U_or, 3L)
+  expect_identical(budget_info$n_or_blocks, 2L)
+  expect_identical(budget_info$sum_p_or_blocks, 4L)
+  expect_gt(budget_info$or_holder_entries, 0)
+  expect_equal(
+    budget_info$holder_entries,
+    budget_info$qj_holder_entries + budget_info$or_holder_entries,
+    tolerance = 1e-15
+  )
+  expect_equal(
+    budget_info$qj_total_entries,
+    budget_info$consumer_entries + budget_info$producer_entries + budget_info$qj_holder_entries,
+    tolerance = 1e-15
+  )
+  expect_equal(
+    budget_info$or_total_entries,
+    budget_info$qj_total_entries + budget_info$or_holder_entries,
+    tolerance = 1e-15
+  )
   expect_equal(
     budget_info$total_entries,
     budget_info$consumer_entries + budget_info$producer_entries + budget_info$holder_entries,
@@ -1046,45 +1104,79 @@ test_that("admitted link_if_reader batch reuse computes q/j IFs once per batch a
   )
   expect_lte(budget_info$total_entries, fx$bounds$max_matrix_entries)
 
-  # Returned fit's adapter holder retains no B x P matrices
+  # Returned fit's adapter holder and compact OR holder retain no batch matrices
   env_ad_funded <- environment(fit_funded$nuisance$observation$with_if_batch)
   expect_false(env_ad_funded$batch_active)
   expect_null(env_ad_funded$batch_pos)
   expect_null(env_ad_funded$batch_sel_if)
   expect_null(env_ad_funded$batch_imp_if)
+  expect_false(env_funded$or_batch_active)
+  expect_null(env_funded$or_batch_pos)
+  expect_null(env_funded$or_batch_slice)
+  expect_null(fit_funded$nuisance$or$influence)
 
   # Single-batch reader replay calculates once per call and cleans up before returning
-  sel_calls <- 0L; imp_calls <- 0L
+  sel_calls <- 0L; imp_calls <- 0L; or_calls <- 0L
   b1 <- fit_funded$link_if_callback(1:15)
   expect_identical(sel_calls, 1L)
   expect_identical(imp_calls, 1L)
+  expect_identical(or_calls, 1L)
   expect_false(env_ad_funded$batch_active)
   expect_null(env_ad_funded$batch_sel_if)
   expect_null(env_ad_funded$batch_imp_if)
+  expect_false(env_funded$or_batch_active)
+  expect_null(env_funded$or_batch_pos)
+  expect_null(env_funded$or_batch_slice)
   b2 <- fit_funded$link_if_callback(1:15)
   expect_identical(sel_calls, 2L)
   expect_identical(imp_calls, 2L)
+  expect_identical(or_calls, 2L)
   expect_identical(b1, b2)
 
-  # 2. Tight workspace budget that funds the GMM solve itself but not the extra
-  #    producer + holder reservation privately declines reuse and matches results
+  # 2. Intermediate workspace budget that funds consumer + producer + q/j holder
+  #    but NOT the additional compact OR holder declines ONLY the OR optimization
+  #    while preserving admitted q/j batch reuse and exact numerical outputs.
+  bounds_qj_only <- fx$bounds
+  bounds_qj_only$max_matrix_entries <- as.integer(floor(budget_info$qj_total_entries))
+  expect_gte(bounds_qj_only$max_matrix_entries, budget_info$qj_total_entries)
+  expect_lt(bounds_qj_only$max_matrix_entries, budget_info$or_total_entries)
+
+  sel_calls <- 0L; imp_calls <- 0L; or_calls <- 0L
+  fit_qj_only <- run_fit(bounds_qj_only, mat_if = TRUE)
+  env_qj_only <- environment(fit_qj_only$link_if_callback)
+  expect_true(isTRUE(env_qj_only$reuse_nuisance_if))
+  expect_false(isTRUE(env_qj_only$reuse_or_if))
+  expect_identical(sel_calls, 4L * n_batches_per_pass)
+  expect_identical(imp_calls, 4L * n_batches_per_pass)
+  expect_identical(or_calls, J_targets * 4L * n_batches_per_pass)
+  expect_false(env_qj_only$or_batch_active)
+  expect_null(env_qj_only$or_batch_slice)
+
+  # 3. Tight workspace budget that funds the GMM solve itself but neither holder
+  #    privately declines both reuses and matches results.
   bounds_tight <- fx$bounds
   bounds_tight$max_matrix_entries <- as.integer(floor(budget_info$consumer_entries))
+  expect_lt(bounds_tight$max_matrix_entries, budget_info$qj_total_entries)
   expect_lt(bounds_tight$max_matrix_entries, budget_info$total_entries)
 
-  sel_calls <- 0L; imp_calls <- 0L
+  sel_calls <- 0L; imp_calls <- 0L; or_calls <- 0L
   fit_declined <- run_fit(bounds_tight, mat_if = TRUE)
   env_declined <- environment(fit_declined$link_if_callback)
   expect_false(isTRUE(env_declined$reuse_nuisance_if))
+  expect_false(isTRUE(env_declined$reuse_or_if))
   expect_gt(sel_calls, 4L * n_batches_per_pass)
   expect_gt(imp_calls, 4L * n_batches_per_pass)
+  expect_identical(or_calls, J_targets * 4L * n_batches_per_pass)
 
   env_ad_declined <- environment(fit_declined$nuisance$observation$with_if_batch)
   expect_false(env_ad_declined$batch_active)
   expect_null(env_ad_declined$batch_sel_if)
   expect_null(env_ad_declined$batch_imp_if)
+  expect_false(env_declined$or_batch_active)
+  expect_null(env_declined$or_batch_pos)
+  expect_null(env_declined$or_batch_slice)
 
-  # Exact agreement between funded reuse, declined reuse, and independent reference
+  # Exact agreement across funded reuse, q/j-only reuse, declined reuse, and independent reference
   rfit <- ref_static_missing_fit(
     panel = fx$panel,
     target_cells = fx$t_cells,
@@ -1108,18 +1200,44 @@ test_that("admitted link_if_reader batch reuse computes q/j IFs once per batch a
     aggregate_signs = c(1, -1)
   )
 
-  expect_identical(fit_funded$unit_id, fit_declined$unit_id)
-  expect_identical(fit_funded$cell_ids, fit_declined$cell_ids)
-  expect_equal(fit_funded$theta_hat, fit_declined$theta_hat, tolerance = 1e-14)
-  expect_equal(fit_funded$tau_hat, fit_declined$tau_hat, tolerance = 1e-14)
-  expect_equal(fit_funded$se_theta, fit_declined$se_theta, tolerance = 1e-14)
-  expect_equal(fit_funded$cov_theta, fit_declined$cov_theta, tolerance = 1e-14)
-  expect_equal(fit_funded$moment_covariance, fit_declined$moment_covariance, tolerance = 1e-14)
-  expect_equal(fit_funded$phi_theta, fit_declined$phi_theta, tolerance = 1e-14)
-  expect_equal(fit_funded$phi_tau, fit_declined$phi_tau, tolerance = 1e-14)
-  expect_equal(fit_funded$aggregate$delta_hat, fit_declined$aggregate$delta_hat, tolerance = 1e-14)
-  expect_equal(fit_funded$aggregate$se, fit_declined$aggregate$se, tolerance = 1e-14)
-  expect_equal(fit_funded$aggregate$phi, fit_declined$aggregate$phi, tolerance = 1e-14)
+  for (cand in list(fit_qj_only, fit_declined)) {
+    expect_identical(fit_funded$unit_id, cand$unit_id)
+    expect_identical(fit_funded$cell_ids, cand$cell_ids)
+    expect_identical(fit_funded$all_cell_ids, cand$all_cell_ids)
+    expect_identical(fit_funded$non_target_cell_ids, cand$non_target_cell_ids)
+    expect_equal(fit_funded$mhat, cand$mhat, tolerance = 1e-14)
+    expect_equal(fit_funded$moment_weights$Lambda, cand$moment_weights$Lambda, tolerance = 1e-14)
+    expect_equal(fit_funded$moment_covariance, cand$moment_covariance, tolerance = 1e-14)
+    expect_equal(fit_funded$theta_hat, cand$theta_hat, tolerance = 1e-14)
+    expect_equal(fit_funded$tau_hat, cand$tau_hat, tolerance = 1e-14)
+    expect_equal(fit_funded$se_theta, cand$se_theta, tolerance = 1e-14)
+    expect_equal(fit_funded$se_tau, cand$se_tau, tolerance = 1e-14)
+    expect_equal(fit_funded$cov_theta, cand$cov_theta, tolerance = 1e-14)
+    expect_equal(fit_funded$vhat_theta, cand$vhat_theta, tolerance = 1e-14)
+    expect_equal(fit_funded$cov_tau, cand$cov_tau, tolerance = 1e-14)
+    expect_equal(fit_funded$vhat_tau, cand$vhat_tau, tolerance = 1e-14)
+    expect_equal(fit_funded$phi_theta, cand$phi_theta, tolerance = 1e-14)
+    expect_equal(fit_funded$phi_tau, cand$phi_tau, tolerance = 1e-14)
+    expect_equal(fit_funded$nuisance$or$alpha_hat, cand$nuisance$or$alpha_hat, tolerance = 1e-14)
+    expect_equal(fit_funded$nuisance$or$b_hat, cand$nuisance$or$b_hat, tolerance = 1e-14)
+    expect_equal(fit_funded$nuisance$or$loadings, cand$nuisance$or$loadings, tolerance = 1e-14)
+    expect_equal(fit_funded$aggregate$delta_hat, cand$aggregate$delta_hat, tolerance = 1e-14)
+    expect_equal(fit_funded$aggregate$se, cand$aggregate$se, tolerance = 1e-14)
+    expect_equal(fit_funded$aggregate$variance, cand$aggregate$variance, tolerance = 1e-14)
+    expect_equal(fit_funded$aggregate$phi, cand$aggregate$phi, tolerance = 1e-14)
+    expect_equal(
+      fit_funded$aggregate$phi_components$cell_if_term,
+      cand$aggregate$phi_components$cell_if_term,
+      tolerance = 1e-14
+    )
+    expect_equal(
+      fit_funded$aggregate$phi_components$share_if_term,
+      cand$aggregate$phi_components$share_if_term,
+      tolerance = 1e-14
+    )
+    expect_equal(fit_funded$cell_summary, cand$cell_summary, tolerance = 1e-14)
+    expect_identical(fit_funded$diagnostics, cand$diagnostics)
+  }
 
   # Zero-outcome and single-outcome units retain finite, identical IFs
   zero_single_idx <- which(rowSums(fx$panel$O) <= 1L)
@@ -1133,8 +1251,249 @@ test_that("admitted link_if_reader batch reuse computes q/j IFs once per batch a
   expect_lt(max(abs(fit_funded$phi_theta - rfit$phi_theta)), 1e-10)
   expect_lt(max(abs(fit_declined$phi_theta - rfit$phi_theta)), 1e-10)
 
+  # 4. Scope, row-order, out-of-scope, tensor-request, and error-cleanup guarantees
+  #    - Returned nuisance$or$if_callback preserves its full contract and tensor support
+  or_Direct <- fit_funded$nuisance$or$if_callback(c(7L, 2L, 19L), include_chi_A_tensor = TRUE)
+  expect_identical(or_Direct$rows, c(7L, 2L, 19L))
+  expect_identical(colnames(or_Direct$chi_alpha), c("c_3_0", "c_3_1", "c_4_0"))
+  expect_true(all(c("chi_pi", "chi_z", "chi_mC", "chi_Cov", "chi_A_b_cell",
+                    "chi_B_cell", "chi_A_b", "chi_B", "chi_b", "chi_b_by_cell",
+                    "chi_alpha", "chi_A_cell", "chi_A") %in% names(or_Direct)))
+  expect_false(is.null(or_Direct$chi_A))
+  expect_identical(dim(or_Direct$chi_A$b_entry), c(3L, 2L, 2L))
+  expect_false(env_funded$or_batch_active)
+  expect_null(env_funded$or_batch_slice)
+
+  #    - Out-of-scope target centering callback call executes original callback directly
+  or_calls <- 0L
+  cc_out <- fit_funded$centered_links$c_3_0$if_callback(c(11L, 4L, 2L))
+  expect_identical(or_calls, 1L)
+  expect_identical(or_last_rows, c(11L, 4L, 2L))
+  expect_false(env_funded$or_batch_active)
+  expect_null(env_funded$or_batch_slice)
+  expect_equal(
+    cc_out$chi_stacked,
+    fit_declined$centered_links$c_3_0$if_callback(c(11L, 4L, 2L))$chi_stacked,
+    tolerance = 1e-14
+  )
+
+  #    - Permuted ordered row batch (m <= batch_rows) shares once per link_if_callback call
+  perm_batch <- c(14L, 2L, 63L, 1L, 9L, 28L)
+  or_calls <- 0L
+  l_perm_funded <- fit_funded$link_if_callback(perm_batch)
+  expect_identical(or_calls, 1L)
+  expect_identical(or_last_rows, perm_batch)
+  l_perm_declined <- fit_declined$link_if_callback(perm_batch)
+  expect_equal(l_perm_funded, l_perm_declined, tolerance = 1e-14)
+
+  #    - Request exceeding batch_rows (> 15) declines batch holder and calls J times
+  or_calls <- 0L
+  l_wide_funded <- fit_funded$link_if_callback(1:20)
+  expect_identical(or_calls, J_targets)
+  expect_false(env_funded$or_batch_active)
+  expect_null(env_funded$or_batch_slice)
+  expect_equal(l_wide_funded, fit_declined$link_if_callback(1:20), tolerance = 1e-14)
+
+  #    - Inside an active with_or_if_batch scope, non-matching/reordered rows and
+  #      tensor requests bypass the compact holder without corrupting it
+  or_calls <- 0L
+  env_funded$with_or_if_batch(
+    rows_pos = c(5L, 2L, 8L),
+    enabled = TRUE,
+    fn = function() {
+      expect_true(env_funded$or_batch_active)
+      expect_identical(env_funded$or_batch_pos, c(5L, 2L, 8L))
+      expect_null(env_funded$or_batch_slice)
+
+      s1 <- env_funded$or_fit_centering$if_callback(c(5L, 2L, 8L))
+      expect_identical(or_calls, 1L)
+      expect_identical(names(s1), c("chi_alpha", "chi_b"))
+      expect_identical(env_funded$or_batch_slice, s1)
+
+      # Second matching call reuses compact holder without invoking raw_or_if_callback
+      s2 <- env_funded$or_fit_centering$if_callback(c(5L, 2L, 8L))
+      expect_identical(or_calls, 1L)
+      expect_identical(s2, s1)
+
+      # Reordered rows (c(2L, 5L, 8L)) bypass holder and preserve cached slice for c(5L, 2L, 8L)
+      s_reord <- env_funded$or_fit_centering$if_callback(c(2L, 5L, 8L))
+      expect_identical(or_calls, 2L)
+      expect_identical(rownames(s_reord$chi_alpha), fx$panel$unit_id[c(2L, 5L, 8L)])
+      expect_identical(env_funded$or_batch_slice, s1)
+
+      # Different row subset bypasses holder and preserves cached slice
+      s_diff <- env_funded$or_fit_centering$if_callback(c(1L, 3L))
+      expect_identical(or_calls, 3L)
+      expect_identical( nrow(s_diff$chi_alpha), 2L)
+      expect_identical(env_funded$or_batch_slice, s1)
+
+      # Tensor request on matching rows bypasses compact holder and returns full tensor
+      s_tens <- env_funded$or_fit_centering$if_callback(c(5L, 2L, 8L), include_chi_A_tensor = TRUE)
+      expect_identical(or_calls, 4L)
+      expect_false(is.null(s_tens$chi_A))
+      expect_identical(env_funded$or_batch_slice, s1)
+    }
+  )
+  expect_false(env_funded$or_batch_active)
+  expect_null(env_funded$or_batch_pos)
+  expect_null(env_funded$or_batch_slice)
+
+  #    - Error cleanup: exception after populating compact holder clears holder state via on.exit
+  expect_error(
+    env_funded$with_or_if_batch(
+      rows_pos = 1:6,
+      enabled = TRUE,
+      fn = function() {
+        env_funded$or_fit_centering$if_callback(1:6)
+        expect_false(is.null(env_funded$or_batch_slice))
+        stop("simulated centering failure")
+      }
+    ),
+    "simulated centering failure"
+  )
+  expect_false(env_funded$or_batch_active)
+  expect_null(env_funded$or_batch_pos)
+  expect_null(env_funded$or_batch_slice)
+
+  #    - Invalid row index in link_if_callback errors cleanly and leaves holder cleared
+  expect_error(fit_funded$link_if_callback(0L), class = "cdid_static_missing_input_error")
+  expect_false(env_funded$or_batch_active)
+  expect_null(env_funded$or_batch_slice)
+
+  # 5. Point-only + clustered mode retains no full-N IF matrices while sharing OR IF per batch
+  cluster_vec <- sprintf("cl_%02d", ((seq_len(fx$panel$n) * 7L) %% 11L) + 1L)
+  bounds_pt <- fx$bounds
+  bounds_pt$allow_materialize_if <- FALSE
+  bounds_pt$max_materialized_if_entries <- 0L
+  or_calls <- 0L
+  fit_pt <- run_fit(bounds_pt, mat_if = FALSE, cluster_arg = cluster_vec)
+  # 2 covariance passes + 2 GMM projection passes + 2 cluster sandwich passes + 1 aggregate callback pass = 7 passes
+  expect_identical(or_calls, 7L * n_batches_per_pass)
+  expect_null(fit_pt$phi_theta)
+  expect_null(fit_pt$phi_tau)
+  expect_null(fit_pt$nuisance$or$influence)
+  expect_null(fit_pt$aggregate$phi)
+  expect_null(fit_pt$aggregate$phi_components)
+  expect_equal(fit_pt$theta_hat, fit_funded$theta_hat, tolerance = 1e-14)
+  expect_equal(fit_pt$aggregate$delta_hat, fit_funded$aggregate$delta_hat, tolerance = 1e-14)
+
   # Genuine bound refusal when workspace is below the GMM solver's own requirement
   bounds_unfunded_gmm <- fx$bounds
   bounds_unfunded_gmm$max_matrix_entries <- 100L
   expect_error(run_fit(bounds_unfunded_gmm, mat_if = FALSE), class = "cdid_gmm_bound_error")
+})
+
+test_that("reconstructed OR batch reuse holds across OR/DR, baseline/weighting/imputation/augmented routes, pair/date logits, and shared/separate blocks", {
+  fx <- build_interior_date_fixture()
+
+  ns_mf <- environment(static_missing_fit)
+  orig_recon_or_fit <- get("static_reconstructed_or_fit", envir = ns_mf)
+  was_locked_mf <- base::bindingIsLocked("static_reconstructed_or_fit", ns_mf)
+  if (was_locked_mf) base::unlockBinding("static_reconstructed_or_fit", ns_mf)
+  on.exit({
+    if (base::bindingIsLocked("static_reconstructed_or_fit", ns_mf)) base::unlockBinding("static_reconstructed_or_fit", ns_mf)
+    assign("static_reconstructed_or_fit", orig_recon_or_fit, envir = ns_mf)
+    if (was_locked_mf) base::lockBinding("static_reconstructed_or_fit", ns_mf)
+  }, add = TRUE)
+
+  or_calls <- 0L
+  assign("static_reconstructed_or_fit", function(...) {
+    res <- orig_recon_or_fit(...)
+    raw_cb <- res$if_callback
+    res$if_callback <- function(rows = seq_len(res$n), include_chi_A_tensor = FALSE) {
+      or_calls <<- or_calls + 1L
+      raw_cb(rows = rows, include_chi_A_tensor = include_chi_A_tensor)
+    }
+    res
+  }, envir = ns_mf)
+  if (was_locked_mf) base::lockBinding("static_reconstructed_or_fit", ns_mf)
+
+  n_batches_per_pass <- as.integer(ceiling(fx$panel$n / fx$bounds$max_batch_rows))
+  J_targets <- length(fx$t_cells$cell_ids)
+
+  route_specs <- list(
+    list(route = "baseline", sel_m = NULL, sel_p = NULL, imp_p = NULL, imp_s = NULL, blk = fx$or_blocks),
+    list(route = "baseline", sel_m = NULL, sel_p = NULL, imp_p = NULL, imp_s = NULL, blk = "separate"),
+    list(route = "weighting", sel_m = "pair_logit", sel_p = "within_group", imp_p = NULL, imp_s = NULL, blk = fx$or_blocks),
+    list(route = "weighting", sel_m = "independent_period_logit", sel_p = "pooled", imp_p = NULL, imp_s = NULL, blk = "separate"),
+    list(route = "imputation", sel_m = NULL, sel_p = NULL, imp_p = "within_group", imp_s = "per_period", blk = fx$or_blocks),
+    list(route = "augmented", sel_m = "pair_logit", sel_p = "within_group", imp_p = "within_group", imp_s = "per_period", blk = fx$or_blocks),
+    list(route = "augmented", sel_m = "independent_period_logit", sel_p = "pooled", imp_p = "pooled", imp_s = "per_change", blk = "separate")
+  )
+
+  for (sp in route_specs) {
+    for (meth in c("reg", "dr")) {
+      or_calls <- 0L
+      fit_on <- static_missing_fit(
+        panel = fx$panel,
+        target_cells = fx$t_cells,
+        all_cells = fx$all_cells,
+        or_blocks = sp$blk,
+        role_graphs = fx$role_graphs,
+        treatment_formula = ~ x1 + x2,
+        outcome_formula = ~ x1 + x2,
+        selection_formula = ~ x1,
+        imputation_formula = ~ x2,
+        method = meth,
+        route = sp$route,
+        selection_model = sp$sel_m,
+        selection_pooling = sp$sel_p,
+        imputation_pooling = sp$imp_p,
+        imputation_scale = sp$imp_s,
+        weighting = "optimal",
+        glm_control = fx$glm_ctrl,
+        rank_tol = 1e-10,
+        bounds = fx$bounds,
+        accuracy = fx$acc,
+        aggregate_cells = c("c_3_0", "c_3_1"),
+        aggregate_signs = c(1, -1)
+      )
+      env_on <- environment(fit_on$link_if_callback)
+      expect_true(isTRUE(env_on$reuse_or_if))
+      expect_identical(or_calls, 4L * n_batches_per_pass)
+
+      # Unfund the compact OR holder and verify J calls per batch + identical outputs
+      b_off <- fx$bounds
+      b_off$max_matrix_entries <- as.integer(floor(env_on$nuisance_batch_budget$qj_total_entries))
+      or_calls <- 0L
+      fit_off <- static_missing_fit(
+        panel = fx$panel,
+        target_cells = fx$t_cells,
+        all_cells = fx$all_cells,
+        or_blocks = sp$blk,
+        role_graphs = fx$role_graphs,
+        treatment_formula = ~ x1 + x2,
+        outcome_formula = ~ x1 + x2,
+        selection_formula = ~ x1,
+        imputation_formula = ~ x2,
+        method = meth,
+        route = sp$route,
+        selection_model = sp$sel_m,
+        selection_pooling = sp$sel_p,
+        imputation_pooling = sp$imp_p,
+        imputation_scale = sp$imp_s,
+        weighting = "optimal",
+        glm_control = fx$glm_ctrl,
+        rank_tol = 1e-10,
+        bounds = b_off,
+        accuracy = fx$acc,
+        aggregate_cells = c("c_3_0", "c_3_1"),
+        aggregate_signs = c(1, -1)
+      )
+      env_off <- environment(fit_off$link_if_callback)
+      expect_false(isTRUE(env_off$reuse_or_if))
+      if (sp$route != "baseline") {
+        expect_true(isTRUE(env_off$reuse_nuisance_if))
+      }
+      expect_identical(or_calls, J_targets * 4L * n_batches_per_pass)
+
+      expect_equal(fit_on$theta_hat, fit_off$theta_hat, tolerance = 1e-14)
+      expect_equal(fit_on$cov_theta, fit_off$cov_theta, tolerance = 1e-14)
+      expect_equal(fit_on$se_theta, fit_off$se_theta, tolerance = 1e-14)
+      expect_equal(fit_on$phi_theta, fit_off$phi_theta, tolerance = 1e-14)
+      expect_equal(fit_on$aggregate$delta_hat, fit_off$aggregate$delta_hat, tolerance = 1e-14)
+      expect_equal(fit_on$aggregate$se, fit_off$aggregate$se, tolerance = 1e-14)
+      expect_equal(fit_on$aggregate$phi, fit_off$aggregate$phi, tolerance = 1e-14)
+    }
+  }
 })

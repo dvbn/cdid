@@ -976,13 +976,16 @@ static_missing_wrap_centered_cell_links <- function(cc_obj, unit_id) {
 }
 
 # Simultaneous workspace admission for the optional adapter-owned batch holder
-# of built-in selection (`q`) and imputation (`j`) coefficient IF matrices.
-# Composes the live consumer reservation (max of moment-covariance streaming
-# and joint-GMM replay phases), the static producer scratch reservation inside
-# `link_if_reader`, and the new holder reservation (`B * (Pq + Pj)` plus owned
-# row key, dims, and dimnames metadata) against `bounds$max_matrix_entries`.
-# If the additional holder is not funded, reuse is privately declined without
-# altering chunk sizes, public bounds, or scientific behavior.
+# of built-in selection (`q`) and imputation (`j`) coefficient IF matrices and
+# the fit-owned compact batch holder of reconstructed OR IF (`chi_alpha`, `chi_b`)
+# arrays. Composes the live consumer reservation (max of moment-covariance
+# streaming and joint-GMM replay phases), the static producer scratch reservation
+# inside `link_if_reader`, the adapter q/j holder reservation (`B * (Pq + Pj)`
+# plus owned row key, dims, and dimnames metadata), and the compact OR holder
+# reservation (`B * (U + sum(p_block))` plus owned row key, dims, dimnames, and
+# list metadata) against `bounds$max_matrix_entries`.
+# If an additional holder is not funded, only that optimization is privately
+# declined without altering chunk sizes, public bounds, or scientific behavior.
 static_missing_admit_nuisance_batch_reuse <- function(
   n,
   batch_rows,
@@ -1008,44 +1011,80 @@ static_missing_admit_nuisance_batch_reuse <- function(
   Pq <- if (!is.null(sel_fit)) length(sel_fit$layout$param_keys) else 0L
   Pj <- if (!is.null(imp_fit)) length(imp_fit$layout$param_keys) else 0L
   P_tot <- as.integer(Pq + Pj)
+  use_or_fit <- isTRUE(m_info$use_or) && !is.null(or_fit)
+  n_all_cells <- if (use_or_fit) length(all_ids) else 0L
+  block_ps <- if (use_or_fit) unlist(or_fit$partition$block_p, use.names = FALSE) else integer(0L)
+  n_or_blocks <- length(block_ps)
+  sum_p_or_blocks <- if (n_or_blocks > 0L) sum(as.integer(block_ps)) else 0L
   max_e <- as.double(bounds$max_matrix_entries)
   B <- as.integer(batch_rows)
 
-  if (P_tot <= 0L || B <= 0L) {
+  if ((P_tot <= 0L && !use_or_fit) || B <= 0L) {
     return(list(
       admitted = FALSE,
+      qj_admitted = FALSE,
+      or_admitted = FALSE,
       Pq = as.integer(Pq),
       Pj = as.integer(Pj),
+      U_or = as.integer(n_all_cells),
+      n_or_blocks = as.integer(n_or_blocks),
+      sum_p_or_blocks = as.integer(sum_p_or_blocks),
       batch_rows = B,
+      qj_holder_entries = 0.0,
+      or_holder_entries = 0.0,
       holder_entries = 0.0,
       producer_entries = 0.0,
       consumer_entries = 0.0,
       cov_consumer_entries = 0.0,
       gmm_consumer_entries = 0.0,
+      qj_total_entries = 0.0,
+      or_total_entries = 0.0,
       total_entries = 0.0,
       max_matrix_entries = max_e
     ))
   }
 
   tryCatch({
-    P <- function(a, b, label) gmm_safe_product(a, b, max_e, label)
+    max_safe <- 2^53 - 1
+    P <- function(a, b, label) gmm_safe_product(a, b, max_safe, label)
     S <- function(vals, label) {
       tot <- sum(as.double(vals))
-      if (!is.finite(tot) || tot > 2^53 - 1 || tot > max_e) {
+      if (!is.finite(tot) || tot > max_safe) {
         cdid_gmm_abort(paste0(label, " exceeds `bounds$max_matrix_entries`."), "cdid_gmm_bound_error")
       }
       tot
     }
 
-    # 1. New holder reservation:
-    #    - B * (Pq + Pj) numeric entries for at most one selection and one imputation IF matrix
-    #    - B + 4 entries for the owned integer row-position key and two matrix dim vectors
-    #    - owned row/column-name vectors and small holder metadata per active fit
-    n_active_fits <- as.integer(Pq > 0L) + as.integer(Pj > 0L)
-    holder_numeric <- P(B, P_tot, "nuisance IF batch holder matrices")
-    holder_key_dim <- as.double(B) + 4.0
-    holder_meta <- P(n_active_fits, B, "nuisance IF batch holder rownames") + as.double(P_tot) + 8.0
-    holder_entries <- S(c(holder_numeric, holder_key_dim, holder_meta), "new holder reservation")
+    # 1a. Adapter-owned q/j coefficient IF batch holder reservation:
+    #     - B * (Pq + Pj) numeric entries for at most one selection and one imputation IF matrix
+    #     - B + 4 entries for the owned integer row-position key and two matrix dim vectors
+    #     - owned row/column-name vectors and small holder metadata per active fit
+    if (P_tot > 0L) {
+      n_active_fits <- as.integer(Pq > 0L) + as.integer(Pj > 0L)
+      holder_numeric <- P(B, P_tot, "nuisance IF batch holder matrices")
+      holder_key_dim <- as.double(B) + 4.0
+      holder_meta <- P(n_active_fits, B, "nuisance IF batch holder rownames") + as.double(P_tot) + 8.0
+      qj_holder_entries <- S(c(holder_numeric, holder_key_dim, holder_meta), "new holder reservation")
+    } else {
+      qj_holder_entries <- 0.0
+    }
+
+    # 1b. Fit-owned compact reconstructed-OR batch holder reservation (when OR/DR active):
+    #     - B * (U + sum(p_block)) numeric entries for `chi_alpha` (B x U) and `chi_b` blocks (B x p_b)
+    #     - B + 2 * (1 + n_or_blocks) entries for the owned integer row-position key and matrix dim vectors
+    #     - owned row/column-name vectors and list metadata for `chi_alpha` and `chi_b`
+    if (use_or_fit) {
+      or_holder_numeric <- P(B, n_all_cells + sum_p_or_blocks, "reconstructed OR batch holder matrices")
+      or_holder_key_dim <- as.double(B) + 2.0 * (1.0 + as.double(n_or_blocks))
+      or_holder_meta <- P(1L + n_or_blocks, B, "reconstructed OR batch holder rownames") +
+        as.double(n_all_cells + sum_p_or_blocks) + 2.0 * as.double(n_or_blocks) + 8.0
+      or_holder_entries <- S(
+        c(or_holder_numeric, or_holder_key_dim, or_holder_meta),
+        "reconstructed OR batch holder reservation"
+      )
+    } else {
+      or_holder_entries <- 0.0
+    }
 
     # 2. Static producer scratch reservation coexisting during `link_if_reader(idx)`:
     #    - Assembled link IF matrix `out` (B x m_R) allocated inside the `with_if_batch`
@@ -1072,12 +1111,9 @@ static_missing_admit_nuisance_batch_reuse <- function(
     cell_center_entries <- P(B, 3L * K_cell_max + 2L, "target-cell link centering scratch")
 
     #    - Reconstructed OR batch callback (`or_fit$if_callback`) when active
-    if (isTRUE(m_info$use_or) && !is.null(or_fit)) {
-      n_all_cells <- length(all_ids)
+    if (use_or_fit) {
       sum_p_or_cells <- sum(vapply(all_ids, function(cid) ncol(or_designs[[cid]]$Z), integer(1L)))
-      block_ps <- unlist(or_fit$partition$block_p, use.names = FALSE)
-      sum_p_or_blocks <- if (length(block_ps)) sum(as.integer(block_ps)) else 0L
-      max_p_or <- if (length(block_ps)) max(0L, as.integer(block_ps)) else 0L
+      max_p_or <- if (n_or_blocks > 0L) max(0L, as.integer(block_ps)) else 0L
       or_entries <- P(
         B,
         3L * n_all_cells + 4L * sum_p_or_cells + 3L * sum_p_or_blocks + 5L * max_p_or,
@@ -1205,35 +1241,69 @@ static_missing_admit_nuisance_batch_reuse <- function(
     )
 
     consumer_entries <- max(cov_consumer_entries, gmm_consumer_entries)
-    total_entries <- S(
-      c(consumer_entries, producer_entries, holder_entries),
-      "simultaneous consumer + producer + holder reservation"
+    base_entries <- S(
+      c(consumer_entries, producer_entries),
+      "simultaneous consumer + producer reservation"
     )
+    qj_total_entries <- S(
+      c(base_entries, qj_holder_entries),
+      "simultaneous consumer + producer + q/j holder reservation"
+    )
+    or_total_entries <- S(
+      c(base_entries, qj_holder_entries, or_holder_entries),
+      "simultaneous consumer + producer + q/j holder + OR holder reservation"
+    )
+    holder_entries <- S(
+      c(qj_holder_entries, or_holder_entries),
+      "combined nuisance and OR holder reservation"
+    )
+    total_entries <- or_total_entries
+
+    qj_admitted <- (P_tot > 0L) && is.finite(qj_total_entries) && (qj_total_entries <= max_e)
+    or_admitted <- use_or_fit && is.finite(or_total_entries) && (or_total_entries <= max_e)
 
     list(
-      admitted = is.finite(total_entries) && (total_entries <= max_e),
+      admitted = qj_admitted,
+      qj_admitted = qj_admitted,
+      or_admitted = or_admitted,
       Pq = as.integer(Pq),
       Pj = as.integer(Pj),
+      U_or = as.integer(n_all_cells),
+      n_or_blocks = as.integer(n_or_blocks),
+      sum_p_or_blocks = as.integer(sum_p_or_blocks),
       batch_rows = B,
+      qj_holder_entries = qj_holder_entries,
+      or_holder_entries = or_holder_entries,
       holder_entries = holder_entries,
       producer_entries = producer_entries,
       consumer_entries = consumer_entries,
       cov_consumer_entries = cov_consumer_entries,
       gmm_consumer_entries = gmm_consumer_entries,
+      qj_total_entries = qj_total_entries,
+      or_total_entries = or_total_entries,
       total_entries = total_entries,
       max_matrix_entries = max_e
     )
   }, error = function(e) {
     list(
       admitted = FALSE,
+      qj_admitted = FALSE,
+      or_admitted = FALSE,
       Pq = as.integer(Pq),
       Pj = as.integer(Pj),
+      U_or = as.integer(n_all_cells),
+      n_or_blocks = as.integer(n_or_blocks),
+      sum_p_or_blocks = as.integer(sum_p_or_blocks),
       batch_rows = B,
+      qj_holder_entries = NA_real_,
+      or_holder_entries = NA_real_,
       holder_entries = NA_real_,
       producer_entries = NA_real_,
       consumer_entries = NA_real_,
       cov_consumer_entries = NA_real_,
       gmm_consumer_entries = NA_real_,
+      qj_total_entries = NA_real_,
+      or_total_entries = NA_real_,
       total_entries = NA_real_,
       max_matrix_entries = max_e
     )
@@ -1554,6 +1624,11 @@ static_missing_fit <- function(panel,
 
   # 5. Reconstruct stayer OR across U and center cell links on A
   or_fit <- NULL
+  raw_or_if_callback <- NULL
+  or_fit_centering <- NULL
+  or_batch_active <- FALSE
+  or_batch_pos <- NULL
+  or_batch_slice <- NULL
   centered_by_cell <- vector("list", length(target_ids))
   names(centered_by_cell) <- target_ids
   raw_links_by_cell <- vector("list", length(all_ids))
@@ -1622,6 +1697,31 @@ static_missing_fit <- function(panel,
       materialize_if = FALSE
     )
 
+    # Private internal view of `or_fit` for target-cell centering inside
+    # `link_if_reader`. Retains the original `or_fit` and its complete callback
+    # contract in `nuisance$or`, while sharing only `chi_alpha` and `chi_b`
+    # across target cells within one admitted ordered row batch.
+    raw_or_if_callback <- or_fit$if_callback
+    or_fit_centering <- or_fit
+    or_fit_centering$if_callback <- function(rows = seq_len(n), include_chi_A_tensor = FALSE) {
+      if (!or_batch_active || !identical(include_chi_A_tensor, FALSE)) {
+        return(raw_or_if_callback(rows = rows, include_chi_A_tensor = include_chi_A_tensor))
+      }
+      rows_int <- static_reconstructed_or_validate_rows(rows, n)
+      if (!identical(rows_int, or_batch_pos)) {
+        return(raw_or_if_callback(rows = rows_int, include_chi_A_tensor = FALSE))
+      }
+      if (is.null(or_batch_slice)) {
+        full_slice <- raw_or_if_callback(rows = rows_int, include_chi_A_tensor = FALSE)
+        or_batch_slice <<- list(
+          chi_alpha = full_slice$chi_alpha,
+          chi_b = full_slice$chi_b
+        )
+        full_slice <- NULL
+      }
+      or_batch_slice
+    }
+
     for (cid in target_ids) {
       cl <- target_map[[cid]]
       Z_or_c <- or_designs[[cid]]$Z
@@ -1687,7 +1787,7 @@ static_missing_fit <- function(panel,
       raw_links_by_cell[[cid]]$C_tilted_means <- C_links_c
 
       cc_obj <- static_reconstructed_or_center_cell_links(
-        or_fit = or_fit,
+        or_fit = or_fit_centering,
         cell_id = cid,
         method = m_info$gmm_method,
         t = cl$t_num,
@@ -1795,9 +1895,9 @@ static_missing_fit <- function(panel,
   # both caller authorization and allocation limits, with typed refusal.
   mat_gmm_if <- materialize_if
 
-  # Admit operation-local batch reuse of built-in selection/imputation IFs only
-  # when the simultaneous consumer + producer + holder reservation fits within
-  # `bounds$max_matrix_entries`.
+  # Admit operation-local batch reuse of built-in selection/imputation IFs and
+  # compact reconstructed-OR centering IFs only when the simultaneous
+  # consumer + producer + holder reservations fit within `bounds$max_matrix_entries`.
   nuisance_batch_budget <- static_missing_admit_nuisance_batch_reuse(
     n = n,
     batch_rows = batch_rows,
@@ -1819,6 +1919,28 @@ static_missing_fit <- function(panel,
     aggregate_cells = aggregate_cells
   )
   reuse_nuisance_if <- isTRUE(nuisance_batch_budget$admitted)
+  reuse_or_if <- isTRUE(nuisance_batch_budget$or_admitted)
+
+  with_or_if_batch <- function(rows_pos, fn, enabled = TRUE) {
+    if (!is.function(fn)) {
+      static_missing_abort("`fn` must be a function.", "cdid_static_missing_input_error")
+    }
+    if (!is.logical(enabled) || length(enabled) != 1L || is.na(enabled)) {
+      static_missing_abort("`enabled` must be a scalar logical.", "cdid_static_missing_control_error")
+    }
+    if (or_batch_active || !isTRUE(enabled) || is.null(or_fit) || length(rows_pos) > batch_rows) {
+      return(fn())
+    }
+    or_batch_active <<- TRUE
+    or_batch_pos <<- as.integer(rows_pos)
+    or_batch_slice <<- NULL
+    on.exit({
+      or_batch_active <<- FALSE
+      or_batch_pos <<- NULL
+      or_batch_slice <<- NULL
+    }, add = TRUE)
+    fn()
+  }
 
   # Row-batch IF reader for the stacked centered link vector psi^m
   link_if_reader <- function(rows = seq_len(n)) {
@@ -1828,14 +1950,20 @@ static_missing_fit <- function(panel,
       rows = unit_id[idx],
       enabled = reuse_nuisance_if && (m <= batch_rows),
       fn = function() {
-        out <- matrix(0.0, nrow = m, ncol = m_R, dimnames = list(unit_id_chr[idx], all_link_ids))
-        for (cid in target_ids) {
-          slice_c <- centered_by_cell[[cid]]$if_callback(idx)
-          rng <- cell_col_ranges[[cid]]
-          out[, rng$cols] <- slice_c$chi_stacked
-          slice_c <- NULL
-        }
-        out
+        with_or_if_batch(
+          rows_pos = idx,
+          enabled = reuse_or_if && (m <= batch_rows),
+          fn = function() {
+            out <- matrix(0.0, nrow = m, ncol = m_R, dimnames = list(unit_id_chr[idx], all_link_ids))
+            for (cid in target_ids) {
+              slice_c <- centered_by_cell[[cid]]$if_callback(idx)
+              rng <- cell_col_ranges[[cid]]
+              out[, rng$cols] <- slice_c$chi_stacked
+              slice_c <- NULL
+            }
+            out
+          }
+        )
       }
     )
   }

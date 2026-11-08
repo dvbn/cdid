@@ -7,6 +7,8 @@
 #   - `static_panel_data()`, `static_transition_cells()`,
 #     `static_observation_pair_accessor()`, `static_extract_reference_design()`
 #     (`R/static_panel_data.R`)
+#   - `static_complete_cell()`, `static_complete_fit()`,
+#     `static_complete_aggregate()` (`R/static_complete_core.R`)
 #   - `static_role_block_spec()`, `static_graph_gmm_accuracy_control()`,
 #     `solve_static_graph_gmm()` (`R/static_graph_gmm.R`)
 #   - `static_missing_fit()`, `static_missing_aggregate()`
@@ -1286,6 +1288,208 @@ static_public_inference <- function(estimates,
   )
 }
 
+static_public_fit_complete_baseline <- function(panel,
+                                                avail_target_ids,
+                                                non_target_ids,
+                                                all_cand_cells,
+                                                or_blocks_fit,
+                                                xformla_use,
+                                                use_or,
+                                                gate,
+                                                glm_ctrl,
+                                                rank_tol,
+                                                ws_entries,
+                                                all_declared_available,
+                                                avail_sigma,
+                                                compute_inffunc) {
+  n <- panel$n
+  all_fit_ids <- c(avail_target_ids, if (use_or) non_target_ids else character(0L))
+
+  # Known minimum live outputs, before extracting or copying any cell designs:
+  # G_matrix and, for OR, both fitted/residual matrices over all training cells.
+  gmm_safe_product(
+    n,
+    as.double(length(avail_target_ids)) + if (use_or) 2.0 * length(all_fit_ids) else 0.0,
+    max_entries = ws_entries,
+    label = "complete-data baseline live cell outputs"
+  )
+
+  build_complete_cell <- function(cid, allow_empty_switchers = FALSE) {
+    cl <- all_cand_cells[[cid]]
+    dy <- as.double(panel$Y[, cl$t_idx] - panel$Y[, cl$t_prev_idx])
+    des <- static_extract_reference_design(
+      panel = panel,
+      cell = cl,
+      formula = xformla_use,
+      role = if (!allow_empty_switchers && gate$est_method %in% c("ipw", "dr")) "treatment" else "outcome",
+      mask = (cl$R == 1L)
+    )
+    gmm_safe_product(
+      n,
+      ncol(des$X_tilde),
+      max_entries = ws_entries,
+      label = sprintf("complete-data cell `%s` design", cid)
+    )
+    X_safe <- des$X_tilde
+    X_safe[cl$R == 0L, ] <- 0.0
+    X_safe[, 1L] <- 1.0
+    Z_safe <- des$Z
+    if (ncol(Z_safe) > 0L) {
+      Z_safe[cl$R == 0L, ] <- 0.0
+    }
+    static_complete_cell(
+      cell_id = cid,
+      d = cl$d,
+      sigma = cl$sigma,
+      t = cl$t_num,
+      unit_id = panel$unit_id,
+      R = cl$R,
+      G = cl$G,
+      C = cl$C,
+      dy = dy,
+      X_tilde = X_safe,
+      Z = Z_safe,
+      allow_empty_switchers = allow_empty_switchers
+    )
+  }
+
+  comp_cells <- vector("list", length(avail_target_ids))
+  names(comp_cells) <- avail_target_ids
+  for (cid in avail_target_ids) {
+    comp_cells[[cid]] <- build_complete_cell(cid, allow_empty_switchers = FALSE)
+  }
+
+  nt_ids_use <- if (use_or) non_target_ids else character(0L)
+  nt_comp_cells <- NULL
+  if (length(nt_ids_use) > 0L) {
+    nt_comp_cells <- vector("list", length(nt_ids_use))
+    names(nt_comp_cells) <- nt_ids_use
+    for (cid in nt_ids_use) {
+      nt_comp_cells[[cid]] <- build_complete_cell(cid, allow_empty_switchers = TRUE)
+    }
+  }
+
+  or_blocks_use <- if (use_or) {
+    or_blocks_fit
+  } else {
+    stats::setNames(avail_target_ids, avail_target_ids)
+  }
+
+  # Admit the complete kernel's numeric payload before entering it. In
+  # particular, fitted/residual OR matrices span ALL training cells, even in
+  # point-only mode. Count aliased treatment/OR designs once; count masks as
+  # double entries conservatively. This bounds numeric payload, not peak RSS.
+  admission_cells <- c(comp_cells, nt_comp_cells)
+  k <- vapply(admission_cells, function(cl) as.double(ncol(cl$X_tilde)), numeric(1L))
+  p <- k - 1.0
+  k_target <- k[avail_target_ids]
+  max_k <- max(k)
+  n_target <- as.double(length(avail_target_ids))
+  n_training <- as.double(length(admission_cells))
+  use_logit <- gate$est_method %in% c("ipw", "dr")
+
+  # Live cell inputs (dy, masks, X, Z), G_matrix, and cell/aggregate vectors.
+  required_entries <- n * sum(4.0 + k + p) + n * n_target + 64.0 * n_target
+  if (use_or) {
+    block_p <- vapply(
+      split(p, unname(or_blocks_use[all_fit_ids])), max, numeric(1L)
+    )
+    # Fitted/residual matrices; cell and pooled WLS summaries/factors, means,
+    # intercepts and slopes, including the current block's merge/solve copies.
+    required_entries <- required_entries + 2.0 * n * n_training +
+      8.0 * sum((p + 1.0)^2) + 8.0 * sum((block_p + 1.0)^2)
+  }
+  if (use_logit) {
+    # Retained eta/prob/odds/active/score weights and Hessian/QR diagnostics.
+    required_entries <- required_entries + 5.0 * n * n_target +
+      8.0 * sum(k_target^2) + 16.0 * sum(k_target)
+  }
+  if (isTRUE(compute_inffunc)) {
+    # Two target IFs, four cell components, covariance input copy, four
+    # covariance/vhat matrices and their crossproduct scratch.
+    required_entries <- required_entries + 7.0 * n * n_target + 5.0 * n_target^2
+    if (use_logit) {
+      required_entries <- required_entries + 2.0 * n * sum(k_target)
+    }
+    if (use_or) {
+      # Local intercept IFs span all training cells; slope scores/IFs span blocks.
+      required_entries <- required_entries + n * n_training + 2.0 * n * sum(block_p)
+    }
+    if (all_declared_available) {
+      # Aggregate components, selected/centered IF and G copies, joint IF,
+      # joint covariance/vhat, and covariance conversion/crossproduct scratch.
+      required_entries <- required_entries + n * (5.0 * n_target + 5.0) +
+        3.0 * (n_target + 1.0)^2
+    }
+  }
+  # One active nuisance fit/solve: risk/weighted/QR designs, centered slopes,
+  # score/IF solve transposes and copies, factor scratch and unit work vectors.
+  required_entries <- required_entries + n * (16.0 * max_k + 32.0) + 16.0 * max_k^2
+  static_public_need(
+    is.finite(required_entries) && required_entries <= ws_entries,
+    "Complete-data baseline numeric outputs and scratch exceed `control$numeric_workspace_bytes`.",
+    "cdid_gmm_bound_error",
+    diagnostics = list(required_entries = required_entries, workspace_entries = ws_entries,
+                       n_target_cells = n_target, n_training_cells = n_training)
+  )
+
+  fit_obj <- static_complete_fit(
+    cells = comp_cells,
+    or_blocks = or_blocks_use,
+    method = gate$est_method,
+    glm_control = glm_ctrl,
+    rank_tol = rank_tol,
+    unit_id = panel$unit_id,
+    cluster = NULL,
+    aggregate_cells = if (all_declared_available) avail_target_ids else NULL,
+    aggregate_signs = if (all_declared_available) avail_sigma else NULL,
+    non_target_or_cells = nt_comp_cells,
+    materialize_if = isTRUE(compute_inffunc)
+  )
+
+  if (!is.null(fit_obj$phi_theta)) {
+    rownames(fit_obj$phi_theta) <- panel$unit_key
+  }
+  if (!is.null(fit_obj$phi_tau)) {
+    rownames(fit_obj$phi_tau) <- panel$unit_key
+  }
+  if (!is.null(fit_obj$aggregate) && !is.null(fit_obj$aggregate$phi)) {
+    names(fit_obj$aggregate$phi) <- panel$unit_key
+  }
+
+  fit_obj$route <- "baseline"
+  fit_obj$target_ids <- avail_target_ids
+  fit_obj$non_target_ids <- nt_ids_use
+  fit_obj$or_blocks <- if (use_or) or_blocks_fit else NULL
+  fit_obj$cells <- all_cand_cells[avail_target_ids]
+  fit_obj$all_cells <- all_cand_cells[all_fit_ids]
+  fit_obj$diagnostics <- list(
+    backend = "static_complete_fit",
+    backend_status = "accepted_static_complete_fit_integration",
+    method = fit_obj$method,
+    requested_method = gate$est_method_requested,
+    route = "baseline",
+    selection_model = NULL,
+    selection_pooling = NULL,
+    imputation_pooling = NULL,
+    imputation_scale = NULL,
+    weighting_requested = gate$ctrl_resolved$gmm_weighting$requested,
+    weighting_canonical = gate$ctrl_resolved$gmm_weighting$canonical,
+    gmm_executed = FALSE,
+    gmm_execution_status = "not_applicable_complete_data_baseline_reduction",
+    n_units = n,
+    n_zero_outcome_units = 0L,
+    n_single_outcome_units = 0L,
+    n_target_cells = length(avail_target_ids),
+    n_all_cells = length(all_fit_ids),
+    n_non_target_cells = length(nt_ids_use),
+    n_links = NA_integer_,
+    overid_df = NA_integer_,
+    gmm_diagnostics = NULL
+  )
+  fit_obj
+}
+
 # Main entry point called by `att_gt()` when `dname` is non-NULL.
 static_public_att_gt <- function(yname,
                                  tname,
@@ -1527,7 +1731,10 @@ static_public_att_gt <- function(yname,
   )
   rank_tol <- 1e-7
 
-  # 10. Fit available target cells via `static_missing_fit`
+  # 10. Fit available target cells via complete-data baseline kernel when
+  #     all outcomes are observed and `route == "baseline"`, or via `static_missing_fit`
+  #     when outcomes are missing or a conditional-MTAR correction is requested.
+  is_complete_baseline <- all(panel_obj$O == 1L) && identical(gate$route, "baseline")
   fit_obj <- NULL
 
   if (length(avail_target_ids) >= 1L) {
@@ -1540,57 +1747,76 @@ static_public_att_gt <- function(yname,
     )
     names(avail_sigma) <- avail_target_ids
 
-    gmm_bounds <- gmm_bounds_control(
-      max_matrix_entries = ws_entries,
-      max_batch_rows = chunk_rows,
-      max_targets = max(1L, length(avail_target_ids)),
-      max_open_clusters = cluster_info$n_clusters,
-      allow_materialize_if = isTRUE(compute_inffunc),
-      max_materialized_if_entries = min(as.double(n) * max(1.0, as.double(length(avail_target_ids))), ws_entries)
-    )
-    gmm_acc <- static_graph_gmm_accuracy_control(
-      max_target_error_abs = chained_public_staging_envelope(),
-      max_target_error_se = NA_real_,
-      max_orthogonality_defect = gate$ctrl_resolved$gmm_guard$max_orthogonality_defect,
-      min_certified_lambda_rel = gate$ctrl_resolved$gmm_guard$min_certified_lambda_rel,
-      max_factor_residual_rel = gate$ctrl_resolved$gmm_guard$max_factor_residual_rel,
-      min_rcond_R = gate$ctrl_resolved$gmm_guard$min_rcond_R,
-      min_rcond_U = gate$ctrl_resolved$gmm_guard$min_rcond_U,
-      min_sigma_rel_A = gate$ctrl_resolved$gmm_guard$min_sigma_rel_A,
-      max_kkt_residual_rel = gate$ctrl_resolved$gmm_guard$max_kkt_residual_rel,
-      max_loading_residual_rel = gate$ctrl_resolved$gmm_guard$max_loading_residual_rel,
-      require_matching_scale = FALSE,
-      max_loading_error_abs = NULL,
-      covariance_strategy = gate$ctrl_resolved$covariance_strategy
-    )
+    if (is_complete_baseline) {
+      fit_obj <- static_public_fit_complete_baseline(
+        panel = panel_obj,
+        avail_target_ids = avail_target_ids,
+        non_target_ids = or_res$non_target_ids,
+        all_cand_cells = all_cand$cells,
+        or_blocks_fit = or_blocks_fit,
+        xformla_use = xformla_use,
+        use_or = use_or,
+        gate = gate,
+        glm_ctrl = glm_ctrl,
+        rank_tol = rank_tol,
+        ws_entries = ws_entries,
+        all_declared_available = all_declared_available,
+        avail_sigma = avail_sigma,
+        compute_inffunc = isTRUE(compute_inffunc)
+      )
+    } else {
+      gmm_bounds <- gmm_bounds_control(
+        max_matrix_entries = ws_entries,
+        max_batch_rows = chunk_rows,
+        max_targets = max(1L, length(avail_target_ids)),
+        max_open_clusters = cluster_info$n_clusters,
+        allow_materialize_if = isTRUE(compute_inffunc),
+        max_materialized_if_entries = min(as.double(n) * max(1.0, as.double(length(avail_target_ids))), ws_entries)
+      )
+      gmm_acc <- static_graph_gmm_accuracy_control(
+        max_target_error_abs = chained_public_staging_envelope(),
+        max_target_error_se = NA_real_,
+        max_orthogonality_defect = gate$ctrl_resolved$gmm_guard$max_orthogonality_defect,
+        min_certified_lambda_rel = gate$ctrl_resolved$gmm_guard$min_certified_lambda_rel,
+        max_factor_residual_rel = gate$ctrl_resolved$gmm_guard$max_factor_residual_rel,
+        min_rcond_R = gate$ctrl_resolved$gmm_guard$min_rcond_R,
+        min_rcond_U = gate$ctrl_resolved$gmm_guard$min_rcond_U,
+        min_sigma_rel_A = gate$ctrl_resolved$gmm_guard$min_sigma_rel_A,
+        max_kkt_residual_rel = gate$ctrl_resolved$gmm_guard$max_kkt_residual_rel,
+        max_loading_residual_rel = gate$ctrl_resolved$gmm_guard$max_loading_residual_rel,
+        require_matching_scale = FALSE,
+        max_loading_error_abs = NULL,
+        covariance_strategy = gate$ctrl_resolved$covariance_strategy
+      )
 
-    fit_obj <- static_missing_fit(
-      panel = panel_obj,
-      target_cells = avail_target_ids,
-      all_cells = all_cand$cells[all_fit_ids],
-      or_blocks = or_blocks_fit,
-      role_graphs = graph_support$role_graphs_fit,
-      treatment_formula = if (gate$est_method %in% c("ipw", "dr")) xformla_use else NULL,
-      outcome_formula = if (use_or) xformla_use else NULL,
-      selection_formula = if (uses_q) sel_xformla_use else NULL,
-      imputation_formula = if (uses_j) xformla_use else NULL,
-      method = gate$est_method,
-      route = gate$route,
-      selection_model = gate$selection_model,
-      selection_pooling = gate$selection_pooling,
-      imputation_pooling = gate$imputation_pooling,
-      imputation_scale = gate$imputation_scale,
-      weighting = gate$ctrl_resolved$gmm_weighting$requested,
-      glm_control = glm_ctrl,
-      rank_tol = rank_tol,
-      bounds = gmm_bounds,
-      accuracy = gmm_acc,
-      cluster = NULL,
-      centered = FALSE,
-      aggregate_cells = if (all_declared_available) avail_target_ids else NULL,
-      aggregate_signs = if (all_declared_available) avail_sigma else NULL,
-      materialize_if = isTRUE(compute_inffunc)
-    )
+      fit_obj <- static_missing_fit(
+        panel = panel_obj,
+        target_cells = avail_target_ids,
+        all_cells = all_cand$cells[all_fit_ids],
+        or_blocks = or_blocks_fit,
+        role_graphs = graph_support$role_graphs_fit,
+        treatment_formula = if (gate$est_method %in% c("ipw", "dr")) xformla_use else NULL,
+        outcome_formula = if (use_or) xformla_use else NULL,
+        selection_formula = if (uses_q) sel_xformla_use else NULL,
+        imputation_formula = if (uses_j) xformla_use else NULL,
+        method = gate$est_method,
+        route = gate$route,
+        selection_model = gate$selection_model,
+        selection_pooling = gate$selection_pooling,
+        imputation_pooling = gate$imputation_pooling,
+        imputation_scale = gate$imputation_scale,
+        weighting = gate$ctrl_resolved$gmm_weighting$requested,
+        glm_control = glm_ctrl,
+        rank_tol = rank_tol,
+        bounds = gmm_bounds,
+        accuracy = gmm_acc,
+        cluster = NULL,
+        centered = FALSE,
+        aggregate_cells = if (all_declared_available) avail_target_ids else NULL,
+        aggregate_signs = if (all_declared_available) avail_sigma else NULL,
+        materialize_if = isTRUE(compute_inffunc)
+      )
+    }
   }
 
   # 11. Scatter fitted values into full declared target vector A (length J)
@@ -1842,7 +2068,13 @@ static_public_att_gt <- function(yname,
     ),
     diagnostics = list(
       benchmark = "source_static_no_carryover_known_binary_D",
-      backend_status = "accepted_static_missing_fit_integration",
+      backend = if (is_complete_baseline) "static_complete_fit" else "static_missing_fit",
+      backend_status = if (is_complete_baseline) {
+        "accepted_static_complete_fit_integration"
+      } else {
+        "accepted_static_missing_fit_integration"
+      },
+      gmm_executed = !is_complete_baseline && !is.null(fit_obj),
       n_units = n,
       n_dates = length(panel_obj$dates_num),
       n_zero_outcome_units = as.integer(sum(rowSums(panel_obj$O) == 0L)),

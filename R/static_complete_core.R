@@ -43,6 +43,10 @@ static_complete_abort <- function(message, class = character(), extra = list()) 
   ))
 }
 
+static_complete_scalar_logical <- function(x) {
+  is.logical(x) && is.null(dim(x)) && !is.object(x) && length(x) == 1L && !is.na(x)
+}
+
 static_complete_validate_glm_control <- function(glm_control) {
   if (missing(glm_control) || is.null(glm_control) || !is.list(glm_control) || is.object(glm_control)) {
     static_complete_abort(
@@ -241,7 +245,14 @@ static_complete_cell <- function(cell_id,
                                  Z = NULL,
                                  X_or_tilde = NULL,
                                  Z_or = NULL,
-                                 or_block = NULL) {
+                                 or_block = NULL,
+                                 allow_empty_switchers = FALSE) {
+  if (!static_complete_scalar_logical(allow_empty_switchers)) {
+    static_complete_abort(
+      "`allow_empty_switchers` must be a non-missing logical scalar.",
+      c("cdid_static_cell_error", "cdid_static_input_error")
+    )
+  }
   if (missing(cell_id) || !is.character(cell_id) || !is.null(dim(cell_id)) ||
       is.object(cell_id) || length(cell_id) != 1L || is.na(cell_id) || !nzchar(cell_id)) {
     static_complete_abort(
@@ -315,7 +326,7 @@ static_complete_cell <- function(cell_id,
   n_risk <- sum(R_int)
   n_switchers <- sum(G_int)
   n_stayers <- sum(C_int)
-  if (n_risk < 1L || n_switchers < 1L || n_stayers < 1L) {
+  if (n_risk < 1L || (!isTRUE(allow_empty_switchers) && n_switchers < 1L) || n_stayers < 1L) {
     static_complete_abort(
       sprintf(
         "Cell `%s` has insufficient empirical sample support (`n_risk = %d`, `n_switchers = %d`, `n_stayers = %d`): availability event E_n fails in this sample (sample-support obstruction, not population non-identification); unsupported cells are never silently dropped.",
@@ -404,12 +415,24 @@ static_complete_cell <- function(cell_id,
   )
 }
 
-static_complete_normalize_cell <- function(raw_cell, fallback_id = NULL, top_unit_id = NULL) {
+static_complete_normalize_cell <- function(raw_cell,
+                                           fallback_id = NULL,
+                                           top_unit_id = NULL,
+                                           allow_empty_switchers = FALSE) {
   if (inherits(raw_cell, "cdid_static_complete_cell")) {
     if (!is.null(fallback_id) && nzchar(fallback_id) && !identical(raw_cell$cell_id, fallback_id)) {
       static_complete_abort(
         sprintf("List name `%s` does not match `cell$cell_id` (`%s`).", fallback_id, raw_cell$cell_id),
         c("cdid_static_cell_error", "cdid_static_input_error")
+      )
+    }
+    if (!isTRUE(allow_empty_switchers) && raw_cell$n_switchers < 1L) {
+      static_complete_abort(
+        sprintf(
+          "Cell `%s` has insufficient empirical sample support (`n_risk = %d`, `n_switchers = %d`, `n_stayers = %d`): availability event E_n fails in this sample (sample-support obstruction, not population non-identification); unsupported cells are never silently dropped.",
+          raw_cell$cell_id, raw_cell$n_risk, raw_cell$n_switchers, raw_cell$n_stayers
+        ),
+        c("cdid_static_support_error", "cdid_ipw_pair_support_error", "cdid_ipw_support_error")
       )
     }
     return(raw_cell)
@@ -450,7 +473,8 @@ static_complete_normalize_cell <- function(raw_cell, fallback_id = NULL, top_uni
     Z = raw_cell$Z,
     X_or_tilde = raw_cell$X_or_tilde,
     Z_or = raw_cell$Z_or,
-    or_block = raw_cell$or_block
+    or_block = raw_cell$or_block,
+    allow_empty_switchers = allow_empty_switchers
   )
 }
 
@@ -660,7 +684,8 @@ static_complete_validate_inputs <- function(cells,
                                             glm_control,
                                             rank_tol,
                                             unit_id = NULL,
-                                            cluster = NULL) {
+                                            cluster = NULL,
+                                            non_target_or_cells = NULL) {
   m_info <- static_complete_validate_method(method)
   ctrl <- static_complete_validate_glm_control(glm_control)
   rtol <- static_complete_validate_rank_tol(rank_tol)
@@ -694,7 +719,8 @@ static_complete_validate_inputs <- function(cells,
     norm_cells[[j]] <- static_complete_normalize_cell(
       cells[[j]],
       fallback_id = fb,
-      top_unit_id = if (!is.null(top_uid)) top_uid$id else NULL
+      top_unit_id = if (!is.null(top_uid)) top_uid$id else NULL,
+      allow_empty_switchers = FALSE
     )
   }
 
@@ -733,12 +759,63 @@ static_complete_validate_inputs <- function(cells,
     }
   }
 
-  partition <- static_complete_validate_partition(norm_cells, or_blocks = or_blocks)
+  norm_non_target <- list()
+  non_target_ids <- character(0L)
+  if (!is.null(non_target_or_cells) && length(non_target_or_cells) > 0L) {
+    if (!is.list(non_target_or_cells) || is.object(non_target_or_cells)) {
+      static_complete_abort(
+        "`non_target_or_cells` must be NULL or a list of stayer training cell specifications.",
+        c("cdid_static_cell_error", "cdid_static_input_error")
+      )
+    }
+    nt_names <- names(non_target_or_cells)
+    if (!is.null(nt_names) && (anyNA(nt_names) || anyDuplicated(nt_names[nzchar(nt_names)]))) {
+      static_complete_abort(
+        "Names of `non_target_or_cells`, when supplied, must not be NA or duplicated.",
+        c("cdid_static_cell_error", "cdid_static_input_error")
+      )
+    }
+    norm_non_target <- vector("list", length(non_target_or_cells))
+    for (j in seq_along(non_target_or_cells)) {
+      fb <- if (!is.null(nt_names) && nzchar(nt_names[j])) nt_names[j] else NULL
+      norm_non_target[[j]] <- static_complete_normalize_cell(
+        non_target_or_cells[[j]],
+        fallback_id = fb,
+        top_unit_id = if (!is.null(top_uid)) top_uid$id else ref_uid$id,
+        allow_empty_switchers = TRUE
+      )
+      cj <- norm_non_target[[j]]
+      uid_j <- list(id = cj$unit_id, key = cj$unit_key, is_num = cj$unit_id_is_num, n = cj$n)
+      if (!static_complete_same_unit_id(ref_uid, uid_j)) {
+        static_complete_abort(
+          sprintf(
+            "Non-target OR cell `%s` `unit_id` does not match cell `%s` `unit_id`.",
+            cj$cell_id, cell_ids[1L]
+          ),
+          c("cdid_static_unit_id_error", "cdid_ipw_id_error", "cdid_static_input_error")
+        )
+      }
+    }
+    non_target_ids <- vapply(norm_non_target, `[[`, character(1L), "cell_id")
+    if (anyDuplicated(non_target_ids) || any(non_target_ids %in% cell_ids)) {
+      static_complete_abort(
+        "Declared `cells` and `non_target_or_cells` must have disjoint unique `cell_id` identifiers.",
+        c("cdid_static_cell_error", "cdid_static_input_error")
+      )
+    }
+    names(norm_non_target) <- non_target_ids
+  }
+
+  or_cells <- if (length(norm_non_target) > 0L) c(norm_cells, norm_non_target) else norm_cells
+  partition <- static_complete_validate_partition(or_cells, or_blocks = or_blocks)
   cluster_info <- static_complete_validate_cluster(cluster, n = ref_uid$n)
 
   list(
     cells = norm_cells,
     cell_ids = cell_ids,
+    non_target_cells = norm_non_target,
+    non_target_ids = non_target_ids,
+    or_cells = or_cells,
     n = ref_uid$n,
     unit_id = ref_uid$id,
     partition = partition,
@@ -754,7 +831,13 @@ static_complete_validate_inputs <- function(cells,
 # Reuses `ipw_nuisance_observer_fit_worker`, `ipw_nuisance_hessian_stage`,
 # `ipw_clip_logit`, `ipw_clip_odds_active`, and `ipw_clip_summary` from
 # R/chained_ipw_link.R with complete-data observation rates equal to 1.
-static_complete_fit_cell_logit <- function(cell, glm_control, rank_tol) {
+static_complete_fit_cell_logit <- function(cell, glm_control, rank_tol, materialize_if = TRUE) {
+  if (!static_complete_scalar_logical(materialize_if)) {
+    static_complete_abort(
+      "`materialize_if` must be a non-missing logical scalar.",
+      c("cdid_static_input_error")
+    )
+  }
   n <- cell$n
   n_num <- as.double(n)
   risk_idx <- which(cell$R == 1L)
@@ -844,11 +927,15 @@ static_complete_fit_cell_logit <- function(cell, glm_control, rank_tol) {
   # Raw score on all n units: R_{ic} (G_{ic} - Lambda(xtilde_{ic}' gamma_hat_c)) xtilde_{ic}
   score_weight <- numeric(n)
   score_weight[risk_idx] <- st$D_use - st$prob_use
-  score_matrix <- cell$X_tilde * score_weight
-
-  # Unit-level logit IF ell^gamma_c(W_i) = H_hat_c^{-1} score_i via triangular solves on H_chol.
-  ell_gamma <- t(backsolve(hs$H_chol, forwardsolve(t(hs$H_chol), t(score_matrix))))
-  colnames(ell_gamma) <- colnames(Z_use)
+  if (isTRUE(materialize_if)) {
+    score_matrix <- cell$X_tilde * score_weight
+    # Unit-level logit IF ell^gamma_c(W_i) = H_hat_c^{-1} score_i via triangular solves on H_chol.
+    ell_gamma <- t(backsolve(hs$H_chol, forwardsolve(t(hs$H_chol), t(score_matrix))))
+    colnames(ell_gamma) <- colnames(Z_use)
+  } else {
+    score_matrix <- NULL
+    ell_gamma <- NULL
+  }
 
   list(
     cell_id = cell$cell_id,
@@ -910,17 +997,33 @@ static_complete_logit_hessian_solve <- function(logit_fit, rhs) {
 # `or_pooled_wls_fit`, `or_pooled_wls_gram_solve`, and `or_pooled_wls_predict`
 # from R/chained_or_pooled_wls.R without forming an n * |C| block design or
 # inverting the normal matrix M.
-static_complete_fit_or_partition <- function(cells, partition, rank_tol, n) {
+static_complete_fit_or_partition <- function(cells, partition, rank_tol, n, materialize_if = TRUE) {
+  if (!static_complete_scalar_logical(materialize_if)) {
+    static_complete_abort(
+      "`materialize_if` must be a non-missing logical scalar.",
+      c("cdid_static_input_error")
+    )
+  }
   n_num <- as.double(n)
   cell_ids <- names(cells)
   block_ids <- partition$block_ids
 
   block_fits <- vector("list", length(block_ids))
   names(block_fits) <- block_ids
-  block_slope_scores <- vector("list", length(block_ids))
-  names(block_slope_scores) <- block_ids
-  block_ell_slope <- vector("list", length(block_ids))
-  names(block_ell_slope) <- block_ids
+  block_slope_scores <- if (isTRUE(materialize_if)) {
+    out_sc <- vector("list", length(block_ids))
+    names(out_sc) <- block_ids
+    out_sc
+  } else {
+    NULL
+  }
+  block_ell_slope <- if (isTRUE(materialize_if)) {
+    out_el <- vector("list", length(block_ids))
+    names(out_el) <- block_ids
+    out_el
+  } else {
+    NULL
+  }
 
   alpha_hat <- stats::setNames(numeric(length(cell_ids)), cell_ids)
   slope_by_cell <- vector("list", length(cell_ids))
@@ -930,7 +1033,11 @@ static_complete_fit_or_partition <- function(cells, partition, rank_tol, n) {
   mean_dy0_by_cell <- stats::setNames(numeric(length(cell_ids)), cell_ids)
   fitted_by_cell <- matrix(0.0, nrow = n, ncol = length(cell_ids), dimnames = list(NULL, cell_ids))
   residuals_by_cell <- matrix(0.0, nrow = n, ncol = length(cell_ids), dimnames = list(NULL, cell_ids))
-  ell_alpha_by_cell <- matrix(0.0, nrow = n, ncol = length(cell_ids), dimnames = list(NULL, cell_ids))
+  ell_alpha_by_cell <- if (isTRUE(materialize_if)) {
+    matrix(0.0, nrow = n, ncol = length(cell_ids), dimnames = list(NULL, cell_ids))
+  } else {
+    NULL
+  }
 
   for (bid in block_ids) {
     cids <- partition$blocks[[bid]]
@@ -961,7 +1068,11 @@ static_complete_fit_or_partition <- function(cells, partition, rank_tol, n) {
     # Accumulate each original unit's summed stayer centered slope score across
     # all cells c' in block P:
     #   s^{b_P}_i = sum_{c' in P} C_{ic'} e_hat_{ic'} (Z_{or, ic'} - bar_Z_{0c'})
-    score_b <- matrix(0.0, nrow = n, ncol = p_b, dimnames = list(NULL, z_names_b))
+    score_b <- if (isTRUE(materialize_if)) {
+      matrix(0.0, nrow = n, ncol = p_b, dimnames = list(NULL, z_names_b))
+    } else {
+      NULL
+    }
     for (cid in cids) {
       cell <- cells[[cid]]
       b_rec <- bfit$blocks[[cid]]
@@ -977,32 +1088,34 @@ static_complete_fit_or_partition <- function(cells, partition, rank_tol, n) {
       fitted_by_cell[, cid] <- pred_c
       residuals_by_cell[, cid] <- res_c
 
-      if (p_b > 0L) {
+      if (isTRUE(materialize_if) && p_b > 0L) {
         Z_centered_c <- sweep(cell$Z_or, 2L, mean_z0, FUN = "-")
         score_b <- score_b + (cell$C * res_c) * Z_centered_c
       }
     }
-    block_slope_scores[[bid]] <- score_b
+    if (isTRUE(materialize_if)) {
+      block_slope_scores[[bid]] <- score_b
 
-    # Unit-level slope IF ell^{b_P}(W_i) = S_hat_P^{-1} s^{b_P}_i via triangular solve on R_P.
-    ell_b <- if (p_b > 0L) {
-      sol <- t(or_pooled_wls_gram_solve(bfit, t(score_b), normalizer = n_num))
-      colnames(sol) <- z_names_b
-      sol
-    } else {
-      matrix(0.0, nrow = n, ncol = 0L)
-    }
-    block_ell_slope[[bid]] <- ell_b
+      # Unit-level slope IF ell^{b_P}(W_i) = S_hat_P^{-1} s^{b_P}_i via triangular solve on R_P.
+      ell_b <- if (p_b > 0L) {
+        sol <- t(or_pooled_wls_gram_solve(bfit, t(score_b), normalizer = n_num))
+        colnames(sol) <- z_names_b
+        sol
+      } else {
+        matrix(0.0, nrow = n, ncol = 0L)
+      }
+      block_ell_slope[[bid]] <- ell_b
 
-    # Unit-level local intercept IF:
-    #   ell^{alpha_c}(W_i) = C_{ic} e_hat_{ic} / q0_hat_c - bar_Z_{0c}' ell^{b_P}(W_i)
-    for (cid in cids) {
-      cell <- cells[[cid]]
-      q0_c <- cell$n_stayers / n_num
-      res_c <- residuals_by_cell[, cid]
-      mean_z0 <- mean_z0_by_cell[[cid]]
-      slope_corr <- if (p_b > 0L) drop(ell_b %*% mean_z0) else numeric(n)
-      ell_alpha_by_cell[, cid] <- (cell$C * res_c) / q0_c - slope_corr
+      # Unit-level local intercept IF:
+      #   ell^{alpha_c}(W_i) = C_{ic} e_hat_{ic} / q0_hat_c - bar_Z_{0c}' ell^{b_P}(W_i)
+      for (cid in cids) {
+        cell <- cells[[cid]]
+        q0_c <- cell$n_stayers / n_num
+        res_c <- residuals_by_cell[, cid]
+        mean_z0 <- mean_z0_by_cell[[cid]]
+        slope_corr <- if (p_b > 0L) drop(ell_b %*% mean_z0) else numeric(n)
+        ell_alpha_by_cell[, cid] <- (cell$C * res_c) / q0_c - slope_corr
+      }
     }
   }
 
@@ -1110,7 +1223,15 @@ static_complete_fit <- function(cells,
                                 unit_id = NULL,
                                 cluster = NULL,
                                 aggregate_cells = NULL,
-                                aggregate_signs = NULL) {
+                                aggregate_signs = NULL,
+                                non_target_or_cells = NULL,
+                                materialize_if = TRUE) {
+  if (!static_complete_scalar_logical(materialize_if)) {
+    static_complete_abort(
+      "`materialize_if` must be a non-missing logical scalar.",
+      c("cdid_static_input_error")
+    )
+  }
   val <- static_complete_validate_inputs(
     cells = cells,
     or_blocks = or_blocks,
@@ -1118,7 +1239,8 @@ static_complete_fit <- function(cells,
     glm_control = glm_control,
     rank_tol = rank_tol,
     unit_id = unit_id,
-    cluster = cluster
+    cluster = cluster,
+    non_target_or_cells = non_target_or_cells
   )
 
   norm_cells <- val$cells
@@ -1136,7 +1258,13 @@ static_complete_fit <- function(cells,
   use_or <- m %in% c("reg", "dr")
 
   logit_fits <- if (use_logit) {
-    fits <- lapply(norm_cells, static_complete_fit_cell_logit, glm_control = ctrl, rank_tol = rtol)
+    fits <- lapply(
+      norm_cells,
+      static_complete_fit_cell_logit,
+      glm_control = ctrl,
+      rank_tol = rtol,
+      materialize_if = materialize_if
+    )
     names(fits) <- cell_ids
     fits
   } else {
@@ -1144,7 +1272,13 @@ static_complete_fit <- function(cells,
   }
 
   or_fits <- if (use_or) {
-    static_complete_fit_or_partition(norm_cells, partition = partition, rank_tol = rtol, n = n)
+    static_complete_fit_or_partition(
+      val$or_cells,
+      partition = partition,
+      rank_tol = rtol,
+      n = n,
+      materialize_if = materialize_if
+    )
   } else {
     NULL
   }
@@ -1163,8 +1297,16 @@ static_complete_fit <- function(cells,
   mu_1_vec <- stats::setNames(numeric(n_cells), cell_ids)
   mu_0_vec <- stats::setNames(rep(NA_real_, n_cells), cell_ids)
 
-  phi_theta <- matrix(0.0, nrow = n, ncol = n_cells, dimnames = list(NULL, cell_ids))
-  phi_tau <- matrix(0.0, nrow = n, ncol = n_cells, dimnames = list(NULL, cell_ids))
+  phi_theta <- if (isTRUE(materialize_if)) {
+    matrix(0.0, nrow = n, ncol = n_cells, dimnames = list(NULL, cell_ids))
+  } else {
+    NULL
+  }
+  phi_tau <- if (isTRUE(materialize_if)) {
+    matrix(0.0, nrow = n, ncol = n_cells, dimnames = list(NULL, cell_ids))
+  } else {
+    NULL
+  }
   cell_components <- vector("list", n_cells)
   names(cell_components) <- cell_ids
 
@@ -1190,17 +1332,25 @@ static_complete_fit <- function(cells,
       mu_0c <- sum(C_c * r_c * dy_c) / lfit$sum_stayer_odds
       theta_c <- mu_1c - mu_0c
 
-      # Complete original-unit IPW influence function
-      direct_switcher <- (G_c / pi_c) * (dy_c - mu_1c)
-      direct_stayer <- -(C_c * r_c / Q_c) * (dy_c - mu_0c)
       k_gamma_c <- colSums(cell$X_tilde * (C_c * act_c * r_c * (dy_c - mu_0c))) / lfit$sum_stayer_odds
       lambda_gamma_c <- static_complete_logit_hessian_solve(lfit, k_gamma_c)
-      logit_score_term <- -(R_c * lfit$score_weight) * drop(cell$X_tilde %*% lambda_gamma_c)
-      or_score_term <- numeric(n)
-
-      phi_c <- direct_switcher + direct_stayer + logit_score_term
       k_beta_slope_c <- NULL
       lambda_beta_slope_c <- NULL
+
+      if (isTRUE(materialize_if)) {
+        # Complete original-unit IPW influence function
+        direct_switcher <- (G_c / pi_c) * (dy_c - mu_1c)
+        direct_stayer <- -(C_c * r_c / Q_c) * (dy_c - mu_0c)
+        logit_score_term <- -(R_c * lfit$score_weight) * drop(cell$X_tilde %*% lambda_gamma_c)
+        or_score_term <- numeric(n)
+        phi_c <- direct_switcher + direct_stayer + logit_score_term
+      } else {
+        direct_switcher <- NULL
+        direct_stayer <- NULL
+        logit_score_term <- NULL
+        or_score_term <- NULL
+        phi_c <- NULL
+      }
     } else if (identical(m, "reg")) {
       bid <- partition$cell_block[[cid]]
       bfit <- or_fits$block_fits[[bid]]
@@ -1212,29 +1362,39 @@ static_complete_fit <- function(cells,
       mu_0c <- 0.0
       theta_c <- mu_1c
 
-      # Complete original-unit OR influence function:
-      # k^{or}_{beta,c}' ell^beta(W_i) = C_{ic} e_hat_{ic} / q0_c + (bar_Z_{1c} - bar_Z_{0c})' ell^{b_P}(W_i)
-      direct_switcher <- (G_c / pi_c) * (e_c - mu_1c)
-      direct_stayer <- numeric(n)
-      logit_score_term <- numeric(n)
-
       if (p_b > 0L) {
         bar_Z_1c <- colSums(cell$Z_or * G_c) / cell$n_switchers
         bar_Z_0c <- or_fits$mean_z0_by_cell[[cid]]
         k_beta_slope_c <- bar_Z_1c - bar_Z_0c
         lambda_beta_slope_c <- or_pooled_wls_gram_solve(bfit, k_beta_slope_c, normalizer = n_num)
-        slope_if_term <- drop(or_fits$block_slope_scores[[bid]] %*% lambda_beta_slope_c)
       } else {
         k_beta_slope_c <- numeric(0L)
         lambda_beta_slope_c <- numeric(0L)
-        slope_if_term <- numeric(n)
       }
-      intercept_if_term <- (C_c * e_c) / q0_c
-      or_score_term <- -(intercept_if_term + slope_if_term)
-
-      phi_c <- direct_switcher + or_score_term
       k_gamma_c <- NULL
       lambda_gamma_c <- NULL
+
+      if (isTRUE(materialize_if)) {
+        # Complete original-unit OR influence function:
+        # k^{or}_{beta,c}' ell^beta(W_i) = C_{ic} e_hat_{ic} / q0_c + (bar_Z_{1c} - bar_Z_{0c})' ell^{b_P}(W_i)
+        direct_switcher <- (G_c / pi_c) * (e_c - mu_1c)
+        direct_stayer <- numeric(n)
+        logit_score_term <- numeric(n)
+        slope_if_term <- if (p_b > 0L) {
+          drop(or_fits$block_slope_scores[[bid]] %*% lambda_beta_slope_c)
+        } else {
+          numeric(n)
+        }
+        intercept_if_term <- (C_c * e_c) / q0_c
+        or_score_term <- -(intercept_if_term + slope_if_term)
+        phi_c <- direct_switcher + or_score_term
+      } else {
+        direct_switcher <- NULL
+        direct_stayer <- NULL
+        logit_score_term <- NULL
+        or_score_term <- NULL
+        phi_c <- NULL
+      }
     } else {
       # method == "dr"
       lfit <- logit_fits[[cid]]
@@ -1253,29 +1413,40 @@ static_complete_fit <- function(cells,
       mu_0c <- sum(C_c * r_c * e_c) / lfit$sum_stayer_odds
       theta_c <- mu_1c - mu_0c
 
-      # Complete original-unit DR influence function
-      direct_switcher <- (G_c / pi_c) * (e_c - mu_1c)
-      direct_stayer <- -(C_c * r_c / Q_c) * (e_c - mu_0c)
       k_gamma_c <- colSums(cell$X_tilde * (C_c * act_c * r_c * (e_c - mu_0c))) / lfit$sum_stayer_odds
       lambda_gamma_c <- static_complete_logit_hessian_solve(lfit, k_gamma_c)
-      logit_score_term <- -(R_c * lfit$score_weight) * drop(cell$X_tilde %*% lambda_gamma_c)
 
       if (p_b > 0L) {
         bar_Z_1c <- colSums(cell$Z_or * G_c) / cell$n_switchers
         bar_Z_0c_r <- colSums(cell$Z_or * (C_c * r_c)) / lfit$sum_stayer_odds
         k_beta_slope_c <- bar_Z_1c - bar_Z_0c_r
         lambda_beta_slope_c <- or_pooled_wls_gram_solve(bfit, k_beta_slope_c, normalizer = n_num)
-        or_score_term <- -drop(or_fits$block_slope_scores[[bid]] %*% lambda_beta_slope_c)
       } else {
         k_beta_slope_c <- numeric(0L)
         lambda_beta_slope_c <- numeric(0L)
-        or_score_term <- numeric(n)
       }
 
-      phi_c <- direct_switcher + direct_stayer + logit_score_term + or_score_term
+      if (isTRUE(materialize_if)) {
+        # Complete original-unit DR influence function
+        direct_switcher <- (G_c / pi_c) * (e_c - mu_1c)
+        direct_stayer <- -(C_c * r_c / Q_c) * (e_c - mu_0c)
+        logit_score_term <- -(R_c * lfit$score_weight) * drop(cell$X_tilde %*% lambda_gamma_c)
+        or_score_term <- if (p_b > 0L) {
+          -drop(or_fits$block_slope_scores[[bid]] %*% lambda_beta_slope_c)
+        } else {
+          numeric(n)
+        }
+        phi_c <- direct_switcher + direct_stayer + logit_score_term + or_score_term
+      } else {
+        direct_switcher <- NULL
+        direct_stayer <- NULL
+        logit_score_term <- NULL
+        or_score_term <- NULL
+        phi_c <- NULL
+      }
     }
 
-    if (!is.finite(theta_c) || any(!is.finite(phi_c))) {
+    if (!is.finite(theta_c) || (isTRUE(materialize_if) && any(!is.finite(phi_c)))) {
       static_complete_abort(
         sprintf("Nonfinite cell estimate or influence function in cell `%s`.", cid),
         c("cdid_static_numeric_error", "cdid_ipw_numeric_error")
@@ -1286,8 +1457,10 @@ static_complete_fit <- function(cells,
     tau_hat[[cid]] <- sigma_c * theta_c
     mu_1_vec[[cid]] <- mu_1c
     mu_0_vec[[cid]] <- mu_0c
-    phi_theta[, cid] <- phi_c
-    phi_tau[, cid] <- sigma_c * phi_c
+    if (isTRUE(materialize_if)) {
+      phi_theta[, cid] <- phi_c
+      phi_tau[, cid] <- sigma_c * phi_c
+    }
 
     cell_components[[cid]] <- list(
       direct_switcher = direct_switcher,
@@ -1303,8 +1476,27 @@ static_complete_fit <- function(cells,
     )
   }
 
-  inf_theta <- static_complete_covariance(phi_theta, cluster = cluster)
-  inf_tau <- static_complete_covariance(phi_tau, cluster = cluster)
+  if (isTRUE(materialize_if)) {
+    inf_theta <- static_complete_covariance(phi_theta, cluster = cluster)
+    inf_tau <- static_complete_covariance(phi_tau, cluster = cluster)
+    cov_theta_out <- inf_theta$cov_matrix
+    vhat_theta_out <- inf_theta$vhat_matrix
+    se_theta_out <- inf_theta$se
+    cov_tau_out <- inf_tau$cov_matrix
+    vhat_tau_out <- inf_tau$vhat_matrix
+    se_tau_out <- inf_tau$se
+    clustered_out <- inf_theta$clustered
+    n_clusters_out <- inf_theta$n_clusters
+  } else {
+    cov_theta_out <- NULL
+    vhat_theta_out <- NULL
+    se_theta_out <- stats::setNames(rep(NA_real_, n_cells), cell_ids)
+    cov_tau_out <- NULL
+    vhat_tau_out <- NULL
+    se_tau_out <- stats::setNames(rep(NA_real_, n_cells), cell_ids)
+    clustered_out <- !is.null(val$cluster_info)
+    n_clusters_out <- if (!is.null(val$cluster_info)) val$cluster_info$n_clusters else n
+  }
 
   G_mat <- vapply(norm_cells, function(cl) as.double(cl$G), numeric(n))
   if (n == 1L) G_mat <- matrix(G_mat, nrow = 1L, ncol = n_cells)
@@ -1318,6 +1510,7 @@ static_complete_fit <- function(cells,
       requested_method = val$method_info$requested,
       paper_method = paper_m,
       cell_ids = cell_ids,
+      non_target_ids = val$non_target_ids,
       d = d_vec,
       sigma = sigma_vec,
       n_risk = n_risk_vec,
@@ -1333,14 +1526,14 @@ static_complete_fit <- function(cells,
       phi_theta = phi_theta,
       phi_tau = phi_tau,
       cell_components = cell_components,
-      cov_theta = inf_theta$cov_matrix,
-      vhat_theta = inf_theta$vhat_matrix,
-      se_theta = inf_theta$se,
-      cov_tau = inf_tau$cov_matrix,
-      vhat_tau = inf_tau$vhat_matrix,
-      se_tau = inf_tau$se,
-      clustered = inf_theta$clustered,
-      n_clusters = inf_theta$n_clusters,
+      cov_theta = cov_theta_out,
+      vhat_theta = vhat_theta_out,
+      se_theta = se_theta_out,
+      cov_tau = cov_tau_out,
+      vhat_tau = vhat_tau_out,
+      se_tau = se_tau_out,
+      clustered = clustered_out,
+      n_clusters = n_clusters_out,
       cluster = cluster,
       G_matrix = G_mat,
       partition = partition,
@@ -1366,7 +1559,8 @@ static_complete_fit <- function(cells,
       fit = out,
       cells = aggregate_cells,
       signs = aggregate_signs,
-      cluster = cluster
+      cluster = cluster,
+      materialize_if = materialize_if
     )
   }
 
@@ -1378,11 +1572,24 @@ static_complete_fit <- function(cells,
 static_complete_aggregate <- function(fit,
                                       cells,
                                       signs,
-                                      cluster = fit$cluster) {
+                                      cluster = fit$cluster,
+                                      materialize_if = !is.null(fit$phi_theta)) {
   if (!inherits(fit, "cdid_static_complete_fit") || !is.list(fit)) {
     static_complete_abort(
       "Expected a `cdid_static_complete_fit` object from `static_complete_fit()`.",
       c("cdid_static_aggregate_error", "cdid_static_input_error")
+    )
+  }
+  if (!static_complete_scalar_logical(materialize_if)) {
+    static_complete_abort(
+      "`materialize_if` must be a non-missing logical scalar.",
+      c("cdid_static_aggregate_error", "cdid_static_input_error")
+    )
+  }
+  if (isTRUE(materialize_if) && is.null(fit$phi_theta)) {
+    static_complete_abort(
+      "Cannot materialize aggregate influence function from a point-only `cdid_static_complete_fit` object (`phi_theta` is NULL).",
+      c("cdid_static_inference_error", "cdid_static_aggregate_error")
     )
   }
   if (missing(cells) || is.null(cells)) {
@@ -1471,28 +1678,59 @@ static_complete_aggregate <- function(fit,
   signed_theta_A <- s_vec * theta_A
   delta_hat <- sum(omega_A * signed_theta_A)
 
-  # Random switch-share aggregate influence function:
-  #   phi^m_{A,s} = sum_{c in A} omega_{A,c} s_c phi^m_c
-  #               + (1 / Pi_A) sum_{c in A} (s_c theta^m_c - delta^m_{A,s}) (G_c - pi_c)
-  phi_A <- fit$phi_theta[, sel_cids, drop = FALSE]
-  G_A <- fit$G_matrix[, sel_cids, drop = FALSE]
+  if (isTRUE(materialize_if)) {
+    # Random switch-share aggregate influence function:
+    #   phi^m_{A,s} = sum_{c in A} omega_{A,c} s_c phi^m_c
+    #               + (1 / Pi_A) sum_{c in A} (s_c theta^m_c - delta^m_{A,s}) (G_c - pi_c)
+    phi_A <- fit$phi_theta[, sel_cids, drop = FALSE]
+    G_A <- fit$G_matrix[, sel_cids, drop = FALSE]
 
-  cell_if_term <- drop(phi_A %*% (omega_A * s_vec))
-  G_centered_A <- sweep(G_A, 2L, pi_A, FUN = "-")
-  share_weights_A <- (signed_theta_A - delta_hat) / Pi_A
-  share_if_term <- drop(G_centered_A %*% share_weights_A)
-  phi_agg <- cell_if_term + share_if_term
+    cell_if_term <- drop(phi_A %*% (omega_A * s_vec))
+    G_centered_A <- sweep(G_A, 2L, pi_A, FUN = "-")
+    share_weights_A <- (signed_theta_A - delta_hat) / Pi_A
+    share_if_term <- drop(G_centered_A %*% share_weights_A)
+    phi_agg <- cell_if_term + share_if_term
 
-  if (!is.finite(delta_hat) || any(!is.finite(phi_agg))) {
-    static_complete_abort(
-      "Nonfinite aggregate estimate or influence function.",
-      c("cdid_static_numeric_error", "cdid_ipw_numeric_error")
+    if (!is.finite(delta_hat) || any(!is.finite(phi_agg))) {
+      static_complete_abort(
+        "Nonfinite aggregate estimate or influence function.",
+        c("cdid_static_numeric_error", "cdid_ipw_numeric_error")
+      )
+    }
+
+    inf_agg <- static_complete_covariance(phi_agg, cluster = cluster)
+    joint_if <- cbind(phi_A, aggregate = phi_agg)
+    inf_joint <- static_complete_covariance(joint_if, cluster = cluster)
+    phi_comp_out <- list(
+      cell_if_term = cell_if_term,
+      share_if_term = share_if_term
     )
+    var_out <- inf_agg$cov
+    vhat_out <- inf_agg$vhat
+    se_out <- inf_agg$se
+    jcov_out <- inf_joint$cov_matrix
+    jvhat_out <- inf_joint$vhat_matrix
+    cl_out <- inf_agg$clustered
+    ncl_out <- inf_agg$n_clusters
+  } else {
+    if (!is.finite(delta_hat)) {
+      static_complete_abort(
+        "Nonfinite aggregate estimate or influence function.",
+        c("cdid_static_numeric_error", "cdid_ipw_numeric_error")
+      )
+    }
+    c_info <- static_complete_validate_cluster(cluster, n = n)
+    phi_agg <- NULL
+    phi_comp_out <- NULL
+    var_out <- NA_real_
+    vhat_out <- NA_real_
+    se_out <- NA_real_
+    joint_if <- NULL
+    jcov_out <- NULL
+    jvhat_out <- NULL
+    cl_out <- !is.null(c_info)
+    ncl_out <- if (!is.null(c_info)) c_info$n_clusters else n
   }
-
-  inf_agg <- static_complete_covariance(phi_agg, cluster = cluster)
-  joint_if <- cbind(phi_A, aggregate = phi_agg)
-  inf_joint <- static_complete_covariance(joint_if, cluster = cluster)
 
   structure(
     list(
@@ -1510,18 +1748,15 @@ static_complete_aggregate <- function(fit,
       theta_hat = theta_A,
       signed_theta_hat = signed_theta_A,
       phi = phi_agg,
-      phi_components = list(
-        cell_if_term = cell_if_term,
-        share_if_term = share_if_term
-      ),
-      variance = inf_agg$cov,
-      vhat = inf_agg$vhat,
-      se = inf_agg$se,
+      phi_components = phi_comp_out,
+      variance = var_out,
+      vhat = vhat_out,
+      se = se_out,
       joint_if = joint_if,
-      joint_cov = inf_joint$cov_matrix,
-      joint_vhat = inf_joint$vhat_matrix,
-      clustered = inf_agg$clustered,
-      n_clusters = inf_agg$n_clusters,
+      joint_cov = jcov_out,
+      joint_vhat = jvhat_out,
+      clustered = cl_out,
+      n_clusters = ncl_out,
       cluster = cluster
     ),
     class = "cdid_static_complete_aggregate"

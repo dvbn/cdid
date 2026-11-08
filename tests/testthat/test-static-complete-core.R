@@ -1014,3 +1014,103 @@ test_that("exact alias, rank, support, convergence, separation, boundary, and in
     class = "cdid_ipw_boundary_error"
   )
 })
+
+test_that("non_target_or_cells and materialize_if = FALSE preserve estimates, rank checks, and skip IF/cov allocation", {
+  fx <- build_static_panel_fixture()
+
+  # Subset of target cells A = {c_t2_d0, c_t2_d1} sharing OR slopes with non-target U \ A = {c_t3_d0, c_t3_d1}
+  target_ids <- c("c_t2_d0", "c_t2_d1")
+  nt_ids <- c("c_t3_d0", "c_t3_d1")
+  part_u <- c(c_t2_d0 = "b_d0", c_t2_d1 = "b_d1", c_t3_d0 = "b_d0", c_t3_d1 = "b_d1")
+
+  # Reference full-U fit evaluated on A
+  full_fit <- static_complete_fit(
+    cells = fx$cells[c(target_ids, nt_ids)],
+    or_blocks = part_u,
+    method = "dr",
+    glm_control = fx$glm_control,
+    rank_tol = fx$rank_tol,
+    aggregate_cells = target_ids,
+    aggregate_signs = c(c_t2_d0 = 1, c_t2_d1 = -1)
+  )
+
+  # Direct fit on A with non_target_or_cells = U \ A
+  nt_fit <- static_complete_fit(
+    cells = fx$cells[target_ids],
+    or_blocks = part_u,
+    method = "dr",
+    glm_control = fx$glm_control,
+    rank_tol = fx$rank_tol,
+    aggregate_cells = target_ids,
+    aggregate_signs = c(c_t2_d0 = 1, c_t2_d1 = -1),
+    non_target_or_cells = fx$cells[nt_ids],
+    materialize_if = TRUE
+  )
+  expect_equal(nt_fit$tau_hat, full_fit$tau_hat[target_ids], tolerance = 1e-14)
+  expect_equal(nt_fit$theta_hat, full_fit$theta_hat[target_ids], tolerance = 1e-14)
+  expect_equal(nt_fit$phi_tau, full_fit$phi_tau[, target_ids, drop = FALSE], tolerance = 1e-14)
+  expect_equal(nt_fit$cov_tau, full_fit$cov_tau[target_ids, target_ids, drop = FALSE], tolerance = 1e-14)
+  expect_equal(nt_fit$aggregate$delta_hat, full_fit$aggregate$delta_hat, tolerance = 1e-14)
+  expect_equal(nt_fit$aggregate$phi, full_fit$aggregate$phi, tolerance = 1e-14)
+
+  # Non-target stayer-only cell (0 switchers) allowed when allow_empty_switchers = TRUE
+  base_c <- fx$cells[[1L]]
+  R_st_only <- base_c$C
+  G_st_only <- integer(fx$n)
+  C_st_only <- base_c$C
+  expect_error(
+    static_complete_cell(
+      cell_id = "c_st_only", t = 4, d = 0L, unit_id = fx$unit_id,
+      R = R_st_only, G = G_st_only, C = C_st_only, dy = base_c$dy,
+      X_tilde = base_c$X_tilde, Z = base_c$Z,
+      allow_empty_switchers = FALSE
+    ),
+    class = "cdid_static_support_error"
+  )
+  c_st_only <- static_complete_cell(
+    cell_id = "c_st_only", t = 4, d = 0L, unit_id = fx$unit_id,
+    R = R_st_only, G = G_st_only, C = C_st_only, dy = base_c$dy,
+    X_tilde = base_c$X_tilde, Z = base_c$Z,
+    allow_empty_switchers = TRUE
+  )
+  expect_identical(c_st_only$n_switchers, 0L)
+  expect_gt(c_st_only$n_stayers, 0L)
+
+  # Point-only materialize_if = FALSE across ipw, reg, dr
+  for (m in c("ipw", "reg", "dr")) {
+    fit_if_true <- static_complete_fit(
+      cells = fx$cells[target_ids],
+      or_blocks = part_u,
+      method = m,
+      glm_control = fx$glm_control,
+      rank_tol = fx$rank_tol,
+      aggregate_cells = target_ids,
+      aggregate_signs = c(c_t2_d0 = 1, c_t2_d1 = -1),
+      non_target_or_cells = fx$cells[nt_ids],
+      materialize_if = TRUE
+    )
+    fit_if_false <- static_complete_fit(
+      cells = fx$cells[target_ids],
+      or_blocks = part_u,
+      method = m,
+      glm_control = fx$glm_control,
+      rank_tol = fx$rank_tol,
+      aggregate_cells = target_ids,
+      aggregate_signs = c(c_t2_d0 = 1, c_t2_d1 = -1),
+      non_target_or_cells = fx$cells[nt_ids],
+      materialize_if = FALSE
+    )
+    expect_equal(fit_if_false$tau_hat, fit_if_true$tau_hat, tolerance = 1e-14)
+    expect_equal(fit_if_false$theta_hat, fit_if_true$theta_hat, tolerance = 1e-14)
+    expect_equal(fit_if_false$aggregate$delta_hat, fit_if_true$aggregate$delta_hat, tolerance = 1e-14)
+    expect_null(fit_if_false$phi_theta)
+    expect_null(fit_if_false$phi_tau)
+    expect_null(fit_if_false$cov_theta)
+    expect_null(fit_if_false$cov_tau)
+    expect_null(fit_if_false$vhat_theta)
+    expect_null(fit_if_false$vhat_tau)
+    expect_null(fit_if_false$aggregate$phi)
+    expect_null(fit_if_false$aggregate$joint_if)
+    expect_null(fit_if_false$aggregate$joint_cov)
+  }
+})
