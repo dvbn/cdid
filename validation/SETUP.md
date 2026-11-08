@@ -11,7 +11,7 @@ Install `cdid` 1.3.0.0 from GitHub:
 remotes::install_github("dvbn/cdid", ref = "codex/static-entry-exit-1.3.0.0")
 ```
 
-`cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
+`cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Source installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
 
 This is all that is needed to use the package. Version 1.3.0.0 is proposed in the static entry/exit pull request. The commands above select that development branch; it has not been merged or submitted to CRAN. Version 1.2.0.1 is available on [CRAN](https://cran.r-project.org/package=cdid) with `install.packages("cdid")`.
 

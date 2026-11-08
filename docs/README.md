@@ -4,7 +4,7 @@
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Author website](https://www.davidbenatia.com/research/)
 
-This development branch proposes version 1.3.0.0, adding static binary entry, exit and re-entry estimation through `att_gt(dname = ...)`. The released version **1.2.0.1** is available on [CRAN](https://cran.r-project.org/package=cdid). The proposed 1.3.0.0 version has not been merged or submitted to CRAN.
+This development branch proposes version 1.3.0.0, adding static binary entry, exit and re-entry estimation through `att_gt(dname = ...)`. The released version **1.2.0.1** is available on [CRAN](https://cran.r-project.org/package=cdid), published November 7, 2026. The proposed 1.3.0.0 version has not been merged or submitted to CRAN.
 
 ## Installation
 
