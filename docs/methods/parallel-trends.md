@@ -1,8 +1,8 @@
-# Parallel trends: PT-post and PT-all
+# Parallel trends: PT-post, PT-ctrl, and PT-all
 
 Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage.
 
-`pt_assumption` chooses which parallel trends restrictions the estimator imposes. With `"post"`, the default, untreated outcomes of each cohort and its controls are assumed to move in parallel from the cohort's reference period onward. With `"all"`, every one of those restrictions is kept and further restrictions are added between a common start date `pt_start` and each cohort's reference period. How effects before treatment are reported is a separate choice, made with `base_period`.
+`pt_assumption` chooses which parallel trends restrictions the estimator imposes. With `"post"`, the default, untreated outcomes of each cohort and its controls are assumed to move in parallel from the cohort's reference period onward. With `"ctrl"`, clean control cohorts $k > g$ are additionally assumed to share untreated trends from `pt_start` onward (defaulting to the earliest stored calendar date when `pt_start = NULL`), while target cohort $g$'s own pre-reference trends remain unrestricted ([Cross-pair chaining and control parallel trends](cross-pair-chaining.md)). With `"all"`, every one of those restrictions is kept and further restrictions are added for both target and control cohorts between an explicit common start date `pt_start` and each cohort's reference period. How effects before treatment are reported is a separate choice, made with `base_period`.
 
 ## Reference period and anticipation
 
@@ -28,7 +28,7 @@ The reference period anchors the target. It need not be observed for every unit,
 | --- | --- | --- |
 | 1. Form comparisons | All valid ordered-pair cohort-minus-eligible-control moments in the retained catalog, including longer spans and valid fixed-horizon control-pool reuses | Observed pairs in the cohort and eligible controls, overlap and the support needed by active models |
 | 2. Reconstruct population changes | The treatment adjustment and, when requested, the observation weighting, change imputation or augmented correction | Each comparison must reconstruct its stated cohort and control populations under the same fixed covariate and weight reference law whenever cancellation is used |
-| 3. Build the PT model | Population comparison means $d = A\theta$, with treatment effects and unrestricted earlier trend differentials in $\theta$ | PT-post leaves the pre-reference differentials free. PT-all sets only its represented in-window differentials to zero. |
+| 3. Build the PT model | Population comparison means $d = A\theta$, with treatment effects and unrestricted earlier trend differentials in $\theta$ | PT-post leaves pre-reference differentials free; PT-ctrl equates clean control-cohort pre-reference trends from `pt_start` onward while leaving target pre-reference trends free; PT-all sets represented in-window differentials to zero. |
 | 4. Recover supported targets | GMM combines the estimated comparisons, accounting for their joint covariance and fitted-model uncertainty | A target contrast must be recoverable from the rows of the maintained model. Covariance regularization is a separate step. |
 
 In $d = A\theta$, a row of $A$ records which effects or free trend differentials enter one comparison, with their signs. A target is estimable when some combination of these rows isolates its contrast. This is the row-space condition. Under PT-post, every unrestricted term in that combination must cancel. A visible path in an observation graph alone does not establish this, especially when different comparisons use different not-yet-treated control pools.
@@ -69,6 +69,15 @@ With `control_group = "notyettreated"`, the largest eligible control set can dif
 
 The catalog therefore retains valid common, fixed-horizon control-pool reevaluations alongside every original valid comparison. For an earlier pair, a fixed-horizon reuse evaluates it with controls that remain eligible through the specified later horizon. This can provide the same control pool and reference law for the subtraction above. Only the retained, qualified combinations justify cancellation. The package does not assume that any connected sequence of different control pools supplies the needed equality, and clean control dates alone do not establish parallel trends or valid observation reconstruction.
 
+## PT-ctrl and cross-pair chaining
+
+`pt_assumption = "ctrl"` sits strictly between PT-post and PT-all for any individual target cohort $g$:
+
+- Clean later-treated control cohorts $k, k' > g$ share conditional untreated trends from `pt_start` onward (defaulting to the earliest stored calendar date when `pt_start = NULL`), merging pool-specific pre-reference control coordinates into one shared baseline trajectory $\lambda_g(u)$ for $u \ge \text{pt\_start}$.
+- Target cohort $g$'s own pre-reference trajectory $\gamma_g(u)$ for $u < b_g$ remains unrestricted, so target-only pre-treatment shocks before $b_g$ do not bias post-treatment ATT estimates.
+
+When `cross_pair = TRUE`, target-cohort and clean control-cohort within-unit changes are evaluated separately rather than requiring both groups to be observed on the identical date pair $(s, t)$, allowing identification across staggered or non-overlapping observation windows. See [Cross-pair chaining and control parallel trends](cross-pair-chaining.md) and [Short pre-treatment windows](../examples/short-pretreatment-windows.md) for the identification conditions and worked examples.
+
 ## PT-all
 
 Set `pt_assumption = "all"` and give `pt_start`, one finite numeric date that matches a date of the stored calendar exactly and is common to all cohorts. PT-all then:
@@ -104,15 +113,15 @@ Choose `pt_start` from knowledge of the application, for example the earliest pe
 | `"varying"` (default) | each stored period after the first compared with the preceding stored period | each period compared with the reference period |
 | `"universal"` | each period compared with the reference period; the cell at the reference period is an exact zero | each period compared with the reference period |
 
-Under both values and under both parallel trends choices, the cells before treatment are direct comparisons with no restriction imposed. Restricted zeros of PT-all never appear among them.
+Under both values of `base_period`, cells before treatment under PT-post (and under PT-ctrl or PT-all when `cross_pair = FALSE`) are direct comparisons with no restriction imposed; when `cross_pair = TRUE` under PT-ctrl, in-window pre-reference target differentials solved from the catalog remain unrestricted target-minus-shared-control contrasts. Restricted zeros of PT-all never appear among them.
 
 ## Pretrend tests under each choice
 
 The fit reports a Wald test of all declared nonreference pretrend cells of the chosen `base_period`, stored as `W` and `Wpval`. Exact reference zeros are identities and are excluded. The test is computed only when every tested cell is available and the full covariance passes the existing Cholesky/solve and conditioning policy; otherwise the test is unavailable and the reason is recorded. A test on a subset of the cells is never substituted.
 
-Under PT-all, a cell that involves dates before `pt_start` can reject without contradicting PT-all from the chosen start, and cells in anticipation periods need not be zero. Descriptive tags mark each comparison before treatment as lying before the start, inside the restricted window or in the anticipation periods. An in-window tag implies a zero contrast only under that comparison's actual control operator and selection/trend premises; an auxiliary not-yet-treated pool absent from the catalog assumptions is not covered by its date tag alone. A test that does not reject does not establish parallel trends, and restricted zeros are never used as evidence for them.
+Under PT-ctrl or PT-all, a cell that involves dates before `pt_start` can reject without contradicting the assumption from the chosen start, and cells in anticipation periods need not be zero. Descriptive tags mark each comparison before treatment as lying before the start, inside the window or in the anticipation periods. An in-window tag implies a zero contrast only under PT-all and that comparison's actual control operator and selection/trend premises (under PT-ctrl, target pre-reference trends remain unrestricted); an auxiliary not-yet-treated pool absent from the catalog assumptions is not covered by its date tag alone. A test that does not reject does not establish parallel trends, and restricted zeros are never used as evidence for them.
 
-`conditional_did_pretest()` runs a separate conditional test, described in the [results reference](../reference/results.md#pretrend-tests). Its arguments do not include the PT-all settings.
+`conditional_did_pretest()` runs a separate conditional test, described in the [results reference](../reference/results.md#pretrend-tests). Its arguments do not include the PT-ctrl or PT-all settings.
 
 ## Example
 
@@ -234,14 +243,14 @@ Chained support: 5 of 5 requested cells available.
 
 | Location | Contents |
 | --- | --- |
-| `fit$chained$pt` | `pt_assumption` and `pt_start`; under PT-all also the totals `n_extra_calendar_dates` and `n_restricted_pre_parameters`, the flag `no_extra_restrictions`, the assumption text and the table `by_cohort` |
+| `fit$chained$pt` | `pt_assumption` and `pt_start`; under PT-ctrl or PT-all also the totals `n_extra_calendar_dates` and `n_restricted_pre_parameters`, the flag `no_extra_restrictions`, the assumption text and the table `by_cohort` |
 | `fit$chained$pt$by_cohort` | one row per cohort: `g`, its reference period `ref`, `pt_start`, `n_extra_calendar_dates`, `n_extra_represented_dates`, `n_restricted_pre_parameters`, `no_extra_calendar_window` and `no_extra_restrictions` |
 | `fit$chained$base_period`, `fit$DIDparams$base_period` | the reporting choice |
-| `summary(fit)` | the parallel trends assumption and `base_period`; under PT-all also the common start, the number of added restrictions (or "No additional restrictions") and a line for each cohort |
+| `summary(fit)` | the parallel trends assumption and `base_period`; under PT-ctrl or PT-all also the common start, the number of added restrictions (or "No additional restrictions") and a line for each cohort |
 
 ---
 
-**Reading path, step 13 of 20** · Previous: [Impute actual changes](../examples/change-imputation.md) · Next: [Add PT-all restrictions](../examples/pt-all-comparison.md)
+**Reading path, step 13 of 22** · Previous: [Impute actual changes](../examples/change-imputation.md) · Next: [Add PT-all restrictions](../examples/pt-all-comparison.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -268,6 +277,8 @@ Chained support: 5 of 5 requested cells available.
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](../examples/short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

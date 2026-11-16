@@ -337,7 +337,7 @@ Three distinctions matter when reading `tidy_gt`, `tidy_dyn`, and `ggdid()` plot
 
 ---
 
-**Reading path, step 17 of 20** · Previous: [Robustness](robustness.md) · Next: [Options](../reference/options.md)
+**Reading path, step 17 of 22** · Previous: [Robustness](robustness.md) · Next: [Options](../reference/options.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -364,6 +364,8 @@ Three distinctions matter when reading `tidy_gt`, `tidy_dyn`, and `ggdid()` plot
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

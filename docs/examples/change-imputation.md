@@ -1,6 +1,6 @@
 # Impute actual changes for missing outcomes
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain pooled slopes; the current default uses separate comparison regressions.
 
 Observation weighting reweights the changes of units observed at both dates. Change imputation instead predicts the actual change of every unit from its covariates, and the augmented correction combines prediction with weighting. This example compares the three corrections on the panel of [Choose an observation model for missing outcomes](observation-models.md), where every model they need is correctly specified by construction. [Handling missing outcomes](../methods/missing-outcomes.md#change-imputation) defines the methods.
 
@@ -152,9 +152,6 @@ data.frame(
 fit_imputation$chained$selection[c("method", "imputation_pooling")]
 fit_augmented$chained$selection[c("method", "selection_model", "selection_pooling",
                                   "imputation_pooling", "selection_formula_inherited")]
-nuisance <- fit_imputation$chained$nuisance_diagnostics
-nuisance$fitted_catalog$link_id <- NULL  # opaque row identifiers, not needed here
-str(nuisance, max.level = 2)
 ```
 
 <details>
@@ -186,230 +183,6 @@ $imputation_pooling
 
 $selection_formula_inherited
 [1] TRUE
-
-List of 26
- $ status                     : chr "available"
- $ method                     : chr "imputation"
- $ selection_est_method       : chr "imputation"
- $ est_method                 : chr "dr"
- $ imputation_pooling         : chr "separate"
- $ imputation_model           : chr "actual-change imputation: observed pair changes on S_e = 1 with fixed unit weights w, local cohort/pair interce"| __truncated__
- $ counterfactual_model       : chr "shared one-period counterfactual control outcome-change regression on the imputed synthetic control changes (lo"| __truncated__
- $ treatment_model            : chr "risk-set treatment propensity logit with synthetic weights w*a_k on F"
- $ fit_structure              : chr "one WLS fit per imputation pooling group (30 group(s), 30 cell(s)), one joint shared counterfactual OR fit, 15 "| __truncated__
- $ duration_convention        : chr "stored-calendar transition count L_e = i_t - i_s"
- $ selection                  : chr "conditional_mtar"
- $ selection_route            :List of 25
-  ..$ method                : chr "imputation"
-  ..$ canonical_assumption  : chr "conditional_mtar"
-  ..$ requested_selection   : chr "conditional_mtar"
-  ..$ legacy_alias          : logi FALSE
-  ..$ selection_est_method  : chr "imputation"
-  ..$ est_method            : chr "dr"
-  ..$ imputation_pooling    : chr "separate"
-  ..$ observation_model     : chr "none: no observation-probability model is fitted"
-  ..$ inactive_arguments    : chr [1:3] "selection_model" "selection_pooling" "selection_xformla"
-  ..$ selection_model       : chr NA
-  ..$ selection_pooling     : chr NA
-  ..$ fitting_universe      : chr "F"
-  ..$ population            : chr "supplied representative frame"
-  ..$ formula               :Class 'formula'  language ~x
-  .. .. ..- attr(*, ".Environment")=<environment: 0xca0505b60> 
-  ..$ transport             : chr "rho=1"
-  ..$ justification         : NULL
-  ..$ imputation_model      : chr "actual-change imputation: observed pair changes on S_e = 1 with fixed unit weights w, local cohort/pair interce"| __truncated__
-  ..$ counterfactual_model  : chr "shared one-period counterfactual control outcome-change regression on the imputed synthetic control changes (lo"| __truncated__
-  ..$ treatment_model       : chr "risk-set treatment propensity logit with synthetic weights w*a_k on F"
-  ..$ duration_convention   : chr "stored-calendar transition count L_e = i_t - i_s"
-  ..$ empirical_repeat_rates: Named num [1:2] 0.915 0.932
-  .. ..- attr(*, "names")= chr [1:2] "3" "Inf"
-  ..$ assumptions           : chr "Each needed actual cohort/pair cell requires actual-pair conditional mean trend-MAR on F, E[Delta_e | G=k, X, S"| __truncated__
-  ..$ if_scale              : chr "phi_F on ALL N roster rows; core psi=(n_A/N)*phi_F with 1/n_A covariance normalization"
-  ..$ unsupported           : chr [1:5] "selection_universe B/A" "transport columns (rho)" "corrected custom IPW callbacks" "augmented selection_est_method = \"dr\"" ...
-  ..$ models                :List of 17
- $ inactive_selection         :List of 9
-  ..$ selection_est_method    : chr "imputation"
-  ..$ active                  : logi FALSE
-  ..$ observation_model_fitted: logi FALSE
-  ..$ selection_formula_forced: logi FALSE
-  ..$ selection_model         : chr NA
-  ..$ selection_pooling       : chr NA
-  ..$ selection_xformla       : NULL
-  ..$ universe                : chr "F"
-  ..$ note                    : chr "Pure imputation fits no observation-probability model; selection_model, selection_pooling, and selection_xforml"| __truncated__
- $ outcome_recipe             :List of 9
-  ..$ columns        : chr [1:2] "(Intercept)" "x"
-  ..$ intercept      : logi TRUE
-  ..$ intercept_index: int 1
-  ..$ slope_index    : int 2
-  ..$ slope_columns  : chr "x"
-  ..$ p              : int 1
-  ..$ duration       : chr "L_e = t_calendar_index - s_calendar_index on the stored modeled calendar"
-  ..$ design         : chr "d_e = L_e * z(X) with fixed-unit z"
-  ..$ key            : chr "fixed-X-summed|intercept:TRUE|z:x"
-  ..- attr(*, "class")= chr "cdid_or_pooled_recipe"
- $ treatment_recipe           :List of 3
-  ..$ columns: chr [1:2] "(Intercept)" "x"
-  ..$ index  : int [1:2] 1 2
-  ..$ p      : int 2
-  ..- attr(*, "class")= chr "cdid_dr_treatment_recipe"
- $ cells                      :'data.frame':	30 obs. of  11 variables:
-  ..$ cell_id         : int [1:30] 1 2 3 4 5 6 7 8 9 10 ...
-  ..$ name            : chr [1:30] "k0.e12" "k0.e23" "k0.e34" "k0.e45" ...
-  ..$ cohort          : num [1:30] Inf Inf Inf Inf Inf ...
-  ..$ s               : num [1:30] 1 2 3 4 5 1 2 3 4 1 ...
-  ..$ t               : num [1:30] 2 3 4 5 6 3 4 5 6 4 ...
-  ..$ duration_steps  : int [1:30] 1 1 1 1 1 2 2 2 2 3 ...
-  ..$ group_id        : int [1:30] 1 2 3 4 5 6 7 8 9 10 ...
-  ..$ n_observed_pairs: int [1:30] 235 265 325 346 352 265 294 336 346 268 ...
-  ..$ mass            : num [1:30] 0.117 0.133 0.163 0.173 0.176 ...
-  ..$ local_intercept : num [1:30] 0.1284 0.1714 0.0492 0.0445 0.0812 ...
-  ..$ repeat_rate     : num [1:30] 0.932 0.932 0.932 0.932 0.932 ...
- $ groups                     :List of 30
-  ..$ group0 :List of 12
-  ..$ group1 :List of 12
-  ..$ group2 :List of 12
-  ..$ group3 :List of 12
-  ..$ group4 :List of 12
-  ..$ group5 :List of 12
-  ..$ group6 :List of 12
-  ..$ group7 :List of 12
-  ..$ group8 :List of 12
-  ..$ group9 :List of 12
-  ..$ group10:List of 12
-  ..$ group11:List of 12
-  ..$ group12:List of 12
-  ..$ group13:List of 12
-  ..$ group14:List of 12
-  ..$ group15:List of 12
-  ..$ group16:List of 12
-  ..$ group17:List of 12
-  ..$ group18:List of 12
-  ..$ group19:List of 12
-  ..$ group20:List of 12
-  ..$ group21:List of 12
-  ..$ group22:List of 12
-  ..$ group23:List of 12
-  ..$ group24:List of 12
-  ..$ group25:List of 12
-  ..$ group26:List of 12
-  ..$ group27:List of 12
-  ..$ group28:List of 12
-  ..$ group29:List of 12
- $ counterfactual_or          :List of 9
-  ..$ rank                  : int 1
-  ..$ kept_columns          : chr "x"
-  ..$ shared_slopes         : Named num 0.292
-  .. ..- attr(*, "names")= chr "x"
-  ..$ has_local_intercepts  : logi TRUE
-  ..$ local_block_intercepts: Named num [1:15] 0.0862 0.1023 0.1029 0.1029 0.0913 ...
-  .. ..- attr(*, "names")= chr [1:15] "e12:K={0}" "e23:K={0}" "e34:K={0}" "e45:K={0}" ...
-  ..$ blocks                :'data.frame':	15 obs. of  7 variables:
-  ..$ aliased_columns       : chr(0) 
-  ..$ rss                   : num 23.3
-  ..$ objective             : num 0.0117
- $ treatment                  :List of 15
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
-  ..$ :List of 8
- $ coefficients               :List of 6
-  ..$ imputation_slopes          :List of 30
-  ..$ imputation_local_intercepts: Named num [1:30] 0.1284 0.1714 0.0492 0.0445 0.0812 ...
-  .. ..- attr(*, "names")= chr [1:30] "k0.e12" "k0.e23" "k0.e34" "k0.e45" ...
-  ..$ has_local_intercepts       : logi TRUE
-  ..$ shared_slopes              : Named num 0.292
-  .. ..- attr(*, "names")= chr "x"
-  ..$ local_intercepts           : Named num [1:15] 0.0862 0.1023 0.1029 0.1029 0.0913 ...
-  .. ..- attr(*, "names")= chr [1:15] "e12:K={0}" "e23:K={0}" "e34:K={0}" "e45:K={0}" ...
-  ..$ treatment                  :List of 15
- $ fitted_catalog             :'data.frame':	16 obs. of  16 variables:
-  ..$ index          : int [1:16] 1 2 3 4 5 6 7 8 9 10 ...
-  ..$ role           : chr [1:16] "catalog" "catalog" "catalog" "catalog" ...
-  ..$ cohort         : num [1:16] 3 3 3 3 3 3 3 3 3 3 ...
-  ..$ controls       : chr [1:16] "0" "0" "0" "0" ...
-  ..$ s              : num [1:16] 1 1 1 1 1 2 2 2 2 3 ...
-  ..$ t              : num [1:16] 2 3 4 5 6 3 4 5 6 4 ...
-  ..$ duration_steps : int [1:16] 1 2 3 4 5 1 2 3 4 1 ...
-  ..$ target_cell    : int [1:16] 16 21 25 28 30 17 22 26 29 18 ...
-  ..$ or_block       : int [1:16] 1 6 10 13 15 2 7 11 14 3 ...
-  ..$ treatment_model: int [1:16] 1 2 3 4 5 6 7 8 9 10 ...
-  ..$ mu             : num [1:16] -0.0386 1.1789 1.5004 1.6939 1.9489 ...
-  ..$ mu_ipw         : num [1:16] -0.0386 1.1789 1.5004 1.6939 1.9489 ...
-  ..$ mu_reg         : num [1:16] -0.0389 1.1788 1.5002 1.694 1.9485 ...
-  ..$ mu_dr          : num [1:16] -0.0386 1.1789 1.5004 1.6939 1.9489 ...
-  ..$ d_plus         : num [1:16] 0.452 0.452 0.452 0.452 0.452 ...
-  ..$ d_minus        : num [1:16] 0.451 0.451 0.451 0.451 0.451 ...
- $ support                    :List of 11
-  ..$ n_full_frame_units              : int 2000
-  ..$ n_pair_eligible_A_units         : int 1847
-  ..$ n_frame_only_units              : int 0
-  ..$ design_source                   : chr "X_frame"
-  ..$ design_columns                  : chr [1:2] "(Intercept)" "x"
-  ..$ design_rows                     : int 2000
-  ..$ prediction_rows                 : chr "every F row of each needed cohort (prediction standardization, not fill-only)"
-  ..$ observation_probability_models  : int 0
-  ..$ observation_probabilities_fitted: logi FALSE
-  ..$ if_rows                         : chr "complete original-F rows, including off-A and frame-only units"
-  ..$ scale                           : chr "core psi = (n_A/N) phi_F with covariance divisor n_A; clusters sum original-unit rows"
- $ accounting                 :List of 34
-  ..$ owned_entries                : num 201289
-  ..$ character_bytes              : num 98538
-  ..$ borrowed_entries             : num 1405746
-  ..$ retained_external_entries    : num 1254436
-  ..$ design_owned_entries         : num 6443
-  ..$ design_borrowed_entries      : num 0
-  ..$ external_work_ops            : num 26296576
-  ..$ retained_bound               : num 1611262
-  ..$ fit_scratch_bound            : num 1025792
-  ..$ work_ops_bound               : num 8.81e+09
-  ..$ automatic_chunk_rows         : logi TRUE
-  ..$ n_cells                      : int 30
-  ..$ n_groups                     : int 30
-  ..$ n_imputation_fits            : int 30
-  ..$ n_imputation_local_intercepts: int 30
-  ..$ n_imputation_slopes_by_group : int [1:30] 1 1 1 1 1 1 1 1 1 1 ...
-  ..$ n_or_fits                    : int 1
-  ..$ n_or_blocks                  : int 15
-  ..$ n_or_local_intercepts        : int 15
-  ..$ n_or_shared_slopes           : int 1
-  ..$ n_treatment_models           : int 15
-  ..$ n_treatment_fits             : int 15
-  ..$ n_treatment_columns          : int 2
-  ..$ n_selection_fits             : int 0
-  ..$ n_selection_cells            : int 0
-  ..$ n_selection_blocks           : int 0
-  ..$ n_selection_parameters       : int 0
-  ..$ observation_logit_models     : int 0
-  ..$ full_F_masks_per_model       : int 0
-  ..$ full_F_prediction_matrices   : int 0
-  ..$ full_F_by_link_IF_retained   : logi FALSE
-  ..$ inverse_matrices_retained    : logi FALSE
-  ..$ dense_dummy_regression       : logi FALSE
-  ..$ peak_rss_measured            : logi FALSE
- $ frame_counts               :List of 2
-  ..$ n_full_frame_units     : int 2000
-  ..$ n_pair_eligible_A_units: int 1847
- $ auxiliary_descriptor_status:'data.frame':	1 obs. of  7 variables:
-  ..$ index : int 1
-  ..$ g     : num 3
-  ..$ s     : num 1
-  ..$ t     : num 2
-  ..$ K     : chr "{Inf}"
-  ..$ status: chr "supported"
-  ..$ reason: chr NA
- $ interpretation             : chr "Pure actual-change imputation: the imputation fits use observed pair changes only, and the counterfactual OR (r"| __truncated__
 ```
 
 </details>
@@ -428,7 +201,7 @@ The argument rules are in [Options reference](../reference/options.md#handling-m
 
 ---
 
-**Reading path, step 12 of 20** · Previous: [Choose an observation model](observation-models.md) · Next: [Parallel trends](../methods/parallel-trends.md)
+**Reading path, step 12 of 22** · Previous: [Choose an observation model](observation-models.md) · Next: [Parallel trends](../methods/parallel-trends.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -455,6 +228,8 @@ The argument rules are in [Options reference](../reference/options.md#handling-m
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

@@ -1,6 +1,6 @@
 # Chained GMM weighting and covariance regularization
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain pooled slopes; the current default uses separate comparison regressions.
 
 Chained estimation combines two-period comparison moments across the retained catalog to recover group-time treatment effects. It separately reports direct, unrestricted pre-period comparisons ([Bellego, Benatia, and Dortet-Bernadet 2025](https://doi.org/10.1016/j.jeconom.2024.105783); [Callaway and Sant'Anna 2021](https://doi.org/10.1016/j.jeconom.2020.12.001)). This page explains how the generalized method of moments (GMM) criterion is formed, how exact structural reductions and Tikhonov covariance regularization work under feasible two-step weighting, how moment-covariance singularity differs from parameter identification, and how point-estimate weighting is kept separate from sandwich and multiplier inference.
 
@@ -8,7 +8,7 @@ Chained estimation combines two-period comparison moments across the retained ca
 
 Let $\hat{d}$ denote the $M \times 1$ vector of primitive two-period comparison estimates in the retained comparison catalog. Each entry of $\hat{d}$ compares outcome changes between an ordered pair of stored calendar dates for a target cohort against its admissible control pool (never-treated or not-yet-treated units, including any valid fixed-horizon control-pool reuses in the catalog), constructed using the selected treatment adjustment (`est_method`) and missing-outcome correction (`selection` and `selection_est_method`).
 
-Let $\theta$ denote the GMM model parameters: post-treatment effects and any pre-period trend differentials left free by the chosen parallel-trends model. PT-all restricts represented pre-reference differentials; these model parameters are distinct from the direct, unrestricted pre-period cells reported for the pretrend test. Let $d$ denote the vector of population comparison means and $A$ the known $M \times p$ design mapping $\theta$ to them. Under sufficient parallel-trends, observation-reconstruction, overlap and nuisance-model conditions, with the required regularity,
+Let $\theta$ denote the GMM model parameters: post-treatment effects and any pre-period trend differentials left free by the chosen parallel-trends model. PT-ctrl equates represented pre-reference trends across clean control cohorts while leaving target pre-reference trajectories free, and PT-all restricts represented pre-reference differentials to zero; these model parameters are distinct from direct, unrestricted pre-period cells reported for the pretrend test. Let $d$ denote the vector of population comparison means and $A$ the known $M \times p$ design mapping $\theta$ to them. Under sufficient parallel-trends, observation-reconstruction, overlap and nuisance-model conditions, with the required regularity,
 
 $$
 d = A\theta, \qquad \hat{d} \xrightarrow{p} d
@@ -36,7 +36,7 @@ Two arguments of `cdid::att_gt()` configure the GMM criterion in chained mode, s
 
 | Argument or `control` entry | Default | Accepted values | Meaning |
 | --- | --- | --- | --- |
-| `gmm_weighting` | `"optimal"` | `"optimal"`, `"two_step"`, `"identity"` | `"optimal"` selects feasible two-step GMM using the unit-level moment covariance; `"two_step"` is an explicit alias for `"optimal"`; `"identity"` selects explicit unweighted GMM in the full catalog metric. |
+| `gmm_weighting` | `"optimal"` | `"optimal"`, `"two_step"`, `"identity"`, `"within"` | `"optimal"` selects feasible two-step GMM using the unit-level moment covariance; `"two_step"` is an explicit alias for `"optimal"`; `"identity"` selects explicit unweighted GMM in the full catalog metric; `"within"` weights moments by the inverse of the analytical covariance of within-unit changes under uncorrelated level shocks. See [Cross-pair chaining](cross-pair-chaining.md) for the conditions for matching stacked fixed-effect regression. |
 | `gmm_covariance` | `"tikhonov"` | `"tikhonov"` | Singular or near-singular moment-covariance handler under feasible two-step weighting. `"moore_penrose"` is deferred and refused. |
 | `control$condition_trigger` | `1e-10` | finite numeric scalar in $(0, 1)$ | Reciprocal spectral condition threshold $\tau_{\mathrm{cond}}$ below which `"tikhonov"` covariance regularization is triggered. |
 | `control$ridge_relative` | `1e-4` | finite positive numeric scalar | Relative ridge multiplier $\alpha_{\mathrm{ridge}}$ applied to the full-catalog trace scale when regularization is triggered. |
@@ -233,19 +233,6 @@ fit_gmm_variants <- function(data, frame = NULL) {
 
 fits <- fit_gmm_variants(sim_panel)
 
-# Inspect the recorded GMM weighting, support, inference, and public profile records
-covariance <- fits$optimal$chained$covariance_handling
-covariance$target_availability$target_id <- NULL
-str(covariance)
-str(fits$optimal$chained$support)
-str(fits$optimal$chained$inference)
-profile <- fits$optimal$chained$public
-profile$decisions <- NULL
-profile$profile_status <- NULL
-profile$numerical_policy$decision <- NULL
-profile$numerical_policy$relative_accuracy_status <- NULL
-str(profile)
-
 # Compare cell estimates and analytical standard errors
 cdid::tidy(fits$optimal)[, c("target.id", "role", "available", "estimate", "std.error")]
 cdid::tidy(fits$identity)[, c("target.id", "role", "available", "estimate", "std.error")]
@@ -256,183 +243,6 @@ cdid::glance(fits$optimal)
 <summary>Console output</summary>
 
 ```text
-List of 28
- $ weighting_requested   : chr "optimal"
- $ weighting_canonical   : chr "optimal"
- $ alias_used            : logi FALSE
- $ handler_selected      : chr "tikhonov"
- $ handler_invoked       : logi FALSE
- $ handler_used          : chr "none"
- $ trigger_reason        : chr "well_conditioned_pd"
- $ dimensions            :List of 9
-  ..$ M_full                   : int 15
-  ..$ L_retained               : int 5
-  ..$ p_parameters             : int 5
-  ..$ k_design_rank            : int 5
-  ..$ n_targets                : int 5
-  ..$ n_estimable              : int 5
-  ..$ M_positive_rows          : int 2000
-  ..$ sample_rank_upper_bound  : int 1999
-  ..$ exceeds_sample_rank_bound: logi FALSE
- $ gram_provenance       : chr "sparse_structural_reduction_E_t_E"
- $ gram_is_identity      : logi FALSE
- $ gram_is_diagonal      : logi FALSE
- $ gram_n_triplets       : int 20
- $ kept_indices          : int [1:5] 1 2 3 4 5
- $ condition_trigger     : num 1e-10
- $ ridge_relative        : num 1e-04
- $ scale                 : num 7.89
- $ trace_B               : num 118
- $ lambda                : num NA
- $ covariance_rank       : int 5
- $ covariance_rank_rule  : chr "computed eigenvalues above b + r; numerical diagnostic only"
- $ weighted_design_rank  : int 5
- $ conditioning          :List of 13
-  ..$ rho                          : num 0.891
-  ..$ rho_raw                      : num 0.891
-  ..$ d_min                        : num 22.3
-  ..$ d_max                        : num 25.1
-  ..$ eigenvalues_B                : num [1:5] 25.1 24.7 23.4 23 22.3
-  ..$ norm_B_frobenius             : num 53
-  ..$ b_roundoff_bound             : num 5.88e-12
-  ..$ r_eigen_residual             : num 2.49e-14
-  ..$ eigensystem_refinement       :List of 2
-  .. ..$ method           : chr "none"
-  .. ..$ original_residual: num 2.49e-14
-  ..$ diagnosed_numerical_negative : logi FALSE
-  ..$ negative_eigenvalue_diagnosis: chr "nonnegative_spectrum"
-  ..$ nonpositive_eigenvalue_count : int 0
-  ..$ gram_provenance_certified    : logi TRUE
- $ zero_covariance       : logi FALSE
- $ zero_covariance_branch: chr "not_applicable"
- $ inference_claim       : chr "complete_unit_if_sandwich_conditional_on_stable_loading"
- $ target_availability   :'data.frame':	5 obs. of  2 variables:
-  ..$ estimable: logi [1:5] TRUE TRUE TRUE TRUE TRUE
-  ..$ status   : chr [1:5] "estimable" "estimable" "estimable" "estimable" ...
- $ tuning_overrides      : chr(0) 
- $ scope_note            : chr "Regularized criterion covariance is used only for the GMM weighting matrix; inference replays the complete unit"| __truncated__
-List of 6
- $ status                : chr "all_requested_supported"
- $ available_ids         : chr [1:5] "pre(g=3,t=2)" "ATT(g=3,t=3)" "ATT(g=3,t=4)" "ATT(g=3,t=5)" ...
- $ unavailable_ids       : chr(0) 
- $ n_available           : int 5
- $ n_requested           : int 5
- $ whole_request_complete: logi TRUE
-List of 16
- $ kind                    : chr "analytic"
- $ bstrap                  : logi FALSE
- $ cband                   : logi FALSE
- $ biters                  : int NA
- $ clustered               : logi FALSE
- $ n_clusters              : int 2000
- $ n_zero_eligible_clusters: int 0
- $ n_total                 : int 2000
- $ rng                     : NULL
- $ multiplier              : NULL
- $ requested               :List of 3
-  ..$ bstrap: logi FALSE
-  ..$ cband : logi FALSE
-  ..$ biters: num 1000
- $ zero_law                : logi FALSE
- $ flag_law                : chr "explicit_bstrap_and_cband"
- $ released_false_true     : logi FALSE
- $ endpoint                : chr "cells"
- $ draws                   : logi FALSE
-List of 21
- $ entry                              : chr "cdid::att_gt(mode = \"chained\", est_method = \"dr\", control = ...)"
- $ profile                            :List of 3
-  ..$ numeric_workspace_bytes: num 1.07e+09
-  ..$ counted_work_limit     : num Inf
-  ..$ workers                : num 1
- $ profile_source                     : chr "NULL: resolved to the defaults (optional work cap disabled; memory/worker defaults)"
- $ overrides                          : chr(0) 
- $ numeric_workspace_entries          : num 1.34e+08
- $ counted_work_limit                 : num Inf
- $ work_cap                           :List of 6
-  ..$ status                        : chr "disabled"
-  ..$ user_limit                    : num Inf
-  ..$ source                        : chr "default: no user work budget"
-  ..$ effective_private_max_work_ops: num 9.01e+15
-  ..$ internal_arithmetic_ceiling   : num 9.01e+15
-  ..$ meaning                       : chr "no user work budget; the private stage controls carry the exact-count arithmetic ceiling 2^53 - 1 so that count"| __truncated__
- $ chunk_rows                         : num 256
- $ chunk_rule                         : chr "min(n_frame, 256, floor(workspace_entries / (2048 (links_bound + p + 1))))"
- $ dimensions                         :List of 22
-  ..$ n_frame              : num 2000
-  ..$ n_panel_units        : num 2000
-  ..$ n_rows               : num 12000
-  ..$ n_dates              : num 6
-  ..$ n_cohorts            : num 2
-  ..$ n_targets            : num 1
-  ..$ n_covariates         : num 1
-  ..$ biters               : num 1000
-  ..$ n_clusters           : num 2000
-  ..$ n_aggregation_types  : num 4
-  ..$ pairs_per_target     : num 15
-  ..$ R_full               : num 4
-  ..$ candidates_bound     : num 105
-  ..$ links_bound          : num 30
-  ..$ Q_bound              : num 12
-  ..$ params_bound         : num 61
-  ..$ J_bound              : num 82
-  ..$ mask_entries_bound   : num 60000
-  ..$ pool_entries_bound   : num 60
-  ..$ E_entries_bound      : num 180
-  ..$ materialized_if_bound: num 164000
-  ..$ scope                : chr "actual counts of the one prepared input and finite derived upper bounds implied by the accepted catalog/design "| __truncated__
- $ derived_bounds                     :'data.frame':	16 obs. of  2 variables:
-  ..$ bound: chr [1:16] "owner/fitted/point/problem/link/covariance max_retained/matrix/output entries" "work limits (max_work_ops, catalog max_work): user work cap disabled; exact-count arithmetic ceiling 2^53 - 1" "max_observer_units" "catalog max_candidates" ...
-  ..$ value: num [1:16] 1.34e+08 9.01e+15 2.00e+03 1.05e+02 3.00e+01 ...
- $ glm                                :List of 2
-  ..$ epsilon: num 1e-12
-  ..$ maxit  : int 50
- $ unused_private_certificate_settings:List of 3
-  ..$ taylor_degree: int 12
-  ..$ max_abs_eta  : num 50
-  ..$ max_squarings: int 16
- $ gmm_guard                          :List of 8
-  ..$ max_orthogonality_defect: num 1e-08
-  ..$ min_certified_lambda_rel: num 1e-10
-  ..$ max_factor_residual_rel : num 1e-10
-  ..$ min_rcond_R             : num 1e-10
-  ..$ min_rcond_U             : num 1e-10
-  ..$ min_sigma_rel_A         : num 1e-10
-  ..$ max_kkt_residual_rel    : num 1e-10
-  ..$ max_loading_residual_rel: num 1e-10
- $ gmm_weighting                      :List of 3
-  ..$ requested : chr "optimal"
-  ..$ canonical : chr "optimal"
-  ..$ alias_used: logi FALSE
- $ covariance_strategy                :List of 7
-  ..$ method             : chr "tikhonov"
-  ..$ condition_trigger  : num 1e-10
-  ..$ ridge_relative     : num 1e-04
-  ..$ overrides          : chr(0) 
-  ..$ weighting_requested: chr "optimal"
-  ..$ weighting_canonical: chr "optimal"
-  ..$ alias_used         : logi FALSE
-  ..- attr(*, "class")= chr "cdid_gmm_covariance_strategy"
- $ numerical_policy                   :List of 5
-  ..$ mode                                    : chr "conventional"
-  ..$ complete_per_fit_certification_requested: logi FALSE
-  ..$ complete_per_fit_certification_performed: logi FALSE
-  ..$ override_recorded                       : logi FALSE
-  ..$ rule                                    : chr "stable Cholesky/QR with existing conditioning and factor residual policies; complete IF/inference; residual rat"| __truncated__
- $ admission                          :List of 8
-  ..$ numeric_payload_bytes      : num 1.07e+09
-  ..$ numeric_payload_entries    : num 1.34e+08
-  ..$ counted_work_limit         : num Inf
-  ..$ work_cap_status            : chr "disabled"
-  ..$ private_max_work_ops       : num 9.01e+15
-  ..$ scope                      : chr "bounds the reachable numeric payload the accepted preflights count; the estimated-work cap is optional and, whe"| __truncated__
-  ..$ whole_process_RSS_guarantee: logi FALSE
-  ..$ measurement_status         : chr "no whole-call resource guarantee or performance claim"
- $ execution                          :List of 3
-  ..$ declared_workers  : num 1
-  ..$ multiplier_workers: num 1
-  ..$ scope             : chr "estimation is serial; only multiplier-bootstrap raw-draw products may use worker processes, whose whole buffers"| __truncated__
- $ witness                            : chr "not requested/performed on the conventional-computation public path"
- $ retention                          : chr "no observation, moment or record is dropped on refusal; the accepted pipeline's typed bound errors stop the call"
      target.id role available    estimate  std.error
 1 pre(g=3,t=2)  pre      TRUE -0.05831968 0.06369725
 2 ATT(g=3,t=3) post      TRUE  1.00962257 0.06316956
@@ -455,13 +265,9 @@ List of 21
 
 ### Resource controls versus statistical and numerical limits
 
-The advanced `control` list also carries resource-admission settings that are recorded in `fit$chained$public` and kept distinct from covariance conditioning and statistical inference:
+Use the `control` list to adjust workspace and bootstrap settings. `numeric_workspace_bytes` limits the numerical arrays that `cdid` plans to allocate and defaults to one GiB. `counted_work_limit` is optional and limits the estimated operations for a calculation. Use `chunk_rows` to set the number of units processed at once or `workers` to allow additional bootstrap workers.
 
-- **Counted numeric workspace (`numeric_workspace_bytes`).** Defaults to `1073741824` (1 GiB, recorded in `fit$chained$public$profile$numeric_workspace_bytes`) and must be a finite whole number of bytes at least `8` (up to $2^{53} - 1$). Preflight checks convert this byte budget into binary64 array entries (`floor(numeric_workspace_bytes / 8)`) and refuse stages whose conservative reachable numeric buffer envelope exceeds it.
-- **Optional counted-work limit (`counted_work_limit`).** Defaults to `Inf` (disabled). Supplying a finite positive whole number (up to $2^{53} - 1$) opts into a preflight cap on conservative counted-work estimates, refusing a stage before execution if its estimated work units exceed the limit; supplying `Inf` explicitly opts out. When disabled (`Inf`), internal stage constructors still use the exact binary64 integer ceiling $2^{53} - 1$ to protect integer count arithmetic from overflow; `fit$chained$public$counted_work_limit` and `fit$chained$public$work_cap` record the user setting and the internal arithmetic ceiling separately.
-- **Streamed chunking and bootstrap workers (`chunk_rows`, `workers`).** `chunk_rows` overrides the automatic unit-chunk size used by streamed producers, and `workers` (default `1`) declares how many worker processes `pl = TRUE, cores = k` may use during multiplier-bootstrap draw products. GMM estimation and covariance handling always run serially, and worker buffers are charged against the same `numeric_workspace_bytes` limit.
-- **Not process memory or runtime.** Counted workspace bytes measure bounded numeric array payloads, and counted work units are conservative operation counts rather than bytes or seconds. Neither setting caps R process resident set size (RSS), interpreter heap overhead, or CPU and wall-clock time, and `cdid` makes no timing, scaling, or whole-process resource guarantee.
-- **Separate failure modes.** Exceeding a workspace or opt-in work limit aborts the call before the stage runs without dropping units or moments. Mathematical singularity of $B$ is handled by exact reduction and `"tikhonov"` covariance regularization during point estimation. Neither a completed covariance-ridge solve nor an admitted resource profile establishes that the sample has enough units or independent clusters for accurate asymptotic normal or multiplier-bootstrap inference, or that the full joint covariance of pre-period cells is well conditioned enough to compute the unconditional pretrend Wald statistic `W`.
+These settings describe allocations and estimated work within the fit. Total R process memory and elapsed time depend on the machine and the rest of the R session. See [The control list](../reference/options.md#the-control-list) for accepted values.
 
 ## Related pages
 
@@ -473,7 +279,7 @@ The advanced `control` list also carries resource-admission settings that are re
 
 ---
 
-**Reading path, step 15 of 20** · Previous: [Add PT-all restrictions](../examples/pt-all-comparison.md) · Next: [Robustness](../examples/robustness.md)
+**Reading path, step 15 of 22** · Previous: [Add PT-all restrictions](../examples/pt-all-comparison.md) · Next: [Robustness](../examples/robustness.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -500,6 +306,8 @@ The advanced `control` list also carries resource-admission settings that are re
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](../examples/short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

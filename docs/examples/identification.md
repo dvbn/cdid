@@ -357,7 +357,7 @@ Each unit has exactly two observed outcomes. The post-treatment truth is 1 at ev
 
 ---
 
-**Reading path, step 4 of 20** · Previous: [Incomplete panels](incomplete-panels.md) · Next: [How to compare precision](precision.md)
+**Reading path, step 4 of 22** · Previous: [Incomplete panels](incomplete-panels.md) · Next: [How to compare precision](precision.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -384,6 +384,8 @@ Each unit has exactly two observed outcomes. The post-treatment truth is 1 at ev
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

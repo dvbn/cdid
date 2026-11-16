@@ -5,6 +5,10 @@ dr_separate <- function(backend) identical(backend$outcome_pooling, "separate")
 # Conservative global reservation precedes dependency maps and chunk buffers.
 # Shared selection groups compose their existing upstream envelope afterward.
 dr_separate_if_envelope <- function(backend, B, links, details) {
+  if (!details && isTRUE(backend$uses_selection_models)) {
+    fast_pre <- cdid_fast_dr_sep_ord_envelope(backend, B, links)
+    if (!is.null(fast_pre)) return(fast_pre)
+  }
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   G <- length(backend$regression_specs); S <- length(backend$supports)
@@ -70,29 +74,98 @@ dr_separate_if_envelope <- function(backend, B, links, details) {
 }
 
 evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE, plan = NULL) {
+  # Issue #16: the native separate-DR chunk is not eligibility-aware; a
+  # backend with a restricted context replays the masked R rows below.
+  if (!missing(backend) && !missing(rows) && !missing(links) &&
+      !(is.list(backend) && !is.null(backend$reference_ref) &&
+        chained_reference_restricted(chained_backend_reference(backend)))) {
+    fast_out <- cdid_fast_eval_dr_sep_if_chunk(backend, rows, links, scale, details, plan)
+    if (!is.null(fast_out)) return(fast_out)
+  }
   validate_dr_backend(backend)
   route <- if (isTRUE(backend$uses_selection_models)) "corollary1" else "baseline"
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
-  valid <- function(x, n) is.numeric(x) && !is.object(x) && is.null(dim(x)) && length(x) > 0L &&
-    all(is.finite(x)) && all(x == floor(x)) && all(x >= 1 & x <= n) && !anyDuplicated(x)
-  if (!valid(rows, st$N) || length(rows) > backend$control$max_chunk_rows ||
-      !valid(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
+  if (!cdid_sel_valid_idx(rows, st$N) || length(rows) > backend$control$max_chunk_rows ||
+      !cdid_sel_valid_idx(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
       !is.character(scale) || length(scale) != 1L || is.na(scale) || !scale %in% c("frame", "core"))
     dr_route_abort(route, "Invalid explicit IF row/link batch, scale or details flag.")
   preparation <- if (!details && isTRUE(backend$uses_selection_models) && !is.null(plan)) plan else NULL
-  pre <- if (is.null(preparation)) dr_separate_if_envelope(backend, length(rows), links, details) else
-    dr_conditional_replay_check(preparation, backend, links, length(rows))
-  cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
-    pre$scratch, c(backend$accounting$work_ops_bound, pre$work), pre$output, "separate DR IF chunk")
+  use_fast_meta <- !details && !isTRUE(backend$uses_selection_models) && is.null(backend$reference_ref) &&
+    is.null(backend$separate_complete) && !is.null(plan) &&
+    !identical(plan$kind, "dr_separate_baseline_replay_plan") &&
+    cdid_are_default_fns(c("dr_separate_if_envelope", "cp04_budget"))
+  use_sel_meta <- !details && is.null(preparation) &&
+    (isTRUE(backend$uses_selection_models) || !is.null(backend$reference_ref)) &&
+    cdid_are_default_fns(c("dr_separate_if_envelope", "cp04_budget"))
+  meta <- if (use_fast_meta) {
+    cdid_get_if_chunk_meta(backend, length(rows), links, "dr_sep_if_meta")
+  } else if (use_sel_meta) {
+    cdid_sel_get_if_meta(backend, length(rows), links, "dr_sep_sel_if_meta")
+  } else {
+    NULL
+  }
+  if (!is.null(meta)) {
+    pre <- meta$pre
+    link_names <- meta$link_names
+  } else {
+    pre <- if (is.null(preparation)) dr_separate_if_envelope(backend, length(rows), links, details) else
+      dr_conditional_replay_check(preparation, backend, links, length(rows))
+    cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
+      pre$scratch, c(backend$accounting$work_ops_bound, pre$work), pre$output, "separate DR IF chunk")
+    link_names <- NULL
+    if (use_fast_meta) {
+      link_names <- vapply(backend$links[links], `[[`, character(1), "link_id")
+      cdid_set_if_chunk_meta(backend, length(rows), links, pre, link_names, "dr_sep_if_meta")
+    } else if (use_sel_meta) {
+      link_names <- vapply(backend$links[links], `[[`, character(1), "link_id")
+      cdid_sel_set_if_meta(backend, length(rows), links, pre, link_names, "dr_sep_sel_if_meta")
+    }
+  }
   if (!details && !isTRUE(backend$uses_selection_models) && !is.null(backend$separate_complete))
     return(if (is.null(plan)) dr_separate_complete_if(backend, reader, rows, links, scale, pre) else
       separate_complete_native_if(backend, reader, rows, links, scale, pre, plan))
   if (!details && !isTRUE(backend$uses_selection_models) && is.null(backend$reference_ref) &&
       !is.null(plan) && !identical(plan$kind, "dr_separate_baseline_replay_plan"))
-    return(dr_separate_sparse_if(backend, reader, rows, links, scale, pre, plan))
+    return(dr_separate_sparse_if(backend, reader, rows, links, scale, pre, plan, link_names = link_names))
   B <- length(rows); N <- st$N; conditional <- isTRUE(backend$uses_selection_models)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
-  ref <- chained_backend_reference(backend); ci <- st$cohort_index[rows]
+  ref <- chained_backend_reference(backend)
+  if (!details && (conditional || !is.null(ref)) && !chained_reference_restricted(ref) &&
+      is.null(backend$layout) && is.null(backend$pair_outcomes) &&
+      (is.null(preparation) || cdid_are_default_fns("dr_conditional_replay_upstream_index"))) {
+    prep_info <- if (!is.null(preparation) && conditional) list(
+      up_idx = dr_conditional_replay_upstream_index(
+        preparation, backend$selection_backend, backend$up_map, pre$uids, FALSE
+      )
+    ) else NULL
+    if (is.null(link_names) && !is.null(preparation)) link_names <- preparation$link_names
+    fast_if <- cdid_fast_sel_if_chunk(
+      3L, backend, reader, frame, ref, rows, links, scale, pre, link_names, prep_info
+    )
+    if (!is.null(fast_if)) {
+      out <- list(
+        rows = rows, id = st$id[rows], links = links, phi = fast_if$phi, scale = scale,
+        normalization_count = if (scale == "core") st$n_A else N,
+        diagnostics = list(
+          outcome_pooling = "separate",
+          n_rate_score_evaluations = if (conditional) sum(pre$uids <= backend$upstream$n_a) else length(pre$sids),
+          n_selection_score_evaluations = if (conditional) fast_if$n_act_cells else 0L,
+          n_selection_block_evaluations = if (conditional) fast_if$n_act_blocks else 0L,
+          n_regression_score_evaluations = length(pre$gids),
+          n_global_beta_blocks = 0L,
+          n_block_beta_blocks = length(pre$gids),
+          n_treatment_score_evaluations = length(pre$tids),
+          output_entries_bound = pre$output,
+          concurrent_scratch_bound = pre$scratch,
+          work_ops_bound = pre$work
+        )
+      )
+      if (unname(cp04_payload(out)["entries"]) > pre$output)
+        dr_route_abort(route, "IF output bound underestimated.", "bound")
+      return(out)
+    }
+  }
+  ci <- st$cohort_index[rows]
   w <- if (is.null(ref)) st$w[rows] else rep(NA_real_, B)
   A <- as.double(st$a_index[rows] > 0L)
   all_or_cols <- backend$or_frame_index[backend$outcome_recipe$slope_index]
@@ -109,6 +182,8 @@ evaluate_dr_separate_if_chunk <- function(backend, rows, links, scale = "frame",
   for (j in seq_along(pre$sids)) {
     sid <- pre$sids[j]; sp <- backend$support_specs[[sid]]; u <- backend$supports[[sid]]
     ix <- which(ci == sp$cohort)
+    if (chained_reference_restricted(ref))
+      ix <- ix[chained_reference_eligible(ref, sp$reference, rows[ix])]
     hit <- if (is.null(pair_op)) cp04_pair_rows(reader, rows[ix], sp$pair, TRUE) else
       pair_op$pair(rows[ix], sp$pair, TRUE)
     obs <- ix[hit$S == 1]; rr <- rows[obs]

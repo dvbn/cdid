@@ -661,6 +661,14 @@ ipw_pair_rates <- function(risk_gi, risk_w, sup) {
 # Exact structural obstruction on the actual, validated finite fitting matrix.
 # Column slices keep scratch O(n); at most n * p * (p + 1) / 2 comparisons.
 ipw_logit_exact_alias <- function(X) {
+  fk_fn <- get0("cdid_fast_kernel", mode = "function", inherits = TRUE)
+  if (!is.null(fk_fn)) {
+    fk <- tryCatch(fk_fn("C_cdid_logit_exact_alias"), error = function(e) NULL)
+    if (!is.null(fk)) {
+      res <- fk(X)
+      if (!is.null(res)) return(res)
+    }
+  }
   for (j in seq_len(ncol(X))) {
     xj <- X[, j]
     if (all(xj == 0)) return(TRUE)
@@ -729,6 +737,16 @@ ipw_clip_cap_odds <- (1 - 1e-6) / (1 - (1 - 1e-6))
 # beyond 40 both forms equal 1 in binary64, and exp(eta) is not evaluated.
 # Nonfinite predictors keep their nonfinite values for the existing refusals.
 ipw_clip_logit <- function(eta) {
+  if (length(eta) >= 64L) {
+    fk_fn <- get0("cdid_fast_kernel", mode = "function", inherits = TRUE)
+    if (!is.null(fk_fn)) {
+      fk <- fk_fn("C_cdid_clip_logit")
+      if (!is.null(fk)) {
+        res <- fk(eta, NULL)
+        if (!is.null(res)) return(res)
+      }
+    }
+  }
   hi <- is.finite(eta) & eta > 40
   odds <- exp(ifelse(hi, 0, eta))
   prob <- odds / (1 + odds)
@@ -788,6 +806,16 @@ ipw_clip_summary_merge <- function(a, b) {
 }
 
 ipw_logit_values <- function(Z_use, beta) {
+  if (is.matrix(Z_use) && nrow(Z_use) >= 32L) {
+    fk_fn <- get0("cdid_fast_kernel", mode = "function", inherits = TRUE)
+    if (!is.null(fk_fn)) {
+      fk <- fk_fn("C_cdid_clip_logit")
+      if (!is.null(fk)) {
+        res <- fk(Z_use, as.double(beta))
+        if (!is.null(res)) return(res)
+      }
+    }
+  }
   ipw_clip_logit(drop(Z_use %*% beta))
 }
 
@@ -832,6 +860,25 @@ ipw_logit_coordinate_separation <- function(Z, D, weights = NULL) {
 
 # Shared observer-buffer weighted-logit worker for dense and owner-backed nuisance fits.
 ipw_nuisance_observer_fit_worker <- function(sup, risk_a_idx, risk_gi, risk_w, Z_use, ctrl, diag_env = NULL) {
+  # The fused worker derives the fitted normalizers from native predictions.
+  # Use that worker only on the size range where reconstruction uses the
+  # same native prediction arithmetic.
+  if (is.matrix(Z_use) && nrow(Z_use) >= 32L &&
+      exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(c(
+        "ipw_pair_rates", "ipw_clip_floor", "ipw_logit_exact_alias",
+        "ipw_logit_coordinate_separation",
+        "ipw_glm_fit_internal", "ipw_logit_values", "ipw_clip_logit",
+        "ipw_obs_weights", "ipw_clip_summary"
+      )) &&
+      is.list(ctrl) && is.numeric(ctrl$epsilon) && length(ctrl$epsilon) == 1L &&
+      is.numeric(ctrl$maxit) && length(ctrl$maxit) == 1L && !isTRUE(ctrl$trace)) {
+    fk_glm <- cdid_fast_kernel("C_cdid_ipw_glm_fit")
+    if (!is.null(fk_glm)) {
+      fast_st <- fk_glm(Z_use, risk_gi, risk_w, list(sup, risk_a_idx, as.double(c(ctrl$epsilon, ctrl$maxit))))
+      if (!is.null(fast_st)) return(fast_st)
+    }
+  }
   n <- sup$n
   pr <- ipw_pair_rates(risk_gi, risk_w, sup)
   rates <- pr$rates
@@ -879,6 +926,59 @@ ipw_nuisance_observer_fit_worker <- function(sup, risk_a_idx, risk_gi, risk_w, Z
       "Weighted propensity logit has deficient model rank.",
       c("cdid_ipw_rank_error", "cdid_ipw_fit_error")
     )
+  }
+
+  if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(c("ipw_glm_fit_internal", "ipw_logit_values", "ipw_logit_coordinate_separation")) &&
+      is.list(ctrl) && is.numeric(ctrl$epsilon) && length(ctrl$epsilon) == 1L &&
+      is.numeric(ctrl$maxit) && length(ctrl$maxit) == 1L && !isTRUE(ctrl$trace)) {
+    fk_glm <- cdid_fast_kernel("C_cdid_ipw_glm_fit")
+    if (!is.null(fk_glm)) {
+      fast_gf <- fk_glm(Z_use, D_use, fit_weights, as.double(c(ctrl$epsilon, ctrl$maxit)))
+      if (!is.null(fast_gf)) {
+        beta <- fast_gf$beta
+        names(beta) <- colnames(Z_use)
+        lv <- ipw_logit_values(Z_use, beta)
+        eta_use <- lv$eta
+        odds_use <- lv$odds
+        prob_use <- lv$prob
+        prob_eps <- 10 * .Machine$double.eps
+        if (all(is.finite(eta_use)) && all(is.finite(odds_use)) && all(odds_use > 0) &&
+            all(is.finite(prob_use)) &&
+            !any(prob_use <= prob_eps | prob_use >= 1 - prob_eps | prob_use * (1 - prob_use) <= 0)) {
+          ow <- ipw_obs_weights(fit_weights, odds_use, risk_gi, n)
+          if (is.finite(ow$sum_a) && ow$sum_a > 0 && is.finite(ow$mean_a) && ow$mean_a > 0 &&
+              is.finite(ow$sum_b) && ow$sum_b > 0 && is.finite(ow$mean_b) && ow$mean_b > 0) {
+            qr_tol <- min(1e-7, as.double(ctrl$epsilon) / 1000)
+            qr_R_f <- fast_gf$qr_R
+            colnames(qr_R_f) <- colnames(Z_use)
+            return(list(
+              n = n, m_cohorts = sup$m_cohorts, p = p,
+              risk_a_idx = risk_a_idx, risk_gi = risk_gi, risk_w = risk_w,
+              pair_count = pr$pair_count, pair_mass = pr$pair_mass, rates = rates,
+              Z_use = Z_use, D_use = D_use, fit_weights = fit_weights,
+              beta = beta, odds_use = odds_use, prob_use = prob_use,
+              is_t = ow$is_t, is_c = ow$is_c, a_obs = ow$a_obs, b_obs = ow$b_obs,
+              sum_a = ow$sum_a, mean_a = ow$mean_a, sum_b = ow$sum_b, mean_b = ow$mean_b,
+              fit_info = list(
+                qr_R = qr_R_f,
+                qr_pivot = seq_len(p),
+                qr_tol = qr_tol,
+                rank = as.integer(p),
+                converged = TRUE,
+                boundary = FALSE,
+                iter = fast_gf$iter,
+                df_residual = fast_gf$df_residual,
+                deviance = fast_gf$deviance,
+                null_deviance = fast_gf$null_deviance,
+                aic = fast_gf$aic,
+                clipping = ipw_clip_summary(prob = prob_use, rates = rates, controls = ow$is_c, weights = fit_weights)
+              )
+            ))
+          }
+        }
+      }
+    }
   }
 
   gf <- ipw_glm_fit_internal(Z_use, D_use, fit_weights, ctrl)
@@ -1034,6 +1134,19 @@ ipw_nuisance_fit_stage <- function(context, sup, risk, ctrl) {
 ipw_nuisance_hessian_stage <- function(st, cohort_labels) {
   n <- st$n
   Z_use <- st$Z_use
+  fk_hess <- get0("cdid_fast_kernel", mode = "function", inherits = TRUE)
+  if (!is.null(fk_hess)) {
+    fk <- fk_hess("C_cdid_ipw_hessian")
+    if (!is.null(fk)) {
+      fast_h <- fk(Z_use, st$fit_weights, st$prob_use, as.integer(st$risk_gi), st$risk_w,
+                   as.double(st$rates), as.double(c(n, st$m_cohorts)))
+      if (!is.null(fast_h)) {
+        A_br <- fast_h$A_beta_r
+        dimnames(A_br) <- list(colnames(Z_use), cohort_labels)
+        return(list(H = fast_h$H, H_chol = fast_h$H_chol, A_beta_r = A_br))
+      }
+    }
+  }
   w_hess <- st$fit_weights * st$prob_use * (1 - st$prob_use)
   H <- crossprod(Z_use, Z_use * as.numeric(w_hess)) / n
   if (any(!is.finite(H))) {
@@ -1087,6 +1200,23 @@ ipw_link_means <- function(st, risk_dy) {
 
 # Outcome partials and replay loadings, reusing the single factor `H_chol`.
 ipw_link_partials <- function(st, hs, risk_dy, means, q, cohort_labels) {
+  if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(c("ipw_clip_odds_active", "ipw_clip_floor", "ipw_clip_floor_active"))) {
+    fk_hess <- cdid_fast_kernel("C_cdid_ipw_hessian")
+    if (!is.null(fk_hess)) {
+      fast_pt <- fk_hess(st, hs, as.double(risk_dy), NULL, NULL, as.double(q), as.character(cohort_labels))
+      if (!is.null(fast_pt)) {
+        return(list(
+          G_beta = fast_pt$G_beta,
+          G_r = fast_pt$G_r,
+          loading_beta = fast_pt$loading_beta,
+          loading_rate = fast_pt$loading_rate,
+          rate_coef_s0 = fast_pt$rate_coef_s0,
+          rate_coef_s1 = fast_pt$rate_coef_s1
+        ))
+      }
+    }
+  }
   # Outcome partials: G_beta = -sum(b 1{p_raw < 1 - eps} Z (delta - Cmean)) / sum(b);
   # G_{r_g} = 0 directly; G_{r_j} = 1{r_j > eps} sum(w_i 1_j S odds (delta - Cmean)) / (max(r_j, eps)^2 sum(b)) for j in K.
   Z_use <- st$Z_use

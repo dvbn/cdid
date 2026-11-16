@@ -17,15 +17,34 @@ execute:
   error: false
 ---
 
-[Editable Quarto source](https://github.com/dvbn/cdid/blob/main/notebooks/cdid_practical_guide.qmd) · [Download standalone HTML with results](https://github.com/dvbn/cdid/raw/refs/heads/main/notebooks/cdid_practical_guide.html)
+[Editable Quarto source](https://github.com/dvbn/cdid/blob/main/notebooks/cdid_practical_guide.qmd) · [Download the HTML with results](https://github.com/dvbn/cdid/raw/refs/heads/main/notebooks/cdid_practical_guide.html)
 
 Download the HTML file and open it in a browser to read the tables and plots without running R. To edit and rerun the examples, use the Quarto source and [notebook instructions](https://github.com/dvbn/cdid/blob/main/notebooks/README.md).
 
+**Learning path.** Many examples reuse the study population drawn in Section 2. Several examples draw separate data to illustrate particular designs. Read the sections in this order the first time:
+
+- **Set up and inspect** ([1](#guide-1) to [3](#guide-3)): load the packages, edit the configuration, draw the study units, and inspect missingness and pair support before any fit.
+- **First fit** ([4](#guide-4)): a balanced-panel fit with `gname`, the four aggregations and the plots.
+- **Missing outcomes** ([5](#guide-5) to [8](#guide-8)): observation models, treatment IPW, OR and DR, slope pooling, rotating panels, fitted support, change imputation, the augmented correction and the fitted model reports.
+- **Comparisons and trends** ([9](#guide-9)): not-yet-treated controls, `base_period`, PT-all, cross-pair chains on disjoint windows and ordinary `did` delegation.
+- **Inference and robustness** ([10](#guide-10) to [12](#guide-12)): multiplier bands, clustering, both pretrend tests and treatment-DR correctness cases.
+- **Inputs, weighting and tools** ([13](#guide-13) to [16](#guide-16)): dated covariates, known reference covariate rows, GMM weighting, point-only fits, parallel draws, the custom estimator contract and exports.
+- **Other treatment designs** ([17](#guide-17) and [18](#guide-18)): a binary treatment that can stop and restart with `dname`, and the cohort-by-date fixed-effects preset. These two sections draw their own data and can be read right after Section 9.
+
+The [function map](#function-map) at the end lists the functions and main controls of every section.
+
 ## 1. Setup and How to Use This Notebook {#guide-1}
 
-This Quarto notebook is an interactive, editable tutorial for estimating group-time average treatment effects and event-study aggregations with `cdid` (implementing Bellégo, Benatia and Dortet-Bernadet 2025 and extending Callaway and Sant'Anna 2021). Every estimation call uses the public `cdid` interface directly so you can copy, modify, and run individual chunks in your own workflow. See [Get started](https://github.com/dvbn/cdid/blob/main/docs/get-started.md) and the [User Guide home](https://github.com/dvbn/cdid/blob/main/docs/README.md) for companion documentation.
+This Quarto notebook is an interactive, editable tutorial for estimating group-time average treatment effects and event-study aggregations with `cdid` (implementing Bellégo, Benatia and Dortet-Bernadet 2025 and extending Callaway and Sant'Anna 2021). It also covers the static switching model (`dname`) and the cohort-by-date fixed-effects preset added in version 1.3.0.0. Every estimation call uses the public `cdid` interface directly so you can copy, modify, and run individual chunks in your own workflow. See [Get started](https://github.com/dvbn/cdid/blob/main/docs/get-started.md) and the [User Guide home](https://github.com/dvbn/cdid/blob/main/docs/README.md) for companion documentation.
 
-The 16 sections contain 35 R chunks: 31 run automatically and four are disabled (`eval: false`) for optional use. Run setup and the DGP first, then work downward.
+The notebook requires `cdid` 1.3.0.0 or later. The setup chunk stops if an
+older version is loaded. Until 1.3.0.0 is on CRAN, install it from GitHub with
+`remotes::install_github("dvbn/cdid")`, or from this checkout with
+`remotes::install_local(".")` run from the repository root. The optional
+[pinned validation setup](https://github.com/dvbn/cdid/blob/main/validation/SETUP.md) installs exact dependency
+versions. Restart R after installing. Run setup and the DGP first, then work
+downward. Sections 17 and 18 draw their own data and depend only on the setup
+chunk.
 
 - **Fresh session after reinstall:** If you reinstall `cdid`, `did`, or `DRDID`, restart R before rendering or running chunks interactively so that namespace bindings and compiled symbols are loaded cleanly.
 - **Working directory & fail-fast execution:** You can run chunks from either the repository root or `notebooks/`. The setup chunk resolves `simulate_panel.R` via a relative path, prepends `validation/.lib` when present (else uses your normal R library), and `error: false` stops on the first unexpected error.
@@ -39,8 +58,9 @@ val_lib <- file.path(proj_root, "validation", ".lib")
 if (dir.exists(val_lib)) .libPaths(c(normalizePath(val_lib, winslash = "/"), .libPaths()))
 
 library(cdid); library(did); library(DRDID); library(knitr); library(ggplot2)
-if (utils::packageVersion("cdid") < "1.2.0.0") {
-  stop("This guide requires cdid 1.2.0.0 or later. Update the active library and restart R; check validation/.lib if it is present.")
+if (utils::packageVersion("cdid") < "1.3.0.0" ||
+    !"missing_reference" %in% names(formals(cdid::att_gt))) {
+  stop("Install the cdid development build from this checkout and restart R. Check validation/.lib if it is present.")
 }
 
 pkg_info <- data.frame(
@@ -59,7 +79,7 @@ For local troubleshooting, run `find.package("cdid")` interactively to inspect i
 
 ## 2. Editable DGP Configuration, Panel Draw, and Known Truth {#guide-2}
 
-All examples in this core guide share a single synthetic study population controlled by the editable `cfg` chunk below. One call to `simulate_panel(cfg)` draws the **study-unit table** `units` (passed to `cdid` as `frame = units`) of size $N$ across $T$ calendar dates, constructs the latent complete outcomes, and applies observation masks to the **same underlying potential outcomes** without redrawing samples. The defaults use dates $1, \dots, 6$ and cohorts $3, 4, 5$, so each treated cohort has an untreated reference date $g - 1$. If you change the cohorts, update the matching `cohort_intercepts` and `treat_x_slope` vectors, keep them within the generated calendar, and retain a pretreatment reference date for the tutorial comparisons. Smaller samples or extreme probabilities can leave a cohort empty or cause a model/support refusal; the guide does not redraw such samples.
+The editable `cfg` chunk controls the study population used for the main panel comparisons. One call to `simulate_panel(cfg)` draws the **study-unit table** `units` (passed to `cdid` as `frame = units`) of size $N$ across $T$ calendar dates, constructs the latent complete outcomes, and applies observation masks to the **same underlying potential outcomes** without redrawing samples. The defaults use dates $1, \dots, 6$ and cohorts $3, 4, 5$, so each treated cohort has an untreated reference date $g - 1$. If you change the cohorts, update the matching `cohort_intercepts` and `treat_x_slope` vectors, keep them within the generated calendar, and retain a pretreatment reference date for the tutorial comparisons. Smaller samples or extreme probabilities can leave a cohort empty or cause a model or support refusal. The guide keeps the original draw when that happens.
 
 1. **Study population and cohorts (`units`):** Each study unit $i \in \{1, \dots, N\}$ is drawn i.i.d. from the superpopulation distribution defined by `cfg`, with binary covariate $X_i \sim \text{Bernoulli}(p_x)$, standard normal covariate $Z_i \sim \mathcal{N}(0, 1)$, cluster label $c(i) \in \{1, \dots, C\}$, and treatment cohort $G_i \in \{0, 3, 4, 5\}$ with multinomial log-odds $\alpha_g + \beta_{g,x} X_i$ relative to never-treated controls $G_i = 0$.
 2. **Untreated potential outcomes and within-unit changes:** $Y_{i,t}(0) = \alpha_i + (\delta + \theta_x X_i + \theta_z Z_i + u_{c(i)}) t + \varepsilon_{i,t}$, where $\alpha_i = \gamma_x X_i + \eta_i$ cancels in every within-unit change $Y_{i,t} - Y_{i,s}$, leaving $E[Y_{i,t}(0) - Y_{i,s}(0) \mid X_i, Z_i, G_i = 0] = (t - s)(\delta + \theta_x X_i + \theta_z Z_i)$ under `cluster_trend_sd = 0`.
@@ -211,7 +231,7 @@ knitr::kable(pair_counts, digits = 3, caption = "Selected-pair counts, including
 
 ## 4. Balanced Panel Baseline: Group-Time Estimation and Aggregations {#guide-4}
 
-We begin estimation with a direct balanced-panel fit on `balanced_panel` using `cdid::att_gt()`. Because both $X_i$ and $Z_i$ shift untreated outcome trends ($\theta_x = 0.30$, $\theta_z = 0.15$) and $X_i$ also shifts cohort assignment, we pass `xformla = ~ x + z` with doubly robust treatment adjustment (`est_method = "dr"`), never-treated controls (`control_group = "nevertreated"`), and parallel trends from each cohort's reference period (`pt_assumption = "post"`). Analytical standard errors (`bstrap = FALSE, cband = FALSE`) give fast interactive feedback; `cdid::tidy()`, `cdid::glance()`, and `cdid::ggdid()` inspect the cell-level results. See [Get started](https://github.com/dvbn/cdid/blob/main/docs/get-started.md) and the [Results reference](https://github.com/dvbn/cdid/blob/main/docs/reference/results.md).
+We begin estimation with a direct balanced-panel fit on `balanced_panel` using `cdid::att_gt()`. Treatment is absorbing here: `g` holds each study unit's adoption date, with 0 for never treated, so `gname` selects the cohort route and `aggte()` summarizes the cells. [Section 17](#guide-17) covers a binary treatment that can stop and restart. Because both $X_i$ and $Z_i$ shift untreated outcome trends ($\theta_x = 0.30$, $\theta_z = 0.15$) and $X_i$ also shifts cohort assignment, we pass `xformla = ~ x + z` with doubly robust treatment adjustment (`est_method = "dr"`), never-treated controls (`control_group = "nevertreated"`), and parallel trends from each cohort's reference period (`pt_assumption = "post"`). Analytical standard errors (`bstrap = FALSE, cband = FALSE`) give fast interactive feedback. `cdid::tidy()`, `cdid::glance()`, and `cdid::ggdid()` inspect the cell-level results. See [Get started](https://github.com/dvbn/cdid/blob/main/docs/get-started.md) and the [Results reference](https://github.com/dvbn/cdid/blob/main/docs/reference/results.md).
 
 ```{r}
 #| label: balanced-att-gt
@@ -564,14 +584,15 @@ fit_sel_imp <- cdid::att_gt(
   selection_universe = "F", imputation_pooling = "separate",
   pt_assumption = "post", base_period = "varying", bstrap = FALSE, cband = FALSE
 )
-fit_augmented_treatment <- function(method) cdid::att_gt(
+fit_augmented_treatment <- function(method, control = NULL, cross_pair = FALSE) cdid::att_gt(
   yname = "y", tname = "time", idname = "id", gname = "g",
   xformla = ~ x + z, selection_xformla = ~ x, data = missing_panel, frame = units,
   control_group = "nevertreated", est_method = method,
   selection = "conditional_mtar", selection_est_method = "dr",
   selection_model = "independent_period_logit", selection_pooling = "separate",
   selection_universe = "F", imputation_pooling = "separate",
-  pt_assumption = "post", base_period = "varying", bstrap = FALSE, cband = FALSE
+  pt_assumption = "post", base_period = "varying", bstrap = FALSE, cband = FALSE,
+  control = control, cross_pair = cross_pair
 )
 fit_sel_aug <- fit_augmented_treatment("dr")
 
@@ -597,6 +618,27 @@ In the observation layer, weighting uses $q$, imputation uses $j$, and augmentat
 Inspect `fit_sel_imp$chained$selection` and `fit_sel_aug$chained$selection` for the active-model records.
 
 Shared outcomes, moderate observation probabilities driven by binary $X_i$, and correct models make nearby precision plausible in this mild design. This gives no general efficiency ranking or coverage evidence; see the [SE qualifications in Section 5](#missingness-se-comparison).
+
+### Inspect the four fitted models in DR+DR {#drdr-model-reports}
+
+Both layers use two models in this specification. The observation logit estimates $q$ from observed and missing outcomes on the study-unit frame. The actual-change regression estimates $j$ from pairs with both outcomes. The treatment logit estimates $p$ for the target cohort against its eligible controls. The counterfactual outcome regression estimates $m$ from the augmented changes of control units.
+
+Request the reports with `control = list(keep_nuisance = TRUE)`. The report prints the fitted equation, sample, weights and coefficient standard errors. Here we show the first fitted block for each role. The block labels show its cohort and dates. Use `nuisance_models(fit_drdr_models, "outcome")` to inspect the available outcome blocks. Run the fit with the default control settings for estimation without the additional reporting work.
+
+```{r}
+#| label: drdr-fitted-model-reports
+if ("nuisance_models" %in% getNamespaceExports("cdid")) {
+  fit_drdr_models <- fit_augmented_treatment("dr", control = list(keep_nuisance = TRUE))
+  for (model in c("selection", "imputation", "treatment", "outcome")) {
+    print(cdid::nuisance_models(fit_drdr_models, component = model, block = 1L))
+    cat("\n")
+  }
+} else {
+  cat("This example requires a cdid build with nuisance_models().\n")
+}
+```
+
+The coefficient SEs describe estimation of each fitted model. In this example they use one influence contribution per study unit. The outcome regression propagates uncertainty from the fitted observation logit and imputation model, as well as the estimated repeat rates used in its weights. The treatment logit propagates the repeat-rate uncertainty in its weights. Use `tidy()` or `aggte()` for the treatment-effect estimates and their SEs.
 
 ### Choose the treatment adjustment separately
 
@@ -626,7 +668,7 @@ All models are representable in this example, so the methods aim at the same pop
 
 **Try changing:** Lower `obs_intercept` or increase `obs_x_slope` in `cfg`, redraw once, and refit to explore how observation rates and weight dispersion affect the three SEs. Alternatively, set `obs_z_slope = 0.50` and compare the current observation formula with `selection_xformla = ~ x + z`: omitting `z` misspecifies $q$ while separate-cell $j$ remains representable. Setting `effect_x = 0` instead makes the shared imputation slopes representable too. Keep support/model refusals visible.
 
-## 9. Comparison Groups, Preperiod Reporting vs `PT-all`, and `did` Delegation {#guide-9}
+## 9. Comparison Groups, `PT-all`, Cross-Pair Chains and `did` Delegation {#guide-9}
 
 - **`control_group = "notyettreated"`:** Allows later-treated cohorts that remain untreated at the comparison's control horizon, alongside $G = 0$ (with zero anticipation). The horizon is at least $\max(s, t)$; the chained catalog can reuse the same pair with a later horizon and a smaller eligible control pool, then combine those moments by GMM. In this DGP, cohort assignment depends only on **binary** $X_i$, so an intercept and `x` saturate each population risk-set treatment logit; the coefficient on `z` is zero. Mixing cohorts therefore does not itself misspecify that logit here. With continuous treatment predictors, a mixture can produce nonlinear risk-set log-odds. The shared untreated change regression $m$ remains correctly specified across the default control pools.
 - **`base_period = "universal"` vs `pt_assumption = "all"` (`pt_start = 1`):** `base_period` is purely a **reporting choice** for unrestricted preperiod cells (`role == "pre"`): `"varying"` reports consecutive preperiod steps, whereas `"universal"` anchors every reported preperiod cell to each cohort's reference date $g - 1$ (with an exact zero reference row at $t = g - 1$). By contrast, `pt_assumption = "all"` with an explicit common calendar start date `pt_start = 1` adds **overidentifying GMM restrictions** setting untreated pre-reference trend differentials from date `pt_start = 1` up to each cohort's reference date to zero ([Parallel trends](https://github.com/dvbn/cdid/blob/main/docs/methods/parallel-trends.md)). Because conditional parallel trends hold across all dates $1, \dots, 6$ in our default DGP, both `PT-post` and `PT-all` (`pt_start = 1`) impose true population restrictions.
@@ -660,6 +702,61 @@ pt_comp <- data.frame(
                     cdid::aggte(fit_pt_all, type = "simple")$overall.se)
 )
 knitr::kable(pt_comp, digits = 6, caption = "Comparison across control_group, base_period, and PT-all (pt_start = 1; 6-decimal precision)")
+```
+
+### Cross-pair chains across disjoint observation windows {#cross-pair-windows}
+
+Cohort 3 is observed at dates 1, 2 and 4. The clean controls for its untreated change from 2 to 4 come from cohort 4 over 2 to 3 and cohort 5 over 3 to 4. Each change uses the same units at its two dates. The cross-pair fit can use these two control changes under `pt_assumption = "post"`. The study's true `ATT(3, 4)` is 3.5.
+
+```{r}
+#| label: inspect-disjoint-cross-pair-chain
+if ("cross_pair" %in% names(formals(cdid::att_gt))) {
+  set.seed(20261111)
+  windows <- list(`3` = c(1L, 2L, 4L), `4` = 2:3, `5` = 3:4, `0` = 1:2)
+  panel_disjoint <- do.call(rbind, lapply(seq_along(windows), function(j) {
+    g <- as.integer(names(windows)[j])
+    t <- windows[[j]]
+    id <- seq_len(120L) + (j - 1L) * 120L
+    a <- rnorm(length(id), sd = 0.2)
+    data.frame(
+      id = rep(id, times = length(t)), time = rep(t, each = length(id)), g = g,
+      y = rep(a, times = length(t)) +
+        rep(0.6 * t + 3.5 * (g == 3L & t >= 3L), each = length(id)) +
+        rnorm(length(id) * length(t), sd = 0.05)
+    )
+  }))
+
+  fit_disjoint <- function(cross_pair) cdid::att_gt(
+    yname = "y", idname = "id", tname = "time", gname = "g", data = panel_disjoint,
+    control_group = "notyettreated", pt_assumption = "post",
+    cross_pair = cross_pair, est_method = "ipw", bstrap = FALSE, cband = FALSE
+  )
+  same <- fit_disjoint(FALSE)
+  cross <- fit_disjoint(TRUE)
+  fits <- list(same_pair = same, cross_pair = cross)
+  target <- do.call(rbind, lapply(fits, function(fit) {
+    tbl <- cdid::tidy(fit)
+    tbl[tbl$group == 3 & tbl$time == 4,
+      c("estimate", "std.error", "available", "support.reason")]
+  }))
+  print(cdid::chain_report(cross, cohort = 3, time = 4))
+  knitr::kable(target, digits = 4, caption = "Availability of ATT(3, 4) on disjoint windows")
+} else {
+  cat("This example requires a cdid build with cross-pair chaining.\n")
+}
+```
+
+The fitted chain reports the separate target and control links. Set `gmm_weighting = "within"` and `pt_assumption = "ctrl"` for the stacked-slice setting described in [Cross-pair chaining](https://github.com/dvbn/cdid/blob/main/docs/methods/cross-pair-chaining.md). That setting adds a restriction on the clean control cohorts' early trends.
+
+For a fixed-reference cross-pair fit with covariates and both corrections,
+inspect its fitted models with the same command as in Section 8.
+
+```{r}
+#| label: cross-pair-models
+cross_models <- fit_augmented_treatment("dr", control = list(keep_nuisance = TRUE),
+                                        cross_pair = TRUE)
+nuisance_models(cross_models)$components
+nuisance_models(cross_models, "outcome", block = 1L)
 ```
 
 ### Ordinary `did` delegation (`mode = "ordinary"`) and when balanced fits agree or differ {#ordinary-did-delegation}
@@ -899,7 +996,7 @@ knitr::kable(rob_method_grid, digits = 6,
 
 **What to inspect and try changing:** Compare each estimate and SE with the target `1.375` and the expected branches in the table. The enabled chunk fits DR only; the disabled chunk adds OR/IPW on the same draws. To make both models representable in all three cases, try `xformla = ~ x + I(x^2)` in the calls. Rebuild aggregates after refitting, and keep failures visible.
 
-## 13. Dated Covariates and Explicit Weight Anchors {#guide-13}
+## 13. Dated Covariates, Weight Anchors and Known Reference Rows {#guide-13}
 
 Covariates can vary within a study unit. For posttreatment comparisons of cohort $g$, `cdid` reads each study unit's covariates at that cohort's reference date; preperiod reports read them at the earlier endpoint. Required values come from dated rows even when their outcomes are missing. Keep those rows and do not put a conflicting static version in `frame`.
 
@@ -937,6 +1034,57 @@ knitr::kable(data.frame(anchor = c("first_period", "base_period"),
 Both targets are weighted, so the core's unweighted `sim$truth` is not their benchmark. With base-period anchoring, cohort cells have different reference weight laws; aggregation is a declared mixture using first-calendar cohort masses, not a single common weighted population. If weights are constant within each study unit, the anchor choices coincide. See [reference inputs](https://github.com/dvbn/cdid/blob/main/docs/help/prepare-data.md) and [Changing covariates and weights](https://github.com/dvbn/cdid/blob/main/docs/reference/options.md).
 
 **What to inspect and try changing:** Set `w_date <- exp(0.15 * dated_panel$x)` and refit both calls to compare fixed weights. To use missing outcomes instead, keep required covariate/weight reference rows with `y = NA` and choose a valid missing-outcome adjustment from [Sections 5–8](#guide-5); a missing outcome is never a zero.
+
+### Keep a known reference covariate when its outcome is missing
+
+Pick one unit in the first treated cohort and remove its outcome at the
+cohort's reference date. Fit once with the known covariate still supplied
+and once with that value also missing. The second fit warns and reports how
+many treated units remain eligible for the affected cohort.
+
+```{r}
+#| label: missing-reference-covariate
+first_cohort <- min(dated_panel$g[dated_panel$g > 0])
+reference_date <- max(dated_panel$time[dated_panel$time < first_cohort])
+reference_row <- which(dated_panel$g == first_cohort &
+                       dated_panel$time == reference_date)[1L]
+
+known_reference <- dated_panel
+known_reference$y[reference_row] <- NA_real_
+unknown_reference <- known_reference
+unknown_reference$x_date[reference_row] <- NA_real_
+
+fit_reference <- function(panel_data) {
+  cdid::att_gt(
+    "y", "time", "id", "g", xformla = ~ x_date + z,
+    data = panel_data, frame = dated_frame, weightsname = "w_date",
+    fix_weights = "base_period", est_method = "reg",
+    bstrap = FALSE, cband = FALSE, gmm_weighting = "identity"
+  )
+}
+fit_known <- fit_reference(known_reference)
+fit_unknown <- fit_reference(unknown_reference)
+
+counts <- fit_unknown$chained$reference_eligibility$targets
+knitr::kable(
+  counts[counts$restricted,
+         c("g", "reference_date", "n_treated", "n_treated_eligible")],
+  col.names = c("Cohort", "Reference date", "Treated units", "Eligible treated units"),
+  caption = "Treated sample when the reference covariate is unknown"
+)
+
+cohort_effect <- function(fit) fit$att[fit$group == first_cohort & fit$t == first_cohort]
+knitr::kable(data.frame(
+  reference_covariate = c("Known", "Unknown"),
+  estimate_at_adoption = c(cohort_effect(fit_known), cohort_effect(fit_unknown))
+), digits = 6)
+```
+
+The row with `y = NA` supplies the known reference covariate and weight.
+When the covariate itself is missing, the effect describes the eligible
+treated units. The same unit can still contribute to other cohorts if its
+required covariates are available. Add `missing_reference = "error"` to
+the fit to stop and list missing inputs. [Prepare your panel](https://github.com/dvbn/cdid/blob/main/docs/help/prepare-data.md#add-a-known-reference-covariate-row).
 
 ## 14. GMM Weighting, Diagnostics and Point-Only Fits {#guide-14}
 
@@ -1044,6 +1192,189 @@ Use this workflow for an experiment:
 
 **Try changing:** Choose one parameter, such as `effect_x` or `obs_x_slope`, write down the predicted change before redrawing, and compare that prediction with the visible output without altering the draw afterward.
 
+The [function map](#function-map) after Section 18 lists the functions and main controls of every section.
+
+## 17. Binary Treatment That Can Stop and Restart (`dname`) {#guide-17}
+
+Sections 4 to 16 used the cohort route, where `gname` holds an adoption date and effects may evolve with time since adoption. This section changes the treatment design. Supply `dname` when the question is about switching treatment under a static model without carryover. The current treatment indicator must be known at every unit-date row, including rows with missing outcomes. An entry comparison uses units that stay untreated as controls. An exit comparison uses units that stay treated, and the effect is reported on the same treated-minus-untreated scale as entry. The aggregate weights effects by the number of switchers in each requested transition. It is available when all requested transition effects are identified. See [When treatment can stop and restart](https://github.com/dvbn/cdid/blob/main/docs/methods/static-entry-exit.md).
+
+The following draw has a true contemporaneous effect of 1.5. Both fits start from the same panel. The second masks outcomes with a probability that depends on `x` and adjusts for the missing changes. Change `treatment_method` to compare IPW, OR and DR. Use `missing_adjustment` to choose the observation correction, and `probability_model` to change how observation probabilities are fitted. For direct pair weighting, you can also change `observation_sample` to fit among repeat- or ever-observed units. The simulation provides the transport ratio for those examples.
+
+```{r}
+#| label: static-switching
+#| results: asis
+if ("dname" %in% names(formals(cdid::att_gt))) {
+  static_example <- local({
+    set.seed(20261106)
+    n_units <- 400L
+    tau <- 1.5
+    treatment_method <- "dr"  # "ipw", "reg", or "dr"
+    missing_adjustment <- "dr"  # "none", "ipw", "imputation", or "dr"
+    probability_model <- "pair_logit"  # or "independent_period_logit"
+    observation_sample <- "F"  # "A" or "B" with "ipw" and "pair_logit"
+    show_models <- TRUE
+    stopifnot(observation_sample == "F" ||
+      (missing_adjustment == "ipw" && probability_model == "pair_logit"))
+    dates <- 1:4
+    paths <- rbind(c(0L, 0L, 0L, 0L), c(0L, 1L, 1L, 0L),
+      c(1L, 1L, 0L, 1L), c(1L, 0L, 0L, 1L), c(1L, 1L, 1L, 1L))
+    x <- rbinom(n_units, 1L, 0.5)
+    alpha <- rnorm(n_units, sd = 0.5)
+    path <- sample.int(nrow(paths), n_units, replace = TRUE)
+    complete <- data.frame(id = rep(seq_len(n_units), each = length(dates)),
+      time = rep(dates, times = n_units), x = rep(x, each = length(dates)),
+      d = as.integer(t(paths[path, ])))
+    complete$y <- rep(alpha, each = length(dates)) +
+      (0.3 + 0.2 * complete$x) * complete$time + tau * complete$d +
+      rnorm(nrow(complete), sd = 0.4)
+    missing <- complete
+    p <- plogis(0.8 + 0.4 * missing$x)
+    observed <- runif(nrow(missing)) < p
+    missing$y[!observed] <- NA_real_
+
+    model <- list(yname = "y", tname = "time", idname = "id", dname = "d",
+      xformla = ~ x, est_method = treatment_method, bstrap = FALSE, cband = FALSE)
+    balanced <- do.call(cdid::att_gt, c(model, list(data = complete)))
+    if (missing_adjustment != "none") {
+      model$selection <- "conditional_mtar"
+      model$selection_est_method <- missing_adjustment
+    }
+    if (missing_adjustment %in% c("ipw", "dr")) {
+      model$selection_model <- probability_model
+      model$selection_xformla <- ~ x
+      model$selection_pooling <- "within_group"
+      if (observation_sample != "F") {
+        cutoff <- if (observation_sample == "A") 1L else 0L
+        eligible_prob <- function(pr) pbinom(cutoff, length(dates), pr, lower.tail = FALSE)
+        missing$rho <- eligible_prob(p) / mean(eligible_prob(plogis(0.8 + 0.4 * c(0, 1))))
+        model$selection_universe <- observation_sample
+        model$selection_rho <- "rho"
+        model$selection_justification <- "Known probability from the simulated design, shared across transition roles."
+      }
+    }
+    if (missing_adjustment %in% c("imputation", "dr")) {
+      model$imputation_pooling <- "within_group"
+    }
+    if (show_models) model$control <- list(keep_nuisance = TRUE)
+    chained <- do.call(cdid::att_gt, c(model, list(data = missing)))
+    list(balanced = balanced, chained = chained, true_effect = tau, show_models = show_models)
+  })
+  fits <- static_example[c("balanced", "chained")]
+  stat_table <- do.call(rbind, lapply(fits, function(fit) {
+    data.frame(estimate = fit$aggregate$estimate, std.error = fit$aggregate$se,
+      true_effect = static_example$true_effect, study_units = fit$n,
+      available_transitions = sum(fit$available))
+  }))
+  print(knitr::kable(stat_table, digits = 4, caption = "Static switcher-weighted effects"))
+  knitr::kable(cdid::tidy(static_example$chained)[, c("time", "direction", "estimate", "std.error", "available")],
+    digits = 4, caption = "Chained STAT by transition date and direction")
+} else {
+  cat("This example requires a cdid build with att_gt(dname = ...).\n")
+}
+```
+
+The independent-period logit uses the additional assumption that observation at the two dates is conditionally independent given the predictors and transition role. This example draws the missing indicators independently. To focus on one direction, set `switchers = "entry"` or `"exit"`. To restrict the transition dates, supply `switch_times`. Use `fit$aggregate` for the static aggregate and `tidy(fit)` for the transition effects, availability and uncertainty.
+
+Use `nuisance_models(static_example$chained)` to list the fitted models. Select a component and block to see its equation, fitting sample, coefficients and uncertainty.
+
+```{r}
+#| label: static-model-summary
+if (exists("static_example") && static_example$show_models) {
+  nuisance_models(static_example$chained)
+}
+```
+
+## 18. Cohort-by-Date Fixed Effects (`preset = "cohort_time_fe"`) {#guide-18}
+
+This section returns to an absorbing treatment supplied through `gname`, but
+fits a linear cohort-by-date fixed-effects specification with a common
+untreated time path, requested with `control = list(preset = "cohort_time_fe")`
+([Cohort-by-date fixed effects](https://github.com/dvbn/cdid/blob/main/docs/methods/cohort-time-fe.md)). Edit the number of units,
+missing-outcome share, comparison group or covariate adjustment in the first
+lines. The regression lets the common calendar path and effects vary with
+the time-invariant covariate. Treatment IPW reweights clean comparisons to
+each cohort's covariate mix. DR combines that weighting with a common
+untreated change model. All three examples target the full study cohort.
+Edit `observation_correction` for the incomplete panel. In the augmented
+case, the DR fit uses a treatment logit, a calendar change regression, an
+observation logit and an actual-change imputation regression.
+
+```{r}
+#| label: cohort-time-fe
+#| results: asis
+cohort_time_example <- local({
+  set.seed(1314)
+  n_units <- 240L
+  missing_share <- 0.35
+  controls <- "nevertreated"  # or "notyettreated"
+  adjust_covariates <- TRUE
+  treatment_methods <- c("reg", "ipw", "dr")
+  observation_correction <- "dr"  # "none", "ipw", "imputation", or "dr"
+  probability_model <- "pair_logit"  # or "independent_period_logit"
+  show_models <- TRUE
+  dates <- 1:6
+  panel <- expand.grid(t = dates, id = seq_len(n_units))
+  panel$g <- c(0L, 3L, 5L)[(panel$id - 1L) %% 3L + 1L]
+  panel$x <- rnorm(n_units)[panel$id] + 0.12 * panel$g
+  panel$z <- rnorm(n_units)[panel$id]
+  panel$y <- rnorm(n_units)[panel$id] + sin(panel$t) + (panel$t / 5) * panel$x +
+    ifelse(panel$g > 0L & panel$t >= panel$g,
+           1 + 0.2 * (panel$t - panel$g) + 0.15 * panel$x, 0) +
+    rnorm(nrow(panel), sd = 0.5)
+  missing <- panel
+  missing_probability <- plogis(qlogis(missing_share) + 0.5 * missing$z)
+  missing$y[runif(nrow(missing)) < missing_probability] <- NA_real_
+  fit <- function(d, method, correction) {
+    adjusted <- correction != "none"
+    cdid::att_gt(
+      yname = "y", tname = "t", idname = "id", gname = "g", data = d,
+      xformla = if (adjust_covariates) ~x else ~1,
+      control_group = controls, est_method = method, base_period = "universal",
+      pt_assumption = if (controls == "notyettreated") "all" else "post",
+      pt_start = if (controls == "notyettreated") min(d$t) else NULL,
+      selection = if (adjusted) "conditional_mtar" else "none",
+      selection_est_method = if (adjusted) correction else "ipw",
+      selection_model = if (correction %in% c("ipw", "dr")) probability_model else "pair_logit",
+      selection_xformla = if (correction %in% c("ipw", "dr")) ~z else NULL,
+      bstrap = FALSE, cband = FALSE,
+      control = list(preset = "cohort_time_fe", keep_nuisance = show_models && adjusted)
+    )
+  }
+  list(
+    complete = setNames(lapply(treatment_methods, function(m) fit(panel, m, "none")), treatment_methods),
+    incomplete = setNames(lapply(treatment_methods, function(m) fit(missing, m, observation_correction)),
+                          treatment_methods),
+    show_models = show_models && observation_correction != "none"
+  )
+})
+
+for (shape in c("complete", "incomplete")) {
+  fits <- cohort_time_example[[shape]]
+  columns <- c("method", "group", "time", "estimate", "std.error", "available")
+  effects <- do.call(rbind, lapply(names(fits), function(method) {
+    table <- cdid::tidy(fits[[method]])
+    table$method <- method
+    table[table$role == "post", columns]
+  }))
+  print(knitr::kable(effects, digits = 4,
+    caption = paste("Cohort-by-date effects on the", shape, "panel")))
+}
+```
+
+With never-treated controls, the model estimates separate pre-treatment deviations, relative to each cohort's last pre-treatment date. With not-yet-treated controls, the model assumes a common untreated time path from the first date and estimates post-treatment effects. For the regression fit, the [matched commands](https://github.com/dvbn/cdid/blob/main/docs/methods/cohort-time-fe.md#match-r-etwfe-and-stata-jwdid) show the corresponding R and Stata calls and their covariance conventions.
+
+
+```{r}
+#| label: cohort-time-model-tables
+if (cohort_time_example$show_models && "dr" %in% names(cohort_time_example$incomplete)) {
+  fit_models <- cohort_time_example$incomplete$dr
+  model_index <- nuisance_models(fit_models)
+  for (component in model_index$components$component[model_index$components$status == "available"]) {
+    print(nuisance_models(fit_models, component, block = 1L))
+  }
+}
+```
+
 ### Navigation and Function Map {#function-map}
 
 | Section | Practical task | Functions and main controls |
@@ -1053,14 +1384,16 @@ Use this workflow for an experiment:
 | [3. Missingness exploration](#guide-3) | Inspect zero/singleton/repeat counts and pair support before fitting | `aggregate()`, `table()`, selected pairs, `study_units` denominators |
 | [4. First fit](#guide-4) | Balanced-panel cells, all four aggregations, and plots | `att_gt()`, `summary()`, `tidy()`, `glance()`, `aggte()`, `ggdid()` |
 | [5. Missing outcomes](#guide-5) | Define `selection_universe = "F"` and `selection_pooling = "separate"`, compare pair and date logits | `selection`, `selection_model`, `selection_universe`, `selection_pooling`, `frame` |
-| [6. Treatment adjustment](#guide-6) | Refit IPW, OR, and DR on the same draw with distinct `selection_xformla` | `est_method`, `xformla`, `selection_xformla` |
+| [6. Treatment adjustment](#guide-6) | Refit IPW, OR, and DR on the same draw with distinct `selection_xformla`, separate or pooled outcome regressions | `est_method`, `xformla`, `selection_xformla`, `outcome_pooling` |
 | [7. Pooling, rotation, and support](#guide-7) | Shared slopes, date independence vs study-unit retention, rotating windows, and fitted `tidy()` support | `selection_pooling`, `selection_universe`, `tidy()`, `chained$frame` |
-| [8. Reconstruct changes](#guide-8) | Compare observation weighting, change imputation, and augmentation with treatment IPW, OR or DR | `selection_est_method`, `imputation_pooling` |
-| [9. Controls and PT](#guide-9) | NT/NYT, preperiod reporting, `PT-all`, and ordinary `did` delegation | `control_group`, `base_period`, `pt_assumption`, `pt_start`, `mode` |
+| [8. Reconstruct changes](#guide-8) | Compare observation weighting, imputation and augmentation, inspect the four DR+DR models, choose treatment IPW, OR or DR | `selection_est_method`, `imputation_pooling`, `control = list(keep_nuisance = TRUE)`, `nuisance_models()` |
+| [9. Controls, PT and chains](#guide-9) | NT/NYT, preperiod reporting, `PT-all`, cross-pair chains on disjoint windows, and ordinary `did` delegation | `control_group`, `base_period`, `pt_assumption`, `pt_start`, `cross_pair`, `chain_report()`, `mode` |
 | [10. Inference](#guide-10) | Pointwise intervals, multiplier bands, and actual clustering | `bstrap`, `cband`, `biters`, `clustervars` |
 | [11. Pretrends](#guide-11) | Full Wald and conditional CvM pretrend records | `chained$pretest`, `conditional_did_pretest()` |
 | [12. Robustness](#guide-12) | Three continuous-$X$ cases testing $p$ and $m$ misspecification separately | Shared `xformla`, `est_method = "dr"`, `"reg"`, `"ipw"` |
-| [13. References and weights](#guide-13) | Dated $X$, first-period vs base-period weight laws | `weightsname`, `fix_weights` |
+| [13. References and weights](#guide-13) | Dated $X$, first-period vs base-period weight laws, known reference covariate rows with missing outcomes | `weightsname`, `fix_weights`, `missing_reference` |
 | [14. Diagnostics](#guide-14) | GMM weighting, resource caps, and point-only limits | `gmm_weighting`, `control`, `compute_inffunc` |
 | [15. Extensions](#guide-15) | Optional parallel multiplier call and custom callback contract | `pl`, `cores`, `control$workers`, callable `est_method` |
 | [16. Save and iterate](#guide-16) | Optional exports and structured experiment workflow | `write.csv()`, `ggsave()`, `saveRDS()` |
+| [17. Entry, exit and re-entry](#guide-17) | Binary treatment switches with complete or missing outcomes, with fitted model reports | `dname`, `switchers`, `switch_times`, `fit$aggregate`, `nuisance_models()` |
+| [18. Cohort-by-date fixed effects](#guide-18) | Fit OR, IPW and DR on complete and incomplete panels | `control = list(preset = "cohort_time_fe", keep_nuisance = TRUE)` |

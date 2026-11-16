@@ -174,16 +174,28 @@ chained_conditional_test <- function(state, prep, src, xformla, alp, biters, mb,
   })
   pf <- cpt_preflight(dims, N, C, B, br, gchunk, echunk, state$control, mb, state$resource$retained_entries,
     state$resource$work_ops, workers)
-  built <- vector("list", length(cells))
-  for (i in seq_along(cells)) {
-    grid <- cache[[keys[i]]]$distinct
-    e <- ex[[i]]
-    acc <- cpt_cell_acc(e$spec, grid, C, N, keep_rows)
-    for (k in seq_len(e$n_chunks)) for (pc in e$pieces(k)) acc <- cpt_cell_add(acc, e$spec, pc, grid, cmap)
-    built[[i]] <- cpt_cell_finalize(acc, e$spec, grid, N, gchunk)
-    built[[i]]$estimate_scalar <- cells[[i]]$sign * e$estimate
-    built[[i]]$route <- e$route
-    built[[i]]$recipe_key <- keys[i]
+  built <- if (identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+               cdid_are_default_fns(c("chained_conditional_test", "cpt_cell_extractor",
+                                      "cpt_extract_legacy_ipw", "cpt_extract_two_arm",
+                                      "cpt_extract_or", "cpt_extract_imputation",
+                                      "cpt_backend_details", "cpt_two_arm_rows",
+                                      "cpt_two_arm_piece", "cpt_piece",
+                                      "cpt_cell_acc", "cpt_cell_add", "cpt_cell_finalize",
+                                      "cpt_indicator", "cpt_rowsum_into"))) {
+    cdid_fast_cpt_build_cells(state, cells, ex, cache, keys, cmap, C, N, chunk_rows, keep_rows)
+  } else NULL
+  if (is.null(built)) {
+    built <- vector("list", length(cells))
+    for (i in seq_along(cells)) {
+      grid <- cache[[keys[i]]]$distinct
+      e <- ex[[i]]
+      acc <- cpt_cell_acc(e$spec, grid, C, N, keep_rows)
+      for (k in seq_len(e$n_chunks)) for (pc in e$pieces(k)) acc <- cpt_cell_add(acc, e$spec, pc, grid, cmap)
+      built[[i]] <- cpt_cell_finalize(acc, e$spec, grid, N, gchunk)
+      built[[i]]$estimate_scalar <- cells[[i]]$sign * e$estimate
+      built[[i]]$route <- e$route
+      built[[i]]$recipe_key <- keys[i]
+    }
   }
   CvM <- cpt_statistic(built, N)
   if (!is.null(progress)) progress("conditional pretest: ", B, " multiplier draws on ", C, if (is.null(cl)) " units" else " clusters")

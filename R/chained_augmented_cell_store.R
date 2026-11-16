@@ -35,58 +35,69 @@ augmented_cell_replay_store <- function(backend, pre, phase_store) {
   storage <- new.env(parent = emptyenv())
   storage$records <- vector("list", nc); storage$rank <- integer(st$N)
   storage$lo <- storage$hi <- storage$last <- integer(nc); storage$active <- TRUE
-  for (cohort in unique(cohorts)) {
-    rr <- st$cohort_order[seq.int(st$cohort_start[cohort], st$cohort_end[cohort])]
-    storage$rank[rr] <- seq_along(rr)
+  fast_built <- NULL
+  if (identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+      cdid_are_default_fns(c("cp04_pair_rows", "selection_prediction_operation", "ipw_clip_floor"))) {
+    fast_built <- cdid_ia_fast_cell_replay_build(backend, st, reader, X, ids, pre$cids, pre$zids, B_build)
   }
-  op <- selection_prediction_operation(backend$selection_backend, source_reader = reader)
-  on.exit(op$abort(), add = TRUE)
-  batches <- 0L
-  for (cid in ids) {
-    cf <- backend$cells[[cid]]; gf <- backend$groups[[cf$group_id]]; cohort <- cf$cohort_index
-    n <- cohort_n[cohort]; np <- cf$n_pair; need_score <- cid %in% pre$cids; need_Z <- cid %in% pre$zids
-    global <- st$cohort_order[seq.int(st$cohort_start[cohort], st$cohort_end[cohort])]
-    z <- if (need_Z) numeric(n) else NULL
-    score_rows <- if (need_score) integer(np) else NULL
-    score <- if (need_score) numeric(np) else NULL
-    d <- if (need_score) matrix(0, np, gf$p,
-      dimnames = if (gf$p) list(NULL, gf$kept_columns) else NULL) else NULL
-    filled <- 0L
-    for (first in seq.int(1L, n, by = B_build)) {
-      local <- seq.int(first, min(n, first + B_build - 1L)); rows <- global[local]
-      jhat <- if (need_Z) {
-        if (gf$p) cf$alpha + as.vector((cf$L * X[rows, gf$kept_cols_F, drop = FALSE]) %*% gf$beta) else
-          rep(cf$alpha, length(rows))
-      } else NULL
-      hit <- cp04_pair_rows(reader, rows, cf$pair, TRUE); obs <- which(hit$S == 1)
-      if (need_Z) {
-        value <- jhat
-        if (length(obs)) {
-          q <- op$pair(rows[obs], cf$q_id)$prob
-          cp04_finite(q, "fitted observation probabilities on observed pairs", TRUE)
-          pi <- 1 / ipw_clip_floor(q)
-          e <- hit$dy[obs] - jhat[obs]
-          value[obs] <- jhat[obs] + pi * e
-        }
-        z[local] <- value
-      }
-      if (need_score && length(obs)) {
-        observed_rows <- rows[obs]
-        d_obs <- if (gf$p) cf$L * X[observed_rows, gf$kept_cols_F, drop = FALSE] else
-          matrix(0, length(obs), 0L)
-        j_obs <- if (gf$p) cf$alpha + as.vector(d_obs %*% gf$beta) else rep(cf$alpha, length(obs))
-        at <- seq.int(filled + 1L, filled + length(obs))
-        score_rows[at] <- observed_rows; d[at, ] <- d_obs
-        score[at] <- st$w[observed_rows] * (hit$dy[obs] - j_obs)
-        filled <- filled + length(obs)
-      }
-      batches <- batches + 1L
+  if (!is.null(fast_built)) {
+    storage$records <- fast_built$records
+    storage$rank <- fast_built$rank
+    batches <- fast_built$batches
+  } else {
+    for (cohort in unique(cohorts)) {
+      rr <- st$cohort_order[seq.int(st$cohort_start[cohort], st$cohort_end[cohort])]
+      storage$rank[rr] <- seq_along(rr)
     }
-    if (need_score && filled != np)
-      augmented_abort("Stored observed cell rows disagree with the original fitted support.", "integrity")
-    storage$records[[cid]] <- list(rows = score_rows, d = d, score = score, Z = z, cohort = cohort)
+    op <- selection_prediction_operation(backend$selection_backend, source_reader = reader)
+    on.exit(op$abort(), add = TRUE)
+    batches <- 0L
+    for (cid in ids) {
+      cf <- backend$cells[[cid]]; gf <- backend$groups[[cf$group_id]]; cohort <- cf$cohort_index
+      n <- cohort_n[cohort]; np <- cf$n_pair; need_score <- cid %in% pre$cids; need_Z <- cid %in% pre$zids
+      global <- st$cohort_order[seq.int(st$cohort_start[cohort], st$cohort_end[cohort])]
+      z <- if (need_Z) numeric(n) else NULL
+      score_rows <- if (need_score) integer(np) else NULL
+      score <- if (need_score) numeric(np) else NULL
+      d <- if (need_score) matrix(0, np, gf$p,
+        dimnames = if (gf$p) list(NULL, gf$kept_columns) else NULL) else NULL
+      filled <- 0L
+      for (first in seq.int(1L, n, by = B_build)) {
+        local <- seq.int(first, min(n, first + B_build - 1L)); rows <- global[local]
+        jhat <- if (need_Z) {
+          if (gf$p) cf$alpha + as.vector((cf$L * X[rows, gf$kept_cols_F, drop = FALSE]) %*% gf$beta) else
+            rep(cf$alpha, length(rows))
+        } else NULL
+        hit <- cp04_pair_rows(reader, rows, cf$pair, TRUE); obs <- which(hit$S == 1)
+        if (need_Z) {
+          value <- jhat
+          if (length(obs)) {
+            q <- op$pair(rows[obs], cf$q_id)$prob
+            cp04_finite(q, "fitted observation probabilities on observed pairs", TRUE)
+            pi <- 1 / ipw_clip_floor(q)
+            e <- hit$dy[obs] - jhat[obs]
+            value[obs] <- jhat[obs] + pi * e
+          }
+          z[local] <- value
+        }
+        if (need_score && length(obs)) {
+          observed_rows <- rows[obs]
+          d_obs <- if (gf$p) cf$L * X[observed_rows, gf$kept_cols_F, drop = FALSE] else
+            matrix(0, length(obs), 0L)
+          j_obs <- if (gf$p) cf$alpha + as.vector(d_obs %*% gf$beta) else rep(cf$alpha, length(obs))
+          at <- seq.int(filled + 1L, filled + length(obs))
+          score_rows[at] <- observed_rows; d[at, ] <- d_obs
+          score[at] <- st$w[observed_rows] * (hit$dy[obs] - j_obs)
+          filled <- filled + length(obs)
+        }
+        batches <- batches + 1L
+      }
+      if (need_score && filled != np)
+        augmented_abort("Stored observed cell rows disagree with the original fitted support.", "integrity")
+      storage$records[[cid]] <- list(rows = score_rows, d = d, score = score, Z = z, cohort = cohort)
+    }
+    op$finish()
   }
-  op$finish()
   actual <- unname(cp04_payload(list(records = storage$records, rank = storage$rank,
     lo = storage$lo, hi = storage$hi, last = storage$last))["entries"])
   if (actual > retained) augmented_abort("Compact cell replay storage bound underestimated.", "bound")

@@ -107,7 +107,7 @@ Chained mode adds arguments for the unit table, missing outcomes, parallel trend
 
 ---
 
-**Reading path, step 2 of 20** · Previous: [Get started](get-started.md) · Next: [Incomplete panels](examples/incomplete-panels.md)
+**Reading path, step 2 of 22** · Previous: [Get started](get-started.md) · Next: [Incomplete panels](examples/incomplete-panels.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -134,6 +134,8 @@ Chained mode adds arguments for the unit table, missing outcomes, parallel trend
 | 18 | [Options](reference/options.md) |
 | 19 | [Results](reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](examples/short-pretreatment-windows.md) |
 
 [Guide home](README.md) · [Package overview](../README.md)
 

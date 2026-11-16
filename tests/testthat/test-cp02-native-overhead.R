@@ -125,23 +125,28 @@ noh_compile_dll <- function(c_lines, dll_name, parent_dir, source_dir = NULL) {
   # Standalone probes and the immutable original use only their supplied C.
   if (!is.null(source_dir)) {
     companions <- c("chained_zero_template.c", "chained_legacy_ipw_chunk.c",
-      "chained_score_pullback.c", "chained_coarse_pullback.c", "chained_pair_operation.c")
-    bundle <- file.path(source_dir, c("cdid_r_api.h", companions))
+      "chained_score_pullback.c", "chained_coarse_pullback.c", "chained_pair_operation.c",
+      "cdid_fast_kernels.c", "cdid_fast_selection.c", "cdid_fast_impaug.c", "cdid_fast_pretest.c")
+    # Use the package's BLAS and LAPACK link settings for the full bundle.
+    bundle <- file.path(source_dir, c("cdid_r_api.h", "Makevars", "Makevars.win", companions))
     if (!all(file.exists(bundle)) || !all(file.copy(bundle, sub_dir)))
       stop("Incomplete current native source bundle for CP02 test build.", call. = FALSE)
   }
   old <- setwd(sub_dir)
   on.exit(setwd(old), add = TRUE)
-  # Preserve compiler/linker diagnostics even when the test runner uses warn=2.
-  out <- suppressWarnings(system2(
+  # Capture the full compiler and linker output, including on Windows.
+  build_log <- file.path(sub_dir, "build.log")
+  status <- suppressWarnings(system2(
     file.path(R.home("bin"), "R"),
     c("CMD", "SHLIB", "-o", shQuote(paste0(dll_name, .Platform$dynlib.ext)),
       shQuote(c(basename(src), companions))),
-    stdout = TRUE, stderr = TRUE
+    stdout = build_log, stderr = build_log
   ))
   so <- file.path(sub_dir, paste0(dll_name, .Platform$dynlib.ext))
-  if (!is.null(attr(out, "status")) || !file.exists(so)) {
-    stop("R CMD SHLIB failed for ", dll_name, ":\n", paste(out, collapse = "\n"), call. = FALSE)
+  if (!identical(status, 0L) || !file.exists(so)) {
+    out <- readLines(build_log, warn = FALSE)
+    stop("R CMD SHLIB failed for ", dll_name, " (status ", status, "):\n",
+      paste(out, collapse = "\n"), call. = FALSE)
   }
   normalizePath(so, mustWork = TRUE)
 }
@@ -858,8 +863,9 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # latter's verified corrected_source_pins.json binding this exact core.
     cp08_unit_core_added_bindings <- c("gmm_if_unit_batch", "gmm_if_unit_batch_eligible",
       "gmm_require_unit_batch_symbol")
+    cp10_within_core_added_bindings <- "gmm_uses_cov_whitening"
     expect_identical(setdiff(cand_core_names, orig_core_names),
-      sort(c("gmm_native_dll_cache", cp08_unit_core_added_bindings)))
+      sort(c("gmm_native_dll_cache", cp08_unit_core_added_bindings, cp10_within_core_added_bindings)))
     expect_identical(setdiff(orig_core_names, cand_core_names), character(0L))
     # D28 adds these reviewed controls and changes these six core bodies
     # (the solve alias shares one body). The original native-cache delta and
@@ -870,6 +876,12 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
       gmm_accuracy_control = list(covariance_strategy = NULL),
       preflight_gmm_allocations = list(covariance_strategy = NULL, n_dropped_triplets = 0L),
       solve_chained_gmm_core = list(gmm_covariance = NULL, covariance_tuning = NULL, reduction_spec = NULL))
+    # Cohort-time point-only fits may omit score projection. The added
+    # private argument defaults to the existing replay for every caller.
+    formal_additions <- utils::modifyList(d28_formal_additions, list(
+      chained_gmm_core = list(project_influence = TRUE),
+      preflight_gmm_allocations = list(project_influence = TRUE),
+      solve_chained_gmm_core = list(project_influence = TRUE)))
     d28_changed_bodies <- c("chained_gmm_core", "gmm_accuracy_control", "preflight_gmm_allocations",
       "solve_chained_gmm_core", "validate_gmm_accuracy_control", "validate_gmm_reduction_spec")
     # CP03: multiple anchors, zero-loading rows and intrinsic validation;
@@ -879,6 +891,8 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # eligible unweighted unit replays through the two-pass native accumulator.
     # The exact changed-body set is unchanged; the current pin binds both deltas.
     cp08_changed_bodies <- "project_gmm_if_stream"
+    # CP10 extends covariance whitening to gmm_weighting = "within" via gmm_uses_cov_whitening().
+    cp10_changed_bodies <- c("build_certified_class_forest", "certify_gmm_numerical_guard")
     # PR11 changes only dispatch in these existing bodies. C registration,
     # kernels, immutable original references and scientific checks are intact.
     registered_call_changed_bodies <- c("certify_symmetric_eigen_bounds", "gmm_iv_dot",
@@ -889,9 +903,9 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     actual_changed_bodies <- orig_core_names[vapply(orig_core_names, function(nm)
       !identical(body(utils::removeSource(get(nm, e_cand_core))),
         body(utils::removeSource(get(nm, e_orig_core)))), logical(1))]
-    expect_identical(actual_changed_formals, names(d28_formal_additions))
+    expect_identical(actual_changed_formals, names(formal_additions))
     expect_identical(actual_changed_bodies,
-      sort(c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies)))
+      sort(c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies, cp10_changed_bodies)))
     # Historical D28-only core SHA256 (before the accepted CP03 gauge delta):
     # 5f1fd263e702fecfe8ccc04e9005d83a3e67ce265bc5be418df7fe38e0e23b7e
     # Historical CP08 cache-stage whole-core pin (not the current source):
@@ -899,14 +913,19 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # Earlier CP03 acceptance remains in cp03_backend_acceptance.json.
     # Historical sharedX_unit_integration.json pin:
     # 93adc0e289ba55f84b4cd8c1c79d8127f0d5f95d58f423cc6f61146cbaa02a38.
-    # PR11 candidate pin: owner-bound fixed registered dispatch only beyond
-    # the accepted core; independent installed acceptance remains required.
+    # PR11 candidate pin: 2ca9f1b2dba7b82e8153d9de2970140d32b3db30e133c8b14526b977e57f4e01.
+    # CP10 within-covariance whitening pin:
+    # Parent pins: PERF c5d86f3 039c993bcfdf50f3e5e16d06d5766c944adafa38b67d9e0009ab27f26d921085;
+    # CCDID 5b1a614 80ffc08dad4ba889596d199eca57e38f74fa59f2c0b822e3b4d2484ea92d70bc.
+    # PERF and within-covariance whitening source pin before point-only projection:
+    # c7c4a8c7e0d90e3388a835e99a7839264f0d845815ce81b98162ab8d38fe0522
+    # The reviewed projection change touches only previously listed bodies.
     expect_identical(digest::digest(file = file.path(pkg_root, "R", "chained_gmm_core.R"), algo = "sha256"),
-      "2ca9f1b2dba7b82e8153d9de2970140d32b3db30e133c8b14526b977e57f4e01")
+      "d8d66f29c9caef90837c2504600a588394a65307f6e6e33da4f9aed31699a40d")
     for (nm in orig_core_names) {
       vo <- get(nm, envir = e_orig_core, inherits = FALSE)
       vc <- get(nm, envir = e_cand_core, inherits = FALSE)
-      additions <- d28_formal_additions[[nm]]
+      additions <- formal_additions[[nm]]
       if (is.null(additions)) {
         expect_identical(formals(vc), formals(vo), info = paste0("core_formals_", ks, "_", nm))
       } else {
@@ -917,7 +936,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
         expect_identical(formals(vc)[names(additions)], additions,
           info = paste0("core_added_defaults_", ks, "_", nm))
       }
-      if (!(nm %in% c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies))) {
+      if (!(nm %in% c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies, cp10_changed_bodies))) {
         expect_identical(body(vc), body(vo), info = paste0("core_body_", ks, "_", nm))
       }
     }
@@ -1036,7 +1055,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # byte-identical; test-cp04-pair-support-cache.R checks uncached parity.
     # This exact candidate pin requires independent acceptance before integration.
     expect_identical(digest::digest(file = file.path(pkg_root, "R", "chained_ipw_owner.R"), algo = "sha256"),
-      "a75c743194168caad38cb0ef3285afb9fe1c383370d1eeadcf5566316e390a63")
+      "1f194f21da7c9afd731790efa1ce770d017426c371dd2be7ebf606c4bfaba05d")
     for (nm in orig_own_names) {
       vo <- get(nm, envir = e_orig_own, inherits = FALSE)
       vc <- get(nm, envir = e_cand_own, inherits = FALSE)

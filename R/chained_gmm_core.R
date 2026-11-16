@@ -36,6 +36,10 @@ gmm_scalar_character <- function(x) {
   is.character(x) && is.null(dim(x)) && !is.object(x) && length(x) == 1L && !is.na(x) && nzchar(x)
 }
 
+gmm_uses_cov_whitening <- function(weighting) {
+  gmm_scalar_character(weighting) && weighting %in% c("optimal", "within")
+}
+
 gmm_scalar_numeric <- function(x, positive = FALSE, nonneg = FALSE) {
   is.numeric(x) && is.null(dim(x)) && !is.object(x) && length(x) == 1L &&
     !is.na(x) && is.finite(x) && (!positive || x > 0) && (!nonneg || x >= 0)
@@ -358,7 +362,7 @@ validate_gmm_accuracy_control <- function(accuracy, weighting) {
   if (!gmm_scalar_character(accuracy$method)) {
     cdid_gmm_abort("`accuracy$method` must be a non-empty character scalar.", "cdid_gmm_control_error")
   }
-  allowed_methods <- if (weighting == "optimal") {
+  allowed_methods <- if (gmm_uses_cov_whitening(weighting)) {
     c("certified_eigen_chol_kkt", "conventional_chol_qr")
   } else {
     c("certified_eigen_chol_kkt", "certified_qr_kkt", "conventional_chol_qr")
@@ -375,9 +379,9 @@ validate_gmm_accuracy_control <- function(accuracy, weighting) {
       !accuracy$target_error_unit %in% c("abs", "model_se", "both")) {
     cdid_gmm_abort("`accuracy$target_error_unit` must be explicitly 'abs', 'model_se', or 'both'.", "cdid_gmm_control_error")
   }
-  if (weighting == "identity" && accuracy$target_error_unit %in% c("model_se", "both")) {
+  if (weighting != "optimal" && accuracy$target_error_unit %in% c("model_se", "both")) {
     cdid_gmm_abort(
-      "Identity weighting has no model-variance SE interpretation for target-error budgeting; use `target_error_unit = 'abs'`.",
+      "Non-optimal weighting ('identity' or 'within') has no model-variance SE interpretation for target-error budgeting; use `target_error_unit = 'abs'`.",
       c("cdid_gmm_scale_error", "cdid_gmm_control_error")
     )
   }
@@ -407,10 +411,10 @@ validate_gmm_accuracy_control <- function(accuracy, weighting) {
       cdid_gmm_abort(paste0("`accuracy$", nm, "` must be a finite positive scalar in (0, 1)."), "cdid_gmm_control_error")
     }
   }
-  if (weighting == "optimal") {
+  if (gmm_uses_cov_whitening(weighting)) {
     for (nm in c("min_certified_lambda_rel", "min_rcond_R")) {
       if (!gmm_scalar_numeric(accuracy[[nm]], positive = TRUE) || accuracy[[nm]] >= 1) {
-        cdid_gmm_abort(paste0("`accuracy$", nm, "` must be a finite positive scalar in (0, 1) for optimal weighting."), "cdid_gmm_control_error")
+        cdid_gmm_abort(paste0("`accuracy$", nm, "` must be a finite positive scalar in (0, 1) for covariance whitening."), "cdid_gmm_control_error")
       }
     }
   } else {
@@ -589,9 +593,9 @@ validate_gmm_reduction_spec <- function(reduction, weighting) {
 build_certified_class_forest <- function(class_catalog, weighting, max_matrix_entries) {
   if (missing(max_matrix_entries)) cdid_gmm_abort("Conditional forest requires an explicit allocation bound.", "cdid_gmm_bound_error")
   forest_bound <- gmm_int_bound(max_matrix_entries, "max_matrix_entries")
-  if (missing(weighting) || !identical(weighting, "optimal")) {
+  if (missing(weighting) || !gmm_uses_cov_whitening(weighting)) {
     cdid_gmm_abort(
-      "Certified structural reduction requires `weighting = 'optimal'`; never reduce identity weighting.",
+      "Certified structural reduction requires `weighting` in {'optimal', 'within'}; never reduce identity weighting.",
       "cdid_gmm_reduction_error"
     )
   }
@@ -1204,12 +1208,13 @@ preflight_gmm_allocations <- function(
   m_R, k, J_est, weighting, bounds,
   n_out_rows = 0L, request_param_cov = FALSE, materialize_target_if = FALSE,
   n_input_rows = n_out_rows, n_parameters = k, certify_error = TRUE,
-  covariance_strategy = NULL, n_dropped_triplets = 0L
+  covariance_strategy = NULL, n_dropped_triplets = 0L, project_influence = TRUE
 ) {
   max_e <- bounds$max_matrix_entries
-  B <- bounds$max_batch_rows
+  B <- if (project_influence) bounds$max_batch_rows else 0L
 
-  m2 <- if (weighting == "optimal") gmm_safe_product(m_R, m_R, max_e, "V_R / R (m_R x m_R)") else 0
+  use_cov <- gmm_uses_cov_whitening(weighting)
+  m2 <- if (use_cov) gmm_safe_product(m_R, m_R, max_e, "V_R / R (m_R x m_R)") else 0
   mk <- gmm_safe_product(m_R, k, max_e, "W_G / A (m_R x k)")
   qr_comp <- mk + k
   if (qr_comp > max_e) {
@@ -1245,8 +1250,8 @@ preflight_gmm_allocations <- function(
       "open_cluster_state", "full_param_cov", "materialized_target_if"
     ),
     rows = c(
-      if (weighting == "optimal") m_R else 0,
-      if (weighting == "optimal") m_R else 0,
+      if (use_cov) m_R else 0,
+      if (use_cov) m_R else 0,
       m_R, m_R, m_R,
       m_R, m_R, m_R,
       k, k, m_R,
@@ -1255,8 +1260,8 @@ preflight_gmm_allocations <- function(
       if (isTRUE(materialize_target_if)) n_out_rows else 0
     ),
     cols = c(
-      if (weighting == "optimal") m_R else 0,
-      if (weighting == "optimal") m_R else 0,
+      if (use_cov) m_R else 0,
+      if (use_cov) m_R else 0,
       k, k, k,
       1, 1, 1,
       J_est, J_est, J_est,
@@ -1310,7 +1315,7 @@ preflight_gmm_allocations <- function(
     optional_covariance_workspace = if (request_param_cov) gmm_safe_product(3, k, max_e, "covariance streamed solves") else 0)
   if (certify_error) extra <- extra[names(extra) != "conventional_diagnostic_buffers"]
   strategy_work <- 0
-  if (!is.null(covariance_strategy) && identical(weighting, "optimal")) {
+  if (!is.null(covariance_strategy) && use_cov) {
     # Additional simultaneously reachable D26 payload. Reserve copies and
     # expression temporaries as well as retained matrices; the base diagnostic
     # reservation above is deliberately not borrowed for these new buffers.
@@ -1488,7 +1493,60 @@ gmm_require_native_dll <- function() {
       C_gmm_cp08_dr_treatment_batch = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19) .Call(C_gmm_cp08_dr_treatment_batch, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19),
       C_gmm_if_unit_batch = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) .Call(C_gmm_if_unit_batch, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10),
       C_gmm_cp08_payload = function(a1, a2, a3) .Call(C_gmm_cp08_payload, a1, a2, a3),
-      C_gmm_cp04_diagnostic_fields = function(a1, a2, a3) .Call(C_gmm_cp04_diagnostic_fields, a1, a2, a3)
+      C_gmm_cp04_diagnostic_fields = function(a1, a2, a3) .Call(C_gmm_cp04_diagnostic_fields, a1, a2, a3),
+      C_cdid_match_sorted_double = function(a1, a2, a3, a4) .Call(C_cdid_match_sorted_double, a1, a2, a3, a4),
+      C_cdid_pair_support_scan = function(a1, a2, a3, a4, a5, a6, a7, a8, a9) .Call(C_cdid_pair_support_scan, a1, a2, a3, a4, a5, a6, a7, a8, a9),
+      C_cdid_occupancy_accumulate = function(a1, a2, a3, a4, a5, a6) .Call(C_cdid_occupancy_accumulate, a1, a2, a3, a4, a5, a6),
+      C_cdid_catalog_row_mappings = function(a1, a2, a3) .Call(C_cdid_catalog_row_mappings, a1, a2, a3),
+      C_cdid_point_payload_budget = function(a1, a2, a3) .Call(C_cdid_point_payload_budget, a1, a2, a3),
+      C_cdid_num_id_tracker = function(a1, a2, a3, a4, a5) .Call(C_cdid_num_id_tracker, a1, a2, a3, a4, a5),
+      C_cdid_if_unit_batch_weighted = function(a1, a2, a3, a4, a5, a6, a7, a8, a9) .Call(C_cdid_if_unit_batch_weighted, a1, a2, a3, a4, a5, a6, a7, a8, a9),
+      C_cdid_wls_compress = function(a1) .Call(C_cdid_wls_compress, a1),
+      C_cdid_logit_exact_alias = function(a1) .Call(C_cdid_logit_exact_alias, a1),
+      C_cdid_clip_logit = function(a1, a2) .Call(C_cdid_clip_logit, a1, a2),
+      C_cdid_cp04_logit_fast = function(a1, a2, a3, a4, a5, a6) .Call(C_cdid_cp04_logit_fast, a1, a2, a3, a4, a5, a6),
+      C_cdid_center_gram = function(a1, a2, a3, a4, a5, a6) .Call(C_cdid_center_gram, a1, a2, a3, a4, a5, a6),
+      C_cdid_custom_ipw_collect = function(a1, a2, a3, a4, a5, a6, a7, a8, a9) .Call(C_cdid_custom_ipw_collect, a1, a2, a3, a4, a5, a6, a7, a8, a9),
+      C_cdid_custom_ipw_if_chunk = function(a1, a2, a3, a4, a5, a6, a7, a8) .Call(C_cdid_custom_ipw_if_chunk, a1, a2, a3, a4, a5, a6, a7, a8),
+      C_cdid_ipw_raw_pair_summary = function(a1, a2, a3, a4, a5) .Call(C_cdid_ipw_raw_pair_summary, a1, a2, a3, a4, a5),
+      C_cdid_ipw_raw_masks_ops = function(a1, a2, a3, a4, a5, a6, a7) .Call(C_cdid_ipw_raw_masks_ops, a1, a2, a3, a4, a5, a6, a7),
+      C_cdid_ipw_glm_fit = function(a1, a2, a3, a4) .Call(C_cdid_ipw_glm_fit, a1, a2, a3, a4),
+      C_cdid_ipw_hessian = function(a1, a2, a3, a4, a5, a6, a7) .Call(C_cdid_ipw_hessian, a1, a2, a3, a4, a5, a6, a7),
+      C_cdid_ipw_raw_if_chunk = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) .Call(C_cdid_ipw_raw_if_chunk, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11),
+      C_cdid_incomplete_or_supports = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) .Call(C_cdid_incomplete_or_supports, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11),
+      C_cdid_incomplete_dr_trt_fit = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13) .Call(C_cdid_incomplete_dr_trt_fit, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13),
+      C_cdid_fast_seal = function(a1, a2) .Call(C_cdid_fast_seal, a1, a2),
+      C_cdid_verify_fast = function(a1, a2, a3, a4, a5) .Call(C_cdid_verify_fast, a1, a2, a3, a4, a5),
+      C_cdid_matrix_set_rows = function(a1, a2, a3) .Call(C_cdid_matrix_set_rows, a1, a2, a3),
+      C_cdid_retained_cov_gram = function(a1, a2, a3, a4, a5) .Call(C_cdid_retained_cov_gram, a1, a2, a3, a4, a5),
+      C_cdid_dr_batch_chol_solve = function(a1, a2, a3, a4) .Call(C_cdid_dr_batch_chol_solve, a1, a2, a3, a4),
+      C_cdid_diag_summary = function(a1, a2, a3) .Call(C_cdid_diag_summary, a1, a2, a3),
+      C_cdid_sel_ref_lookup = function(a1, a2) .Call(C_cdid_sel_ref_lookup, a1, a2),
+      C_cdid_sel_ref_slice = function(a1, a2, a3, a4, a5, a6) .Call(C_cdid_sel_ref_slice, a1, a2, a3, a4, a5, a6),
+      C_cdid_sel_date_rows = function(a1, a2, a3, a4, a5, a6) .Call(C_cdid_sel_date_rows, a1, a2, a3, a4, a5, a6),
+      C_cdid_sel_fit_block = function(a1, a2, a3, a4, a5, a6) .Call(C_cdid_sel_fit_block, a1, a2, a3, a4, a5, a6),
+      C_cdid_sel_upstream_chunk = function(a1, a2, a3, a4, a5, a6, a7) .Call(C_cdid_sel_upstream_chunk, a1, a2, a3, a4, a5, a6, a7),
+      C_cdid_sel_trt_fit = function(a1, a2, a3, a4, a5, a6, a7, a8, a9) .Call(C_cdid_sel_trt_fit, a1, a2, a3, a4, a5, a6, a7, a8, a9),
+      C_cdid_sel_support_collect = function(a1, a2, a3, a4, a5, a6, a7, a8) .Call(C_cdid_sel_support_collect, a1, a2, a3, a4, a5, a6, a7, a8),
+      C_cdid_sel_if_chunk = function(a1, a2, a3, a4, a5, a6, a7, a8, a9) .Call(C_cdid_sel_if_chunk, a1, a2, a3, a4, a5, a6, a7, a8, a9),
+      C_cdid_ia_check_design_matrix = function(a1, a2, a3, a4) .Call(C_cdid_ia_check_design_matrix, a1, a2, a3, a4),
+      C_cdid_ia_multiplier_acc_if = function(a1, a2, a3, a4, a5) .Call(C_cdid_ia_multiplier_acc_if, a1, a2, a3, a4, a5),
+      C_cdid_ia_check_sign_matrix = function(a1) .Call(C_cdid_ia_check_sign_matrix, a1),
+      C_cdid_ia_imp_if_chunk = function(a1, a2, a3, a4, a5, a6, a7, a8) .Call(C_cdid_ia_imp_if_chunk, a1, a2, a3, a4, a5, a6, a7, a8),
+      C_cdid_ia_cell_replay_build = function(a1, a2, a3, a4, a5, a6, a7, a8) .Call(C_cdid_ia_cell_replay_build, a1, a2, a3, a4, a5, a6, a7, a8),
+      C_cdid_ia_aug_if_chunk = function(a1, a2, a3, a4, a5, a6, a7, a8, a9) .Call(C_cdid_ia_aug_if_chunk, a1, a2, a3, a4, a5, a6, a7, a8, a9),
+      C_cdid_ia_imp_stage1 = function(a1, a2, a3, a4, a5, a6, a7) .Call(C_cdid_ia_imp_stage1, a1, a2, a3, a4, a5, a6, a7),
+      C_cdid_ia_imp_stage2_cells = function(a1, a2, a3, a4, a5, a6, a7, a8) .Call(C_cdid_ia_imp_stage2_cells, a1, a2, a3, a4, a5, a6, a7, a8),
+      C_cdid_ia_imp_stage24_forcing_links = function(a1, a2, a3, a4, a5, a6, a7, a8, a9) .Call(C_cdid_ia_imp_stage24_forcing_links, a1, a2, a3, a4, a5, a6, a7, a8, a9),
+      C_cdid_ia_aug_stage456 = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) .Call(C_cdid_ia_aug_stage456, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11),
+      C_cdid_ia_fit_sel_blocks = function(a1, a2, a3, a4, a5, a6) .Call(C_cdid_ia_fit_sel_blocks, a1, a2, a3, a4, a5, a6),
+      C_cdid_cpt_distinct_grid = function(a1) .Call(C_cdid_cpt_distinct_grid, a1),
+      C_cdid_cpt_acc_init = function(a1) .Call(C_cdid_cpt_acc_init, a1),
+      C_cdid_cpt_acc_add_piece = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) .Call(C_cdid_cpt_acc_add_piece, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10),
+      C_cdid_cpt_acc_add_fast = function(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) .Call(C_cdid_cpt_acc_add_fast, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10),
+      C_cdid_cpt_acc_finalize = function(a1, a2, a3, a4, a5, a6) .Call(C_cdid_cpt_acc_finalize, a1, a2, a3, a4, a5, a6),
+      C_cdid_cpt_batch_cvmb = function(a1, a2, a3) .Call(C_cdid_cpt_batch_cvmb, a1, a2, a3),
+      C_cdid_cpt_process_nonzero = function(a1, a2) .Call(C_cdid_cpt_process_nonzero, a1, a2)
     )
     for (nm in names(calls)) environment(calls[[nm]]) <- native
     attr(syms, "calls") <- calls
@@ -1806,9 +1864,10 @@ certify_gmm_numerical_guard <- function(
   if (!is.null(max_matrix_entries)) {
     max_matrix_entries <- gmm_int_bound(max_matrix_entries, "max_matrix_entries")
   }
-  if (missing(weighting) || !gmm_scalar_character(weighting) || !weighting %in% c("optimal", "identity")) {
-    cdid_gmm_abort("`weighting` must be explicitly 'optimal' or 'identity'.", "cdid_gmm_control_error")
+  if (missing(weighting) || !gmm_scalar_character(weighting) || !weighting %in% c("optimal", "identity", "within")) {
+    cdid_gmm_abort("`weighting` must be explicitly 'optimal', 'identity', or 'within'.", "cdid_gmm_control_error")
   }
+  use_cov <- gmm_uses_cov_whitening(weighting)
   accuracy <- validate_gmm_accuracy_control(accuracy, weighting)
   if (!is.matrix(W_G) || is.object(W_G) || !is.numeric(W_G) || nrow(W_G) < 1L || ncol(W_G) < 1L ||
       !is.matrix(A_whitened) || is.object(A_whitened) || !is.numeric(A_whitened) ||
@@ -1834,11 +1893,11 @@ certify_gmm_numerical_guard <- function(
     # forward-error certificate or relative-residual rejection is requested.
     gmm_safe_product(4, m*m + k*k + m*k, max_matrix_entries, "computed factor/solve diagnostic matrices")
     candidates <- list(W_G, A_whitened, U_qr, mhat_R, theta, y, C_gauge, Lambda, Mc, Z1)
-    if (weighting == "optimal") candidates <- c(candidates, list(V_R, R_chol))
+    if (use_cov) candidates <- c(candidates, list(V_R, R_chol))
     if (any(vapply(candidates, function(x) !is.numeric(x) || any(!is.finite(x)), logical(1L))))
       cdid_gmm_abort("Nonfinite numerical candidate.", "cdid_gmm_accuracy_error")
     if (!identical(sort(as.integer(piv)), seq_len(k))) cdid_gmm_abort("Invalid QR pivot permutation.", "cdid_gmm_qr_error")
-    if (weighting == "optimal") {
+    if (use_cov) {
       if (!is.matrix(V_R) || !identical(dim(V_R), c(m,m)) ||
           !is.matrix(R_chol) || !identical(dim(R_chol), c(m,m)) || any(diag(R_chol) <= 0))
         cdid_gmm_abort("Invalid Cholesky factor/covariance.", "cdid_gmm_pd_error")
@@ -1886,7 +1945,7 @@ certify_gmm_numerical_guard <- function(
       primal_kkt = list(r1_est = r1, r2_est = r2, solve_rel_est = ratio(r1, scale1), stat_rel_est = ratio(r2, scale2),
         residual_ratio_role = "diagnostic_only_under_D23"),
       targets = list(target_error_est = rep(NA_real_, J_est), target_error_cert = rep(NA_real_, J_est),
-        loading_error_cert = rep(NA_real_, J_est), se_criterion_est = if (weighting == "optimal") sqrt(colSums(Z1*Z1)) else rep(NA_real_, J_est),
+        loading_error_cert = rep(NA_real_, J_est), se_criterion_est = if (use_cov) sqrt(colSums(Z1*Z1)) else rep(NA_real_, J_est),
         loading_primal_residual = s1, loading_calibration_residual = s2)))
   }
   m2_g <- gmm_safe_product(m, m, max_matrix_entries, "guard m x m")
@@ -1897,7 +1956,7 @@ certify_gmm_numerical_guard <- function(
     gmm_safe_product(m, J_est, max_matrix_entries, "guard Lambda")
     gmm_safe_product(k, J_est, max_matrix_entries, "guard C_gauge/Mc/Z1")
   }
-  if (weighting == "optimal") {
+  if (use_cov) {
     if (!is.matrix(V_R) || is.object(V_R) || !is.numeric(V_R) || nrow(V_R) != m || ncol(V_R) != m ||
         !is.matrix(R_chol) || is.object(R_chol) || !is.numeric(R_chol) || nrow(R_chol) != m || ncol(R_chol) != m) {
       cdid_gmm_abort("Malformed `V_R` or `R_chol` in `certify_gmm_numerical_guard`.", "cdid_gmm_pd_error")
@@ -1912,7 +1971,7 @@ certify_gmm_numerical_guard <- function(
     cdid_gmm_abort("Nonfinite numerical candidate.", "cdid_gmm_accuracy_error")
   if (!identical(sort(as.integer(piv)), seq_len(k))) cdid_gmm_abort("Invalid QR pivot permutation.", "cdid_gmm_qr_error")
   norm_W <- gmm_iv_norm(W_G, max_matrix_entries = max_matrix_entries); norm_W_F <- norm(W_G, "F")
-  if (weighting == "optimal") {
+  if (use_cov) {
     norm_V <- gmm_iv_norm(V_R, max_matrix_entries = max_matrix_entries); norm_V_F <- norm(V_R, "F")
     eig_V <- certify_symmetric_eigen_bounds(V_R, "V_R", max_matrix_entries = max_matrix_entries)
     chol_res <- gmm_iv_mat_residual(t(R_chol), R_chol, V_R, max_matrix_entries = max_matrix_entries)
@@ -1962,7 +2021,7 @@ certify_gmm_numerical_guard <- function(
   amax2 <- gmm_iv_add(gmm_iv(eig_AtA$lambda_max_cert), gmm_iv(eps_gram_cert))[2L]
   if (amin2 <= 0) cdid_gmm_abort("Certified minimum singular value of A not positive.", "cdid_gmm_qr_error")
   amin <- gmm_iv_sqrt(gmm_iv(amin2))[1L]; amax <- gmm_iv_sqrt(gmm_iv(amax2))[2L]
-  if (weighting == "optimal") {
+  if (use_cov) {
     e <- gmm_iv_div(gmm_iv(eps_A_cert), gmm_iv(sigma_min_R_cert))[2L]
     sigma_min_A_star_cert <- gmm_iv_div(gmm_iv_sub(gmm_iv(amin), gmm_iv(e)),
       gmm_iv_sqrt(gmm_iv_add(gmm_iv(1), gmm_iv(eta_R_cert))))[1L]
@@ -1979,7 +2038,7 @@ certify_gmm_numerical_guard <- function(
   inv_s <- gmm_iv_div(gmm_iv(1), gmm_iv(sigma_min_A_star_cert))
   d_inv_sigma_min_A_star_sq_cert <- gmm_iv_mul(inv_s, inv_s)[2L]
   kkt_inv_2norm_cert <- gmm_iv_add(inv_a, gmm_iv_mul(inv_s, inv_s))[2L]
-  Vcrit <- if (weighting == "optimal") V_R else diag(m)
+  Vcrit <- if (use_cov) V_R else diag(m)
   r1_lo <- numeric(m); r1_hi <- numeric(m)
   for (i in seq_len(m)) {
     z <- gmm_iv_sub(gmm_iv_sub(gmm_iv(mhat_R[i]), gmm_iv_dot(Vcrit[i, ], y)), gmm_iv_dot(W_G[i, ], theta))
@@ -1994,7 +2053,7 @@ certify_gmm_numerical_guard <- function(
   r_norm2_cert <- gmm_iv_norm(c(r1_lo,r2_lo),c(r1_hi,r2_hi))[2L]
   fit_res <- gmm_iv_residual(W_G, theta, mhat_R, max_matrix_entries = max_matrix_entries)
   fit_residual_norm2_cert <- fit_res$norm[2L]
-  sqrt_Q_cert_upper <- if (weighting == "optimal") {
+  sqrt_Q_cert_upper <- if (use_cov) {
     gmm_iv_div(gmm_iv(fit_residual_norm2_cert), gmm_iv_sqrt(gmm_iv(eig_V$lambda_min_cert)))[2L]
   } else {
     NA_real_
@@ -2055,7 +2114,7 @@ certify_gmm_numerical_guard <- function(
     tau_round <- gmm_iv_abs(gmm_iv_sub(gmm_iv(tau_computed[j]),gmm_iv_dot(c_j,theta)))[2L]
     t1_cert[j] <- t1; t2_cert[j] <- t2; tau_round_cert[j] <- tau_round
     target_error_cert[j] <- gmm_iv_add(gmm_iv_add(gmm_iv_add(gmm_iv(t1),gmm_iv(t2)),gmm_iv(adjoint_missing_term_cert[j])),gmm_iv(tau_round))[2L]
-    if (weighting == "optimal") {
+    if (use_cov) {
       se_criterion_est[j] <- norm(matrix(Z1[,j]),"F")
       vpen <- gmm_iv_mul(gmm_iv_mul(gmm_iv(c_norm2_cert[j]),gmm_iv(kkt_inv_2norm_cert)),gmm_iv(s_norm2_cert[j]))
       cmc_iv <- gmm_iv_dot(c_j,mc_j)
@@ -2384,20 +2443,30 @@ gmm_require_unit_batch_symbol <- function(syms = NULL, call = FALSE) {
   # authenticated only on eligible unit replays, against that resolver's DLL.
   checked_syms <- gmm_require_native_dll()
   owner <- environment(gmm_require_native_dll)
-  dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
-  dll <- dlls[["cdid"]]
-  si <- tryCatch(base::getNativeSymbolInfo("C_gmm_if_unit_batch", PACKAGE = dll), error = function(e) NULL)
-  sym <- if (is.null(si)) NULL else si$address
+  fk_cache <- if (exists("cdid_fast_kernel_cache", envir = owner, inherits = FALSE)) {
+    get("cdid_fast_kernel_cache", envir = owner, inherits = FALSE)
+  } else NULL
+  sym <- if (is.environment(fk_cache) && identical(fk_cache$ub_checked_syms, checked_syms)) fk_cache$ub_sym else NULL
   refuse <- function() cdid_gmm_abort(
     "Native symbol registration/forcing verification failed for `C_gmm_if_unit_batch`.",
     c("cdid_gmm_native_error", "cdid_gmm_accuracy_error")
   )
-  if (is.null(si) || !inherits(si, "NativeSymbolInfo") || is.null(sym) ||
-      typeof(sym) != "externalptr" || !inherits(sym, "NativeSymbol") ||
-      !identical(as.integer(si$numParameters), 10L) ||
-      any(vapply(checked_syms, identical, logical(1L), sym))) refuse()
-  if (!is.null(syms)) {
-    supplied <- if (identical(syms, checked_syms)) sym else if (
+  if (is.null(sym)) {
+    dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
+    dll <- dlls[["cdid"]]
+    si <- tryCatch(base::getNativeSymbolInfo("C_gmm_if_unit_batch", PACKAGE = dll), error = function(e) NULL)
+    sym <- if (is.null(si)) NULL else si$address
+    if (is.null(si) || !inherits(si, "NativeSymbolInfo") || is.null(sym) ||
+        typeof(sym) != "externalptr" || !inherits(sym, "NativeSymbol") ||
+        !identical(as.integer(si$numParameters), 10L) ||
+        any(vapply(checked_syms, identical, logical(1L), sym))) refuse()
+    if (is.environment(fk_cache)) {
+      fk_cache$ub_checked_syms <- checked_syms
+      fk_cache$ub_sym <- sym
+    }
+  }
+  if (!is.null(syms) && !identical(syms, sym) && !identical(syms, checked_syms)) {
+    supplied <- if (
       typeof(syms) == "externalptr" && inherits(syms, "NativeSymbol")) syms else if (
       is.list(syms)) syms[["C_gmm_if_unit_batch"]] else NULL
     other <- if (is.list(syms)) syms[names(syms) != "C_gmm_if_unit_batch"] else list()
@@ -2472,6 +2541,11 @@ project_gmm_if_stream <- function(if_replay, Lambda, m_R, bounds, provenance, ma
     gmm_safe_product(1, bj_max + b2_max + j4_max + 8, bounds$max_matrix_entries, "unit batch pass-1 simultaneous buffers")
     gmm_safe_product(1, bj_max + b2_max + j2_max + jj2_max + 8, bounds$max_matrix_entries, "unit batch pass-2 simultaneous buffers")
     unit_batch_sym <- gmm_require_unit_batch_symbol(gmm_require_native_dll())
+    fast_proj_fn <- get0("cdid_fast_project_retained_if", mode = "function", inherits = TRUE)
+    if (!is.null(fast_proj_fn)) {
+      fast_proj <- fast_proj_fn(if_replay, Lambda, m_R, bounds, materialize_target_if)
+      if (!is.null(fast_proj)) return(fast_proj)
+    }
   }
   unit_cache <- cluster_cache <- character(ni); weight_cache <- numeric(ni)
   psi_cache <- matrix(0,ni,J)
@@ -2479,6 +2553,26 @@ project_gmm_if_stream <- function(if_replay, Lambda, m_R, bounds, provenance, ma
   batch_sizes <- numeric(ni); sum_w <- 0; weighted_sum <- raw_sum <- numeric(J)
   npos <- 0L; nb1 <- 0L; max_B <- 0L
   closed <- character(no); nclosed <- 0L
+  unit_row_mode <- !if_replay$aggregate_to_clusters &&
+    identical(if_replay$input_row_level, "unit") &&
+    identical(if_replay$output_row_level, "unit") &&
+    is.numeric(J) && length(J) == 1L && !is.na(J) && J >= 1L
+  fk_fn <- if (unit_row_mode) get0("cdid_fast_kernel", mode = "function", inherits = TRUE) else NULL
+  id_kern <- if (!is.null(fk_fn)) tryCatch(fk_fn("C_cdid_num_id_tracker"), error = function(e) NULL) else NULL
+  w_batch_kern <- if (!unit_batch && !is.null(fk_fn)) tryCatch(fk_fn("C_cdid_if_unit_batch_weighted"), error = function(e) NULL) else NULL
+  num_tr <- if (!is.null(id_kern) && ni >= 1L) id_kern(0L, NULL, NULL, as.integer(ni), NULL) else NULL
+  num_mode <- !is.null(num_tr)
+  materialize_num_prefix <- function(n_pref) {
+    if (!num_mode) return(invisible(NULL))
+    if (n_pref > 0L) {
+      pk <- id_kern(4L, num_tr, NULL, as.integer(n_pref), NULL)
+      p_idx <- seq_len(n_pref)
+      unit_cache[p_idx] <<- pk; cluster_cache[p_idx] <<- pk
+      closed[p_idx] <<- pk; output_keys[p_idx] <<- pk
+    }
+    num_mode <<- FALSE
+    invisible(NULL)
+  }
   run <- function(pass) {
     nin <- nout <- nb <- 0L; open_id <- NULL; open_w <- 0; open_vec <- numeric(J)
     # `closed_before`, when supplied, is the caller's exact answer to
@@ -2514,9 +2608,19 @@ project_gmm_if_stream <- function(if_replay, Lambda, m_R, bounds, provenance, ma
       gmm_safe_product(B,m_R,bounds$max_matrix_entries,"IF finite/projection validation")
       if (any(!is.finite(phi))) cdid_gmm_abort("Nonfinite IF batch.", "cdid_gmm_replay_error")
       if (!is.null(batch$nuisance_fit_id) && !identical(batch$nuisance_fit_id,if_replay$nuisance_fit_id)) cdid_gmm_abort("Changed batch nuisance label.", "cdid_gmm_replay_error")
-      u <- keys(batch$unit_id,B,"unit IDs")
-      cid <- if (if_replay$aggregate_to_clusters) keys(batch$cluster_id,B,"cluster IDs") else u
-      if (if_replay$input_row_level == "cluster" && !is.null(batch$cluster_id)) {
+      fast_cf <- NULL
+      if (num_mode) {
+        if (pass == 1L) {
+          fast_cf <- id_kern(1L, num_tr, batch$unit_id, c(as.integer(nin), as.integer(B)), NULL)
+          if (is.null(fast_cf)) materialize_num_prefix(nin)
+        } else {
+          ok_id <- id_kern(2L, num_tr, batch$unit_id, c(as.integer(nin), as.integer(B)), NULL)
+          if (!isTRUE(ok_id)) materialize_num_prefix(ni)
+        }
+      }
+      u <- if (num_mode) NULL else keys(batch$unit_id,B,"unit IDs")
+      cid <- if (num_mode) NULL else if (if_replay$aggregate_to_clusters) keys(batch$cluster_id,B,"cluster IDs") else u
+      if (!num_mode && if_replay$input_row_level == "cluster" && !is.null(batch$cluster_id)) {
         if (!identical(keys(batch$cluster_id,B,"cluster IDs"),u)) cdid_gmm_abort("Complete cluster IDs disagree with row IDs.", "cdid_gmm_replay_error")
       }
       if (if_replay$weighted) {
@@ -2531,24 +2635,17 @@ project_gmm_if_stream <- function(if_replay, Lambda, m_R, bounds, provenance, ma
       if (any(!is.finite(psi))) cdid_gmm_abort("Projected IF overflowed.", "cdid_gmm_replay_error")
       idx <- seq.int(nin+1L,nin+B); nb <<- nb+1L
       if (pass==1L) {
-        unit_cache[idx] <<- u; cluster_cache[idx] <<- cid; weight_cache[idx] <<- w; psi_cache[idx,] <<- psi
+        if (!num_mode) { unit_cache[idx] <<- u; cluster_cache[idx] <<- cid }
+        weight_cache[idx] <<- w; psi_cache[idx,] <<- psi
         batch_sizes[nb] <<- B; max_B <<- max(max_B,B)
       } else {
-        if (nb > nb1 || B != batch_sizes[nb] || !identical(u,unit_cache[idx]) || !identical(cid,cluster_cache[idx]) ||
+        if (nb > nb1 || B != batch_sizes[nb] ||
+            (!num_mode && (!identical(u,unit_cache[idx]) || !identical(cid,cluster_cache[idx]))) ||
             !identical(w,weight_cache[idx]) || !identical(as.double(psi),as.double(psi_cache[idx,,drop=FALSE])))
           cdid_gmm_abort("IF replay changed projected rows, weights, IDs or batch structure.", "cdid_gmm_replay_error")
       }
       nin <<- nin+B
-      # Unit rows are flushed, and closed, in this order, so row i's membership
-      # among the keys closed before it is its duplicated() flag in that same
-      # sequence: one hashed pass per batch replaces a scan of every closed key
-      # per row. This is O(N+B) per batch and O(N^2/B) overall, not linear.
-      # In this unit branch no=ni and nclosed+B<=ni. Retained ID/weight arrays
-      # use 7*ni slots; combined keys, hash/logical scratch and batch keys/weights
-      # fit the existing 8*(ni+no)=16*ni identifier reservation. The hash/input
-      # are released before the indexed flag result and before row accumulation.
-      # Same check, order and refusal; floating-point additions are unchanged.
-      closed_flags <- if (!if_replay$aggregate_to_clusters && pass == 1L)
+      closed_flags <- if (num_mode) fast_cf else if (!if_replay$aggregate_to_clusters && pass == 1L)
         duplicated(c(closed[seq_len(nclosed)], u))[nclosed + seq_len(B)] else NULL
       if (unit_batch) {
         counts_vec <- c(as.double(nout), as.double(no), as.double(npos), sum_w)
@@ -2559,9 +2656,11 @@ project_gmm_if_stream <- function(if_replay, Lambda, m_R, bounds, provenance, ma
             max_matrix_entries = bounds$max_matrix_entries, syms = unit_batch_sym
           )
           out_idx <- seq.int(nout + 1L, nout + B)
-          closed[seq.int(nclosed + 1L, nclosed + B)] <<- u
+          if (!num_mode) {
+            closed[seq.int(nclosed + 1L, nclosed + B)] <<- u
+            output_keys[out_idx] <<- u
+          }
           nclosed <<- nclosed + B
-          output_keys[out_idx] <<- u
           output_weights[out_idx] <<- w
           nout <<- as.integer(res_b$counts[1L])
           npos <<- as.integer(res_b$counts[3L])
@@ -2571,7 +2670,7 @@ project_gmm_if_stream <- function(if_replay, Lambda, m_R, bounds, provenance, ma
         } else {
           meta_flags <- if (nout + B <= no) {
             out_idx <- seq.int(nout + 1L, nout + B)
-            (u != output_keys[out_idx]) | (w != output_weights[out_idx])
+            if (num_mode) (w != output_weights[out_idx]) else ((u != output_keys[out_idx]) | (w != output_weights[out_idx]))
           } else {
             logical(B)
           }
@@ -2585,6 +2684,45 @@ project_gmm_if_stream <- function(if_replay, Lambda, m_R, bounds, provenance, ma
           S <<- res_b$S
         }
         return(invisible(NULL))
+      }
+      if (!is.null(w_batch_kern) && nout + B <= no) {
+        counts_vec <- c(as.double(nout), as.double(no), as.double(npos), sum_w)
+        if (pass == 1L && !any(closed_flags)) {
+          res_w <- w_batch_kern(1L, unname(psi), w, closed_flags, counts_vec, weighted_sum, raw_sum, NULL, NULL)
+          if (!is.null(res_w)) {
+            out_idx <- seq.int(nout + 1L, nout + B)
+            if (!num_mode) {
+              closed[seq.int(nclosed + 1L, nclosed + B)] <<- u
+              output_keys[out_idx] <<- u
+            }
+            nclosed <<- nclosed + B
+            output_weights[out_idx] <<- w
+            nout <<- as.integer(res_w$counts[1L])
+            npos <<- as.integer(res_w$counts[3L])
+            sum_w <<- res_w$counts[4L]
+            weighted_sum <<- res_w$weighted_sum
+            raw_sum <<- res_w$raw_sum
+            return(invisible(NULL))
+          }
+        } else if (pass == 2L) {
+          out_idx <- seq.int(nout + 1L, nout + B)
+          meta_flags <- if (num_mode) (w != output_weights[out_idx]) else ((u != output_keys[out_idx]) | (w != output_weights[out_idx]))
+          if (!any(meta_flags)) {
+            res_w <- w_batch_kern(2L, unname(psi), w, meta_flags, counts_vec, NULL, NULL, psi_mean, S)
+            if (!is.null(res_w)) {
+              if (!is.null(materialized)) materialized[out_idx, ] <<- psi
+              nout <<- as.integer(res_w$counts[1L])
+              S <<- res_w$S
+              return(invisible(NULL))
+            }
+          }
+        }
+      }
+      if (num_mode) {
+        materialize_num_prefix(nin - B)
+        u <- keys(batch$unit_id, B, "unit IDs")
+        cid <- u
+        if (pass == 1L) { unit_cache[idx] <<- u; cluster_cache[idx] <<- cid }
       }
       for (i in seq_len(B)) {
         if (!if_replay$aggregate_to_clusters) { flush(u[i],w[i],psi[i,],closed_flags[i]); next }
@@ -2610,14 +2748,34 @@ project_gmm_if_stream <- function(if_replay, Lambda, m_R, bounds, provenance, ma
     nb
   }
   nb1 <- run(1L)
-  if (anyDuplicated(unit_cache)) cdid_gmm_abort("Duplicate replay unit IDs.", "cdid_gmm_replay_error")
+  if (if (num_mode) (num_tr[[3L]][2L] != 0L) else (anyDuplicated(unit_cache) > 0L))
+    cdid_gmm_abort("Duplicate replay unit IDs.", "cdid_gmm_replay_error")
   if (npos!=if_replay$n_positive_contributing_rows) cdid_gmm_abort("Positive-weight count differs.", "cdid_gmm_replay_error")
-  if (!is.null(if_replay$expected_unit_ids) && !identical(unit_cache,keys(if_replay$expected_unit_ids,ni,"expected unit IDs"))) cdid_gmm_abort("Expected unit sequence differs.", "cdid_gmm_replay_error")
-  if (!is.null(if_replay$expected_cluster_ids) && !identical(output_keys,keys(if_replay$expected_cluster_ids,no,"expected cluster IDs"))) cdid_gmm_abort("Expected cluster sequence differs.", "cdid_gmm_replay_error")
+  if (!is.null(if_replay$expected_unit_ids)) {
+    eu_ok <- if (num_mode) id_kern(3L, num_tr, if_replay$expected_unit_ids, as.integer(ni), NULL) else NULL
+    if (is.null(eu_ok)) {
+      uk_cmp <- if (num_mode) id_kern(4L, num_tr, NULL, as.integer(ni), NULL) else unit_cache
+      if (!identical(uk_cmp, keys(if_replay$expected_unit_ids,ni,"expected unit IDs")))
+        cdid_gmm_abort("Expected unit sequence differs.", "cdid_gmm_replay_error")
+    } else if (!isTRUE(eu_ok)) {
+      cdid_gmm_abort("Expected unit sequence differs.", "cdid_gmm_replay_error")
+    }
+  }
+  if (!is.null(if_replay$expected_cluster_ids)) {
+    ec_ok <- if (num_mode) id_kern(3L, num_tr, if_replay$expected_cluster_ids, as.integer(no), NULL) else NULL
+    if (is.null(ec_ok)) {
+      ok_cmp <- if (num_mode) id_kern(4L, num_tr, NULL, as.integer(no), NULL) else output_keys
+      if (!identical(ok_cmp, keys(if_replay$expected_cluster_ids,no,"expected cluster IDs")))
+        cdid_gmm_abort("Expected cluster sequence differs.", "cdid_gmm_replay_error")
+    } else if (!isTRUE(ec_ok)) {
+      cdid_gmm_abort("Expected cluster sequence differs.", "cdid_gmm_replay_error")
+    }
+  }
   if (sum_w <= 0) cdid_gmm_abort("No positive replay weight.", "cdid_gmm_replay_error")
   psi_mean <- if (if_replay$centered) weighted_sum/sum_w else numeric(J)
   if (any(!is.finite(psi_mean))) cdid_gmm_abort("Replay mean overflowed.", "cdid_gmm_replay_error")
   S <- matrix(0,J,J,dimnames=list(colnames(Lambda),colnames(Lambda)))
+  if (materialize_target_if && num_mode) output_keys <- id_kern(4L, num_tr, NULL, as.integer(no), NULL)
   materialized <- if (materialize_target_if) matrix(0,no,J,dimnames=list(output_keys,colnames(Lambda))) else NULL
   run(2L)
   sandwich <- if_replay$normalization_factor*S
@@ -2695,7 +2853,8 @@ solve_chained_gmm_core <- function(
   materialize_target_if = FALSE,
   gmm_covariance = NULL,
   covariance_tuning = NULL,
-  reduction_spec = NULL
+  reduction_spec = NULL,
+  project_influence = TRUE
 ) {
   if (missing(design) || missing(mhat) || missing(V) || missing(provenance) ||
       missing(targets) || missing(weighting) || missing(if_replay) ||
@@ -2710,6 +2869,10 @@ solve_chained_gmm_core <- function(
   weighting <- w_choice$canonical
   if (!gmm_scalar_logical(request_param_cov) || !gmm_scalar_logical(materialize_target_if)) {
     cdid_gmm_abort("`request_param_cov` and `materialize_target_if` must be scalar logicals.", "cdid_gmm_control_error")
+  }
+
+  if (!gmm_scalar_logical(project_influence) || (!project_influence && materialize_target_if)) {
+    cdid_gmm_abort("Influence materialization requires an enabled influence projection.", "cdid_gmm_control_error")
   }
 
   nb_info <- if (identical(accuracy$method, "conventional_chol_qr"))
@@ -2746,8 +2909,9 @@ solve_chained_gmm_core <- function(
     cov_strategy$weighting_canonical <- weighting
     cov_strategy$alias_used <- w_choice$alias_used
   }
+  use_cov <- gmm_uses_cov_whitening(weighting)
   provenance <- validate_gmm_covariance_provenance(provenance, weighting)
-  if (weighting == "optimal" && !is.null(cov_strategy) && provenance$row_level != "unit") {
+  if (use_cov && !is.null(cov_strategy) && provenance$row_level != "unit") {
     cdid_gmm_abort("Automatic covariance handling requires complete unit-IF covariance; clusters change inference only.",
       "cdid_gmm_covariance_error")
   }
@@ -2765,16 +2929,19 @@ solve_chained_gmm_core <- function(
   k_pre <- gmm_int_bound(design$rank_diagnostics$rank, "design rank")
   gmm_safe_product(20, m_pre + p_pre, bounds$max_matrix_entries, "gauge/design validation vectors")
   gmm_safe_product(m_pre, m_pre, bounds$max_matrix_entries, "V validation buffers")
-  gmm_safe_product(8, if_replay$n_input_rows + if_replay$n_output_rows, bounds$max_matrix_entries, "replay IDs/weights/count buffers")
+  n_input_rows <- if (project_influence) if_replay$n_input_rows else 0L
+  n_output_rows <- if (project_influence) if_replay$n_output_rows else 0L
+  gmm_safe_product(8, n_input_rows + n_output_rows, bounds$max_matrix_entries, "replay IDs/weights/count buffers")
   J_pre <- if (is.matrix(targets)) ncol(targets) else if (is.data.frame(targets)) min(nrow(targets),bounds$max_targets) else length(targets)
   if (J_pre < 1 || J_pre > bounds$max_targets) cdid_gmm_abort("Invalid target count/budget.", "cdid_gmm_bound_error")
   eff_red <- if (!is.null(reduction_spec)) reduction_spec else provenance$reduction
   n_trip_pre <- if (!is.null(eff_red$class_certificate$E$i)) length(eff_red$class_certificate$E$i) else if (!is.null(eff_red$E$i)) length(eff_red$E$i) else 0L
   preflight_gmm_allocations(m_pre, k_pre, J_pre, weighting, bounds,
-    n_out_rows = if_replay$n_output_rows, n_input_rows = if_replay$n_input_rows,
+    n_out_rows = n_output_rows, n_input_rows = n_input_rows,
     n_parameters = p_pre, request_param_cov = request_param_cov, materialize_target_if = materialize_target_if,
     certify_error = !identical(accuracy$method, "conventional_chol_qr"),
-    covariance_strategy = cov_strategy, n_dropped_triplets = n_trip_pre)
+    covariance_strategy = cov_strategy, n_dropped_triplets = n_trip_pre,
+    project_influence = project_influence)
 
   # 1. Gauge construction and exact target estimability
   gauge <- build_gmm_gauge(design, gauge_rule = gauge_rule, custom_roots = custom_gauge_roots)
@@ -2873,7 +3040,14 @@ solve_chained_gmm_core <- function(
     )
   }
 
-  target_info <- validate_gmm_targets(design, gauge, targets, bounds)
+  target_info <- if (exists("cdid_fast_validate_gmm_targets", mode = "function", inherits = TRUE)) {
+    cdid_fast_validate_gmm_targets(design, gauge, targets, bounds)
+  } else {
+    NULL
+  }
+  if (is.null(target_info)) {
+    target_info <- validate_gmm_targets(design, gauge, targets, bounds)
+  }
   J_est <- target_info$n_estimable
 
   # 2. Preflight allocation check before constructing dense W_G, R, A, Lambda
@@ -2883,18 +3057,19 @@ solve_chained_gmm_core <- function(
     J_est = J_est,
     weighting = weighting,
     bounds = bounds,
-    n_out_rows = if_replay$n_output_rows,
-    n_input_rows = if_replay$n_input_rows, n_parameters = p,
+    n_out_rows = n_output_rows,
+    n_input_rows = n_input_rows, n_parameters = p,
     request_param_cov = request_param_cov,
     materialize_target_if = materialize_target_if,
     certify_error = !identical(accuracy$method, "conventional_chol_qr"),
     covariance_strategy = cov_strategy,
-    n_dropped_triplets = n_trip_pre
+    n_dropped_triplets = n_trip_pre,
+    project_influence = project_influence
   )
 
   # 3. Materialize W_G and solve GMM system
   W_G <- materialize_gmm_gauge_matrix(gauge, bounds$max_matrix_entries)
-  gram_info <- if (weighting == "optimal" && !is.null(cov_strategy)) assemble_gmm_gram_matrix(
+  gram_info <- if (use_cov && !is.null(cov_strategy)) assemble_gmm_gram_matrix(
     m_R = m_R,
     weighting = weighting,
     reduction = eff_red,
@@ -2908,7 +3083,7 @@ solve_chained_gmm_core <- function(
   lambda_used <- NA_real_
   weighted_design_rank <- k
 
-  if (weighting == "optimal" && !is.null(cov_strategy)) {
+  if (use_cov && !is.null(cov_strategy)) {
     diag_B <- diagnose_gmm_transformed_covariance(
       V = V,
       gram_info = gram_info,
@@ -2916,7 +3091,7 @@ solve_chained_gmm_core <- function(
       strategy = cov_strategy,
       max_matrix_entries = bounds$max_matrix_entries
     )
-    if (m_R > max_rank_allowed && !diag_B$triggered) {
+    if (weighting == "optimal" && m_R > max_rank_allowed && !diag_B$triggered) {
       diag_B$triggered <- TRUE
       diag_B$trigger_reason <- "known_unit_covariance_rank_bound"
     }
@@ -2968,7 +3143,7 @@ solve_chained_gmm_core <- function(
   }
 
   if (identical(handler_used, "none")) {
-    if (weighting == "optimal") {
+    if (use_cov) {
       if (any(diag(V) <= 0)) {
         cdid_gmm_abort(
           "Weight covariance `V` has nonpositive diagonal entries.",
@@ -3023,7 +3198,7 @@ solve_chained_gmm_core <- function(
       C_piv <- target_info$C_gauge[piv, , drop = FALSE]
       Z1 <- backsolve(U_qr, C_piv, transpose = TRUE)
       Z2 <- base::qr.qy(qa, rbind(Z1, matrix(0, nrow = m_R - k, ncol = J_est)))
-      Lambda <- if (weighting == "optimal") backsolve(R_chol, Z2) else Z2
+      Lambda <- if (use_cov) backsolve(R_chol, Z2) else Z2
       Mc <- matrix(0, nrow = k, ncol = J_est, dimnames = list(gauge$keep_param_ids, colnames(target_info$C_gauge)))
       Mc[piv, ] <- backsolve(U_qr, Z1)
       rownames(Lambda) <- gauge$link_ids
@@ -3039,7 +3214,7 @@ solve_chained_gmm_core <- function(
     }
 
     e_resid <- mhat_R - gmm_gauge_multiply(gauge, theta_keep, transpose = FALSE)
-    y_mult <- if (weighting == "optimal") {
+    y_mult <- if (use_cov) {
       backsolve(R_chol, backsolve(R_chol, e_resid, transpose = TRUE))
     } else {
       e_resid
@@ -3050,12 +3225,17 @@ solve_chained_gmm_core <- function(
 
     # 4. Complete numerical guard (PD, conditioning, KKT & loading residuals, certified target error)
     acc_guard <- accuracy
-    if (!is.null(cov_strategy) && weighting == "optimal") {
+    if (!is.null(cov_strategy) && use_cov) {
       # rho(B) was already checked on B = C V C' (B = V for identity G).
       # A values-only recomputation must not contradict the selected ordinary route.
-      ev_V <- eigen(V, symmetric = TRUE, only.values = TRUE)$values
-      if (all(is.finite(ev_V)) && min(ev_V) > 0.0) {
-        acc_guard$min_certified_lambda_rel <- min(acc_guard$min_certified_lambda_rel, (min(ev_V) / max(ev_V)) * 0.5)
+      if (isTRUE(gram_info$is_identity_gram) && is.finite(diag_B$d_min) && is.finite(diag_B$d_max) &&
+          diag_B$d_min > 0.0 && diag_B$d_max > 0.0) {
+        acc_guard$min_certified_lambda_rel <- min(acc_guard$min_certified_lambda_rel, (diag_B$d_min / diag_B$d_max) * 0.5)
+      } else {
+        ev_V <- eigen(V, symmetric = TRUE, only.values = TRUE)$values
+        if (all(is.finite(ev_V)) && min(ev_V) > 0.0) {
+          acc_guard$min_certified_lambda_rel <- min(acc_guard$min_certified_lambda_rel, (min(ev_V) / max(ev_V)) * 0.5)
+        }
       }
     }
     guard <- certify_gmm_numerical_guard(
@@ -3098,14 +3278,16 @@ solve_chained_gmm_core <- function(
   )
 
   # 5. Streamed IF projection and cluster sandwich accumulation
-  stream_res <- project_gmm_if_stream(
-    if_replay = if_replay,
-    Lambda = Lambda,
-    m_R = m_R,
-    bounds = bounds,
-    provenance = provenance,
-    materialize_target_if = materialize_target_if
-  )
+  stream_res <- if (project_influence) {
+    project_gmm_if_stream(
+      if_replay = if_replay,
+      Lambda = Lambda,
+      m_R = m_R,
+      bounds = bounds,
+      provenance = provenance,
+      materialize_target_if = materialize_target_if
+    )
+  }
 
   # 6. Assemble target and parameter outputs, respecting NA rules for non-estimable levels
   J_total <- target_info$n_targets
@@ -3124,7 +3306,7 @@ solve_chained_gmm_core <- function(
     tau_est <- guard$computed_target_values
     est_idx <- target_info$estimable_indices
     est_vals[est_idx] <- tau_est
-    se_sand_vals[est_idx] <- stream_res$se_sandwich
+    if (project_influence) se_sand_vals[est_idx] <- stream_res$se_sandwich
     err_est_vals[est_idx] <- guard$targets$target_error_est
     err_cert_vals[est_idx] <- guard$targets$target_error_cert
     loading_err_cert_vals[est_idx] <- guard$targets$loading_error_cert
@@ -3172,7 +3354,7 @@ solve_chained_gmm_core <- function(
   # Declared metadata cannot verify the actual construction or sampling meaning of V.
   # Raw criterion quantities remain available; qualified model covariance/SE/J do not.
   model_cov <- NULL
-  variance_gap_abs <- if (scale_matches_inference && J_est > 0L) {
+  variance_gap_abs <- if (project_influence && scale_matches_inference && J_est > 0L) {
     max(abs(stream_res$sandwich_cov - raw_Z1tZ1))
   } else {
     NA_real_

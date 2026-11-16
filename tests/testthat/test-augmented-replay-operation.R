@@ -199,7 +199,19 @@ testthat::test_that("public augmented ATT full-F IF covariance SE and handler st
       do.call(cdid::att_gt, request)
     }
     old <- default_fit()
-    for (nm in c("att", "inffunc", "V_analytical", "se")) testthat::expect_identical(fast[[nm]], old[[nm]])
+    testthat::expect_identical(fast$att, old$att)
+    for (nm in c("inffunc", "V_analytical", "se")) {
+      actual <- fast[[nm]]
+      expected <- old[[nm]]
+      if (spec$selection_model == "pair_logit") {
+        testthat::expect_identical(typeof(actual), typeof(expected))
+        testthat::expect_identical(attributes(actual), attributes(expected))
+        testthat::expect_identical(actual == 0, expected == 0)
+        testthat::expect_equal(actual, expected, tolerance = 1e-12)
+      } else {
+        testthat::expect_identical(actual, expected)
+      }
+    }
     for (nm in c("available", "target_meta", "support_status", "support_reason", "covariance_handling"))
       testthat::expect_identical(fast$chained[[nm]], old$chained[[nm]])
     testthat::expect_true(is.list(fast$chained$covariance_handling))

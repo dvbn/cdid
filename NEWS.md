@@ -1,3 +1,25 @@
+# cdid 1.3.0.0
+
+## Computation
+
+* Reuse comparison inputs, fitted models and influence-function calculations when their inputs agree. This reduces repeated work when estimating effects and standard errors in complete and incomplete panels.
+
+## Effects by adoption cohort and date
+
+* If a required reference-date covariate is missing, warn and restrict the affected cohort’s comparisons to units with the needed covariates. Units can still contribute to other cohorts. Use `missing_reference = "error"` to require all analysis inputs.
+* Use `cross_pair = TRUE` when a cohort and its eligible controls provide changes over different observation windows. Use `pt_assumption = "ctrl"` to assume common earlier trends among the controls.
+* Use `gmm_weighting = "within"` to weight comparisons by their within-unit covariance under uncorrelated level shocks. Use `chain_report()` to inspect the comparisons that identify each effect and the weights used in estimation.
+* Use `control = list(preset = "cohort_time_fe")` for linear cohort-by-date fixed effects. It supports outcome regression, treatment weighting and doubly robust estimation, with observation weighting, change imputation or their augmented combination when outcomes are missing. The guide shows equivalent regression commands in R and Stata.
+
+## Effects at entry and exit
+
+* Use `att_gt(dname = ...)` for binary treatment that can stop and restart. Under no carryover, the estimates describe the immediate effect at a switch. Complete panels use adjacent changes directly. Incomplete panels combine supported changes and offer the same treatment and missing-outcome adjustments as the cohort model.
+* Report estimates by date and direction and a switcher-weighted average in `fit$aggregate`. Use `gname` and `aggte()` for adoption-cohort effects and event studies.
+
+## Fitted model reports
+
+* Add `nuisance_models()` to display fitted equations, coefficient tables and standard errors. Set `control = list(keep_nuisance = TRUE)` to keep the model information. For supported fits that use both doubly robust treatment adjustment and augmented observation correction, inspect the treatment, outcome, observation and imputation models separately.
+
 # cdid 1.2.0.1
 
 * Use a bounded regression suite for standard `R CMD check`, with representative independent numerical and inference references across the public interface. The extensive development checks remain a separate required CI gate.

@@ -59,10 +59,11 @@ chained_request_scope_gate <- function(mode, panel, allow_unbalanced_panel, est_
                                        selection_xformla,
                                        selection_universe = "F", selection_rho = NULL, selection_justification = NULL,
                                        selection_est_method = "ipw", imputation_pooling = "separate",
-                                       pt_assumption, pt_start = NULL, gmm_weighting, gmm_covariance = "tikhonov",
+                                       pt_assumption, pt_start = NULL, cross_pair = FALSE, gmm_weighting, gmm_covariance = "tikhonov",
                                        fix_weights, compute_inffunc, pl, cores,
                                        faster_mode, print_details, control_group, base_period, anticipation, alp,
-                                       bstrap, cband, biters, dots, entry = c("public", "development"), outcome_pooling = "separate") {
+                                       bstrap, cband, biters, dots, entry = c("public", "development"), outcome_pooling = "separate",
+                                       missing_reference = "error") {
   entry <- match.arg(entry)
   is_custom_est <- is.function(est_method)
   if (!is_custom_est) {
@@ -131,6 +132,7 @@ chained_request_scope_gate <- function(mode, panel, allow_unbalanced_panel, est_
   pt <- validate_chained_pt_request(pt_assumption, pt_start)
   pt_assumption <- pt$pt_assumption
   pt_start <- pt$pt_start
+  chained_request_need(chained_request_lgl1(cross_pair), "`cross_pair` must be TRUE or FALSE.")
   w_choice <- resolve_gmm_weighting_choice(
     gmm_weighting,
     arg = "gmm_weighting",
@@ -139,6 +141,16 @@ chained_request_scope_gate <- function(mode, panel, allow_unbalanced_panel, est_
   )
   gmm_weighting <- w_choice$canonical
   gmm_weighting_requested <- w_choice$requested
+  if (identical(gmm_weighting, "within")) {
+    chained_request_need(!is_custom_est,
+      "`gmm_weighting = \"within\"` requires a built-in `est_method` (\"dr\", \"ipw\", or \"reg\").",
+      "cdid_chained_request_input_error")
+  }
+  if (isTRUE(cross_pair)) {
+    chained_request_need(!is_custom_est,
+      "`cross_pair = TRUE` requires a built-in `est_method` (\"dr\", \"ipw\", or \"reg\").",
+      "cdid_chained_request_input_error")
+  }
   gmm_covariance <- resolve_gmm_covariance_choice(
     gmm_covariance,
     arg = "gmm_covariance",
@@ -148,6 +160,8 @@ chained_request_scope_gate <- function(mode, panel, allow_unbalanced_panel, est_
   # D60: NULL, "first_period" and "base_period" are accepted; static calls are
   # identical under all three. "varying" stays refused before data are forced.
   fix_weights <- chained_reference_fix_weights(fix_weights)
+  # Issue #16: "error" (default) or "exclude", resolved before data are forced.
+  missing_reference <- chained_reference_missing_policy(missing_reference)
   # Inherited did 2.5.1 computation/output options (CP08). compute_inffunc =
   # FALSE returns point estimates only (bstrap/cband become FALSE; the GMM
   # weights still use the complete internal link IFs); pl/cores run the
@@ -173,7 +187,7 @@ chained_request_scope_gate <- function(mode, panel, allow_unbalanced_panel, est_
   # pointwise interval without any bootstrap draw (att_gt.R:582-590, 688-695);
   # later aggte-style requests inheriting these flags follow their own released
   # endpoint (R/chained_ipw_pipeline.R, section 6).
-  list(mode = mode, pt_assumption = pt_assumption, pt_start = pt_start, gmm_weighting = gmm_weighting,
+  list(mode = mode, pt_assumption = pt_assumption, pt_start = pt_start, cross_pair = cross_pair, gmm_weighting = gmm_weighting,
        gmm_weighting_requested = gmm_weighting_requested, gmm_covariance = gmm_covariance,
        control_group = control_group, is_custom_est = is_custom_est, entry = entry,
        selection = sel_norm$requested, selection_canonical = sel_norm$canonical_assumption,
@@ -182,7 +196,8 @@ chained_request_scope_gate <- function(mode, panel, allow_unbalanced_panel, est_
        inactive_arguments = c(if (!outcome_active) "outcome_pooling",
          if (imputation) c("selection_model", "selection_pooling", "selection_xformla") else
            if (augmented) character(0) else "imputation_pooling"),
-       fix_weights = fix_weights, compute_inffunc = compute_inffunc, pl = pl, cores = as.double(cores),
+       fix_weights = fix_weights, missing_reference = missing_reference,
+       compute_inffunc = compute_inffunc, pl = pl, cores = as.double(cores),
        print_details = print_details, faster_mode = faster_mode,
        # did 2.5.1 att_gt(): compute_inffunc = FALSE sets bstrap and cband to FALSE.
        bstrap = if (isTRUE(compute_inffunc)) bstrap else FALSE,
@@ -224,19 +239,38 @@ chained_public_att_gt <- function(yname, tname, idname, gname, xformla, data, pa
                                   selection_xformla, selection_universe = "F", selection_rho = NULL, selection_justification = NULL,
                                   selection_est_method = "ipw", imputation_pooling = "separate", gmm_weighting,
                                   gmm_covariance = "tikhonov",
-                                  pt_assumption, pt_start = NULL, control, call,
-                                  dots_eval = NULL, outcome_pooling = "separate") {
+                                  pt_assumption, pt_start = NULL, cross_pair = FALSE, control, call,
+                                  dots_eval = NULL, outcome_pooling = "separate", missing_reference = "error",
+                                  missing_reference_supplied = TRUE) {
   gate <- chained_request_scope_gate(mode = mode, panel = panel, allow_unbalanced_panel = allow_unbalanced_panel,
     est_method = est_method, selection = selection, selection_model = selection_model, selection_pooling = selection_pooling,
     selection_xformla = selection_xformla,
     selection_universe = selection_universe, selection_rho = selection_rho, selection_justification = selection_justification,
-    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, pt_assumption = pt_assumption, pt_start = pt_start,
+    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, pt_assumption = pt_assumption, pt_start = pt_start, cross_pair = cross_pair,
     gmm_weighting = gmm_weighting, gmm_covariance = gmm_covariance, fix_weights = fix_weights,
     compute_inffunc = compute_inffunc, pl = pl, cores = cores,
     faster_mode = faster_mode, print_details = print_details, control_group = control_group, base_period = base_period,
-    anticipation = anticipation, alp = alp, bstrap = bstrap, cband = cband, biters = biters, dots = dots, entry = "public")
+    anticipation = anticipation, alp = alp, bstrap = bstrap, cband = cband, biters = biters, dots = dots, entry = "public",
+    missing_reference = missing_reference)
+  nuisance_keep <- chained_nuisance_control(control)
+  if (is.list(control) && identical(control[["preset", exact = TRUE]], "cohort_time_fe")) {
+    # Issue #16: the time-invariant preset requires complete covariates for
+    # every study unit and has no reference-date contexts to restrict.
+    chained_request_need(!missing_reference_supplied || identical(gate$missing_reference, "error"),
+      paste0('missing_reference = "exclude" is not available with control = list(preset = "cohort_time_fe"): the ',
+        "fixed-effects preset requires time-invariant covariates supplied for every study unit and has no ",
+        "reference-date contexts to restrict. Omit this argument or use a chained cohort model."),
+      c("cdid_chained_request_missing_reference_error", "cdid_chained_request_input_error"))
+    return(chained_cohort_time_fe(
+      data, frame, yname, tname, idname, gname, xformla, weightsname, clustervars,
+      gate, est_method, base_period, anticipation, alp, bstrap, cband, biters,
+      gmm_weighting, nuisance_keep$control, call, keep_nuisance = nuisance_keep$keep,
+      selection_xformla = selection_xformla, selection_universe = selection_universe,
+      selection_rho = selection_rho, selection_justification = selection_justification
+    ))
+  }
   resolved <- chained_public_resolve_control(
-    control,
+    nuisance_keep$control,
     gmm_weighting = gate$gmm_weighting_requested,
     gmm_covariance = gate$gmm_covariance
   )
@@ -261,11 +295,14 @@ chained_public_att_gt <- function(yname, tname, idname, gname, xformla, data, pa
     doubly_robust = !imputation && !augmented && identical(est_label, "dr"),
     selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
     imputation_est_method = if (imputation) est_label else NULL,
-    augmented_est_method = if (augmented) est_label else NULL, fix_weights = gate$fix_weights)
+    augmented_est_method = if (augmented) est_label else NULL, fix_weights = gate$fix_weights,
+    cross_pair = gate$cross_pair)
+  recover_reference <- identical(gate$missing_reference, "exclude") && !is.null(prep$reference_source)
+  if (recover_reference) prep$cp04$missing_reference <- "recover"
   validate_chained_pt_request(gate$pt_assumption, gate$pt_start, prep$calendar)
-  # Every pure-imputation treatment method and the augmented route use the
-  # automatic row planner.
-  if ((imputation || augmented || est_label %in% c("reg", "dr")) && !is.null(prep$cp04))
+  # Every pure-imputation treatment method, the augmented route, and cross-pair
+  # evaluation use the automatic row planner unless chunk_rows was set explicitly.
+  if ((isTRUE(gate$cross_pair) || imputation || augmented || est_label %in% c("reg", "dr")) && !is.null(prep$cp04))
     prep$cp04$automatic_chunk_rows <- is.null(resolved$chunk_rows)
   # ---- fourteen controls from the prepared input's actual dimensions ----------
   dims <- chained_public_dimensions(prep, biters = biters, clustered = !is.null(prep$cluster_full))
@@ -291,27 +328,65 @@ chained_public_att_gt <- function(yname, tname, idname, gname, xformla, data, pa
       numerical_policy = produced$record$numerical_policy, covariance_strategy = produced$record$covariance_strategy,
       chunk_rows = produced$record$chunk_rows,
       numeric_workspace_entries = produced$record$numeric_workspace_entries, counted_work_limit = produced$record$counted_work_limit))
-  res <- ipw_pipeline_resignal_with_state(run_chained_ipw_pipeline(
-    data = prep$data_internal, idname = idname, tname = tname, yname = yname, gname = gname,
-    control = produced$control, xformla = prep$xformla, weightsname = NULL, clustername = NULL,
-    cluster_vec = prep$cluster_full, target_cohorts = prep$target_cohorts,
-    anticipation = as.integer(anticipation), control_group = gate$control_group,
-    base_period = base_period, weighting = gate$gmm_weighting_requested,
-    pt_assumption = gate$pt_assumption, pt_start = gate$pt_start,
-    run_numerical_transfer = FALSE, root_witness = NULL,
-    aggregations = character(0L), cband = cband, alp = alp, biters = as.integer(biters),
-    btype = "rademacher", seed = NULL, fixed_signs = NULL,
-    cp04 = prep$cp04, frame_id = prep$frame_ids, frame_Z = prep$frame_Z, frame_weights = prep$frame_w, frame_g = prep$frame_g_arg,
-    allow_frame_only = prep$n_frame_only > 0L, na.rm = FALSE,
-    bstrap = bstrap, caller_rng = TRUE,
-    custom_est_method = if (isTRUE(gate$is_custom_est)) est_method else NULL,
-    custom_dots = custom_dots,
-    gmm_covariance = gate$gmm_covariance, compute_inffunc = gate$compute_inffunc,
-    print_details = gate$print_details, prepared = prep$prepared), "cdid_error", "request_context", public_context)
+  run_fit <- function() if (isTRUE(gate$cross_pair)) {
+    run_chained_cross_pair_fit(
+      data = prep$data_internal, idname = idname, tname = tname, yname = yname, gname = gname,
+      control = produced$control, xformla = prep$xformla, cluster_vec = prep$cluster_full,
+      target_cohorts = prep$target_cohorts, anticipation = as.integer(anticipation),
+      control_group = gate$control_group, base_period = base_period,
+      weighting = gate$gmm_weighting_requested, pt_assumption = gate$pt_assumption, pt_start = gate$pt_start,
+      est_method = est_label, cband = cband, alp = alp, biters = as.integer(biters),
+      btype = "rademacher", seed = NULL, fixed_signs = NULL,
+      cp04 = prep$cp04, frame_id = prep$frame_ids, frame_Z = prep$frame_Z,
+      frame_weights = prep$frame_w, frame_g = prep$frame_g_arg,
+      allow_frame_only = prep$n_frame_only > 0L, na.rm = FALSE,
+      bstrap = bstrap, caller_rng = TRUE, gmm_covariance = gate$gmm_covariance,
+      compute_inffunc = gate$compute_inffunc, print_details = gate$print_details,
+      aggregations = character(0L), prepared = prep$prepared,
+      automatic_chunk_rows = is.null(resolved$chunk_rows),
+      keep_nuisance = nuisance_keep$keep
+    )
+  } else {
+    run_chained_ipw_pipeline(
+      data = prep$data_internal, idname = idname, tname = tname, yname = yname, gname = gname,
+      control = produced$control, xformla = prep$xformla, weightsname = NULL, clustername = NULL,
+      cluster_vec = prep$cluster_full, target_cohorts = prep$target_cohorts,
+      anticipation = as.integer(anticipation), control_group = gate$control_group,
+      base_period = base_period, weighting = gate$gmm_weighting_requested,
+      pt_assumption = gate$pt_assumption, pt_start = gate$pt_start,
+      run_numerical_transfer = FALSE, root_witness = NULL,
+      aggregations = character(0L), cband = cband, alp = alp, biters = as.integer(biters),
+      btype = "rademacher", seed = NULL, fixed_signs = NULL,
+      cp04 = prep$cp04, frame_id = prep$frame_ids, frame_Z = prep$frame_Z, frame_weights = prep$frame_w, frame_g = prep$frame_g_arg,
+      allow_frame_only = prep$n_frame_only > 0L, na.rm = FALSE,
+      bstrap = bstrap, caller_rng = TRUE,
+      custom_est_method = if (isTRUE(gate$is_custom_est)) est_method else NULL,
+      custom_dots = custom_dots,
+      gmm_covariance = gate$gmm_covariance, compute_inffunc = gate$compute_inffunc,
+      print_details = gate$print_details, prepared = prep$prepared)
+  }
+  res <- ipw_pipeline_resignal_with_state({
+    first <- if (recover_reference)
+      tryCatch(run_fit(), cdid_reference_exclusion_needed_error = identity) else run_fit()
+    if (inherits(first, "cdid_reference_exclusion_needed_error")) {
+      src <- prep$reference_source
+      dates <- first$diagnostics$affected_dates
+      el <- if (length(dates)) chained_reference_eligibility(src, prep$target_cohorts,
+        prep$frame_g, resolved$profile, affected_dates = dates) else NULL
+      if (isTRUE(el$restricted)) {
+        src$eligibility <- chained_reference_eligibility_core(el)
+      }
+      prep$reference_source <- prep$cp04$reference_source <- src
+      prep$missing_reference <- prep$cp04$missing_reference <- "exclude"
+      prep$reference_eligibility <- el
+      first <- run_fit()
+    }
+    first
+  }, "cdid_error", "request_context", public_context)
   if (!is.null(progress)) progress("building the did-compatible result",
     if (isTRUE(gate$compute_inffunc)) " and the full declared nonreference pretrend Wald test" else " (point estimates only)")
   prep$prepared <- NULL
-  chained_request_bind_mp(res, prep, call = call, params = list(
+  mp <- chained_request_bind_mp(res, prep, call = call, params = list(
     yname = yname, tname = tname, idname = idname, gname = gname, xformla = prep$xformla,
     control_group = gate$control_group, anticipation = as.double(anticipation), weightsname = weightsname,
     alp = alp, bstrap = bstrap, cband = cband, biters = biters, clustervars = prep$clustervar,
@@ -325,12 +400,43 @@ chained_public_att_gt <- function(yname, tname, idname, gname, xformla, data, pa
       selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
       inactive_arguments = gate$inactive_arguments,
       est_method = est_label, gmm_weighting = gate$gmm_weighting, gmm_weighting_requested = gate$gmm_weighting_requested,
-      gmm_covariance = gate$gmm_covariance, pt_assumption = gate$pt_assumption, pt_start = gate$pt_start, run_numerical_transfer = FALSE,
+      gmm_covariance = gate$gmm_covariance, pt_assumption = gate$pt_assumption, pt_start = gate$pt_start, cross_pair = gate$cross_pair, run_numerical_transfer = FALSE,
       fit_aggregations = character(0L), target_cohorts_supplied = FALSE,
       clustervars_supplied = clustervars, caller_rng = TRUE, seed = NULL, btype = "rademacher", entry = "public",
       requested_bstrap = requested_flags$bstrap, requested_cband = requested_flags$cband, execution = plan,
       note = chained_request_inherited_note(gate)),
     control = produced$control, public = list(record = produced$record, dims = dims, resolved = resolved))
+  # Opt-in only: compact capture read from the actual fitted objects after every
+  # estimate, IF, inference and draw is final (no RNG, no refit). Default calls
+  # return the result above unchanged.
+  if (nuisance_keep$keep) {
+    mp$chained$nuisance_models <- if (gate$cross_pair) {
+      chained_cross_pair_nuisance_capture(res, prep, gate, est_label, weightsname)
+    } else {
+      chained_nuisance_capture(res, prep, gate, est_label, weightsname)
+    }
+  }
+  if (identical(prep$missing_reference, "exclude")) {
+    el <- mp$chained$reference_eligibility
+    counts <- el$targets[el$targets$restricted, , drop = FALSE]
+    if (NROW(counts) > 0L) {
+      details <- paste0("cohort ", counts$g, " (date ", counts$reference_date, "): ",
+        counts$n_treated_excluded, " treated, ", counts$n_never_treated_excluded,
+        " never-treated, ", counts$n_other_cohort_excluded, " from other cohorts")
+      shown <- utils::head(details, 5L)
+      warning(paste0("Excluded units with missing reference covariates from the affected cohort comparisons. ",
+        "Counts across the supplied units at each reference date, including units outside the comparison groups: ",
+        paste(shown, collapse = ", "),
+        if (length(details) > length(shown)) " and additional cohorts" else "",
+        ". See the fitted object's chained$reference_eligibility for details. ",
+        "If you know a missing covariate, supply it on its unit-date row, with NA for a missing outcome."),
+        call. = FALSE)
+    } else if (NROW(el$auxiliary_unavailable)) {
+      warning("Some pretrend comparisons are unavailable because required reference covariates are missing. See the fitted object's chained$reference_eligibility for details.",
+        call. = FALSE)
+    }
+  }
+  mp
 }
 
 # Truthful record of the inherited computation/output flags of one request.
@@ -379,10 +485,11 @@ chained_att_gt_request <- function(yname,
                    selection_universe = "F", selection_rho = NULL, selection_justification = NULL,
                                    selection_est_method = "ipw",
                                    imputation_pooling = "separate",
-                                   gmm_weighting = c("optimal", "identity"),
+                                   gmm_weighting = c("optimal", "identity", "within"),
                                    gmm_covariance = "tikhonov",
-                                   pt_assumption = c("post", "all"),
+                                   pt_assumption = c("post", "all", "ctrl"),
                                    pt_start = NULL,
+                                   cross_pair = FALSE,
                                    control,
                                    root_witness = NULL,
                                    run_numerical_transfer = TRUE,
@@ -394,7 +501,7 @@ chained_att_gt_request <- function(yname,
     est_method = est_method, selection = selection, selection_model = selection_model, selection_pooling = selection_pooling,
     selection_xformla = selection_xformla,
     selection_universe = selection_universe, selection_rho = selection_rho, selection_justification = selection_justification,
-    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, pt_assumption = pt_assumption, pt_start = pt_start,
+    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, pt_assumption = pt_assumption, pt_start = pt_start, cross_pair = cross_pair,
     gmm_weighting = gmm_weighting, gmm_covariance = gmm_covariance, fix_weights = fix_weights,
     compute_inffunc = compute_inffunc, pl = pl, cores = cores,
     faster_mode = faster_mode, print_details = print_details, control_group = control_group, base_period = base_period,
@@ -406,6 +513,9 @@ chained_att_gt_request <- function(yname,
   chained_request_need(!missing(control) && inherits(control, "cdid_ipw_pipeline_control"),
     paste0("Explicit development controls are required: supply `control = ipw_pipeline_control(...)` (all fourteen control ",
            "structures). No public default, environment variable or global option supplies them."),
+    "cdid_chained_request_control_error")
+  chained_request_need(!isTRUE(run_numerical_transfer) || (!isTRUE(gate$cross_pair) && !identical(gate$gmm_weighting, "within")),
+    "Interval numerical transfer (`run_numerical_transfer = TRUE`) is not supported with `cross_pair = TRUE` or `gmm_weighting = \"within\"`.",
     "cdid_chained_request_control_error")
   chained_request_need(!isTRUE(run_numerical_transfer) || (!missing(root_witness) && is.function(root_witness)),
     "Supply `root_witness(fitted_view)` explicitly (e.g. the accepted automatic one-radius request); no radius is chosen internally.",
@@ -439,7 +549,8 @@ chained_att_gt_request <- function(yname,
     doubly_robust = !imputation && !augmented && identical(est_label, "dr"),
     selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
     imputation_est_method = if (imputation) est_label else NULL,
-    augmented_est_method = if (augmented) est_label else NULL, fix_weights = gate$fix_weights)
+    augmented_est_method = if (augmented) est_label else NULL, fix_weights = gate$fix_weights,
+    cross_pair = gate$cross_pair)
   validate_chained_pt_request(gate$pt_assumption, gate$pt_start, prep$calendar)
 
   # ---- one accepted pipeline fit (explicit flags, caller RNG for draws) --------
@@ -455,24 +566,44 @@ chained_att_gt_request <- function(yname,
       gmm_accuracy = control$gmm_accuracy[intersect(c("target_error_unit", "max_target_error_abs", "max_target_error_se", "max_loading_error_abs"), names(control$gmm_accuracy))],
       owner_bounds = control$owner_control[intersect(c("max_retained_entries", "max_matrix_entries", "max_work_ops", "max_chunk_rows"), names(control$owner_control))],
       source = "explicit fourteen-control development object"))
-  res <- ipw_pipeline_resignal_with_state(run_chained_ipw_pipeline(
-    data = prep$data_internal, idname = idname, tname = tname, yname = yname, gname = gname,
-    control = control, xformla = prep$xformla, weightsname = NULL, clustername = NULL,
-    cluster_vec = prep$cluster_full, target_cohorts = prep$target_cohorts,
-    anticipation = as.integer(anticipation), control_group = control_group,
-    base_period = base_period, weighting = gmm_weighting_requested,
-    pt_assumption = gate$pt_assumption, pt_start = gate$pt_start,
-    run_numerical_transfer = run_numerical_transfer, root_witness = root_witness,
-    aggregations = fit_aggregations, cband = cband, alp = alp, biters = as.integer(biters),
-    btype = "rademacher", seed = NULL, fixed_signs = NULL,
-    cp04 = prep$cp04, frame_id = prep$frame_ids, frame_Z = prep$frame_Z, frame_weights = prep$frame_w, frame_g = prep$frame_g_arg,
-    allow_frame_only = prep$n_frame_only > 0L, na.rm = FALSE,
-    bstrap = bstrap, caller_rng = TRUE,
-    custom_est_method = if (isTRUE(gate$is_custom_est)) est_method else NULL,
-    custom_dots = custom_dots,
-    gmm_covariance = if (!isTRUE(run_numerical_transfer)) gmm_covariance else NULL,
-    compute_inffunc = gate$compute_inffunc, print_details = gate$print_details,
-    prepared = prep$prepared), "cdid_error", "request_context", development_context)
+  res <- ipw_pipeline_resignal_with_state(if (isTRUE(gate$cross_pair)) {
+    run_chained_cross_pair_fit(
+      data = prep$data_internal, idname = idname, tname = tname, yname = yname, gname = gname,
+      control = control, xformla = prep$xformla, cluster_vec = prep$cluster_full,
+      target_cohorts = prep$target_cohorts, anticipation = as.integer(anticipation),
+      control_group = control_group, base_period = base_period,
+      weighting = gmm_weighting_requested, pt_assumption = gate$pt_assumption, pt_start = gate$pt_start,
+      est_method = est_label, cband = cband, alp = alp, biters = as.integer(biters),
+      btype = "rademacher", seed = NULL, fixed_signs = NULL,
+      cp04 = prep$cp04, frame_id = prep$frame_ids, frame_Z = prep$frame_Z,
+      frame_weights = prep$frame_w, frame_g = prep$frame_g_arg,
+      allow_frame_only = prep$n_frame_only > 0L, na.rm = FALSE,
+      bstrap = bstrap, caller_rng = TRUE,
+      gmm_covariance = if (!isTRUE(run_numerical_transfer)) gmm_covariance else NULL,
+      compute_inffunc = gate$compute_inffunc, print_details = gate$print_details,
+      aggregations = fit_aggregations, prepared = prep$prepared,
+      automatic_chunk_rows = FALSE
+    )
+  } else {
+    run_chained_ipw_pipeline(
+      data = prep$data_internal, idname = idname, tname = tname, yname = yname, gname = gname,
+      control = control, xformla = prep$xformla, weightsname = NULL, clustername = NULL,
+      cluster_vec = prep$cluster_full, target_cohorts = prep$target_cohorts,
+      anticipation = as.integer(anticipation), control_group = control_group,
+      base_period = base_period, weighting = gmm_weighting_requested,
+      pt_assumption = gate$pt_assumption, pt_start = gate$pt_start,
+      run_numerical_transfer = run_numerical_transfer, root_witness = root_witness,
+      aggregations = fit_aggregations, cband = cband, alp = alp, biters = as.integer(biters),
+      btype = "rademacher", seed = NULL, fixed_signs = NULL,
+      cp04 = prep$cp04, frame_id = prep$frame_ids, frame_Z = prep$frame_Z, frame_weights = prep$frame_w, frame_g = prep$frame_g_arg,
+      allow_frame_only = prep$n_frame_only > 0L, na.rm = FALSE,
+      bstrap = bstrap, caller_rng = TRUE,
+      custom_est_method = if (isTRUE(gate$is_custom_est)) est_method else NULL,
+      custom_dots = custom_dots,
+      gmm_covariance = if (!isTRUE(run_numerical_transfer)) gmm_covariance else NULL,
+      compute_inffunc = gate$compute_inffunc, print_details = gate$print_details,
+      prepared = prep$prepared)
+  }, "cdid_error", "request_context", development_context)
 
   prep$prepared <- NULL
   chained_request_bind_mp(res, prep, call = call, params = list(
@@ -489,7 +620,7 @@ chained_att_gt_request <- function(yname,
       selection_est_method = gate$selection_est_method, imputation_pooling = gate$imputation_pooling, outcome_pooling = gate$outcome_pooling,
       inactive_arguments = gate$inactive_arguments,
       est_method = est_label, gmm_weighting = gmm_weighting, gmm_weighting_requested = gmm_weighting_requested,
-      gmm_covariance = gmm_covariance, pt_assumption = pt_assumption, pt_start = gate$pt_start, run_numerical_transfer = run_numerical_transfer,
+      gmm_covariance = gmm_covariance, pt_assumption = pt_assumption, pt_start = gate$pt_start, cross_pair = gate$cross_pair, run_numerical_transfer = run_numerical_transfer,
       fit_aggregations = fit_aggregations, target_cohorts_supplied = !is.null(target_cohorts),
       clustervars_supplied = clustervars, caller_rng = TRUE, seed = NULL, btype = "rademacher",
       requested_bstrap = requested_flags$bstrap, requested_cband = requested_flags$cband, execution = plan,
@@ -531,7 +662,8 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
                                            doubly_robust = FALSE, selection_est_method = "ipw",
                                            imputation_pooling = NULL, imputation_est_method = NULL,
                                            fix_weights = NULL, outcome_pooling = NULL,
-                                           augmented_est_method = NULL) {
+                                           augmented_est_method = NULL, cross_pair = FALSE,
+                                           retain_panel_index = FALSE, full_outcome_frame = FALSE) {
   chained_request_need(is.data.frame(data) && nrow(data) >= 1L, "`data` must be a nonempty data.frame.")
   chained_request_need(chained_request_chr1(idname),
     "Chained (panel) estimation requires `idname`: units are aligned by identity, never by row position.")
@@ -541,76 +673,110 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
   missing_cols <- cols[!cols %in% names(data)]
   chained_request_need(!length(missing_cols), paste0("Column(s) not found in `data`: ", paste(missing_cols, collapse = ", "), "."))
   id <- data[[idname]]; tt <- data[[tname]]; y <- data[[yname]]; g <- data[[gname]]
-  chained_request_need((is.numeric(id) || is.character(id)) && !is.factor(id) && !is.object(id) && !anyNA(id) &&
-    (!is.numeric(id) || all(is.finite(id))) && (!is.character(id) || all(nzchar(id))),
-    "`idname` must be a plain numeric or character identifier without missing values.")
-  chained_request_need(is.numeric(tt) && !is.object(tt) && all(is.finite(tt)), "`tname` must be finite numeric dates.")
-  chained_request_need(is.numeric(y) && !is.object(y), "`yname` must be numeric (NA marks an unobserved outcome).")
-  chained_request_need(is.numeric(g) && !is.object(g) && !anyNA(g) && all(is.finite(g)) && all(g >= 0),
-    paste0("`gname` must be finite nonnegative numeric: the treatment date, or the public never-treated code 0 ",
-           "(Inf, NA or negative codes are refused; the internal Inf is bound from 0 here, never guessed)."),
-    "cdid_chained_request_cohort_error")
   n_rows <- nrow(data)
-  first <- which(!duplicated(id))
-  unit_id <- id[first]
-  n_units <- length(unit_id)
-  pos_unit <- match(id, unit_id)
-  # One row per (unit, date), decided on the values themselves: the canonical
-  # (sorted unit, date) row permutation of the panel owner is formed once here
-  # and adjacent rows are compared as IEEE doubles (0 and -0 are equal), never
-  # through formatted strings. The sorted unit order and this permutation are
-  # the maps the prepared owner construction reuses (CP08 common boundary).
-  unit_key <- if (is.numeric(unit_id)) { k <- as.double(unit_id); k[k == 0] <- 0; k } else as.character(unit_id)
-  unit_sort <- order(unit_key, method = "radix")
-  unit_rank <- integer(n_units); unit_rank[unit_sort] <- seq_len(n_units)
-  tt_d <- as.double(tt)
-  ui <- unit_rank[pos_unit]
-  row_order <- order(ui, tt_d, method = "radix")
-  if (n_rows > 1L) {
-    uo <- ui[row_order]; to <- tt_d[row_order]
-    chained_request_need(!any(uo[-1L] == uo[-n_rows] & to[-1L] == to[-n_rows]),
-      "`data` has duplicated (id, period) rows; one row per unit and date is required.", "cdid_chained_request_input_error")
-    uo <- to <- NULL
+  fk_vf_in <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+    cdid_fast_kernel("C_cdid_verify_fast")
+  } else {
+    NULL
   }
-  # cohorts: time-invariant within unit; public 0 -> internal Inf
-  g_unit <- g[first]
-  chained_request_need(all(g == g_unit[pos_unit]), "`gname` varies within unit; a unit has exactly one treatment date.",
-    "cdid_chained_request_cohort_error")
-  n_recoded <- sum(g_unit == 0)
-  g_unit_int <- g_unit; g_unit_int[g_unit_int == 0] <- Inf
-  calendar <- sort(unique(tt_d))
-  # Outcome counts define A/B once (reused by every route and the unit table).
-  y_observed <- !is.na(y)
-  n_obs_unit <- tabulate(pos_unit[y_observed], nbins = n_units)
+  fid_cand <- if (!is.null(frame) && is.data.frame(frame) && idname %in% names(frame)) frame[[idname]] else NULL
+  c_in <- if (!is.null(fk_vf_in)) fk_vf_in(10L, list(id, tt, y, g), fid_cand, NULL, NULL) else NULL
+  if (!is.null(c_in)) {
+    first <- c_in$first
+    unit_id <- c_in$unit_id
+    n_units <- length(unit_id)
+    pos_unit <- c_in$pos_unit
+    unit_key <- c_in$unit_key
+    unit_sort <- seq_len(n_units)
+    unit_rank <- unit_sort
+    tt_d <- c_in$tt_d
+    ui <- pos_unit
+    row_order <- seq_len(n_rows)
+    g_unit <- c_in$g_unit
+    n_recoded <- c_in$n_recoded
+    g_unit_int <- c_in$g_unit_int
+    calendar <- c_in$calendar
+    n_obs_unit <- c_in$n_obs_unit
+  } else {
+    chained_request_need((is.numeric(id) || is.character(id)) && !is.factor(id) && !is.object(id) && !anyNA(id) &&
+      (!is.numeric(id) || all(is.finite(id))) && (!is.character(id) || all(nzchar(id))),
+      "`idname` must be a plain numeric or character identifier without missing values.")
+    chained_request_need(is.numeric(tt) && !is.object(tt) && all(is.finite(tt)), "`tname` must be finite numeric dates.")
+    chained_request_need(is.numeric(y) && !is.object(y), "`yname` must be numeric (NA marks an unobserved outcome).")
+    chained_request_need(is.numeric(g) && !is.object(g) && !anyNA(g) && all(is.finite(g)) && all(g >= 0),
+      paste0("`gname` must be finite nonnegative numeric: the treatment date, or the public never-treated code 0 ",
+             "(Inf, NA or negative codes are refused; the internal Inf is bound from 0 here, never guessed)."),
+      "cdid_chained_request_cohort_error")
+    first <- which(!duplicated(id))
+    unit_id <- id[first]
+    n_units <- length(unit_id)
+    pos_unit <- match(id, unit_id)
+    unit_key <- if (is.numeric(unit_id)) { k <- as.double(unit_id); k[k == 0] <- 0; k } else as.character(unit_id)
+    unit_sort <- order(unit_key, method = "radix")
+    unit_rank <- integer(n_units); unit_rank[unit_sort] <- seq_len(n_units)
+    tt_d <- as.double(tt)
+    ui <- unit_rank[pos_unit]
+    row_order <- order(ui, tt_d, method = "radix")
+    if (n_rows > 1L) {
+      uo <- ui[row_order]; to <- tt_d[row_order]
+      chained_request_need(!any(uo[-1L] == uo[-n_rows] & to[-1L] == to[-n_rows]),
+        "`data` has duplicated (id, period) rows; one row per unit and date is required.", "cdid_chained_request_input_error")
+      uo <- to <- NULL
+    }
+    g_unit <- g[first]
+    chained_request_need(all(g == g_unit[pos_unit]), "`gname` varies within unit; a unit has exactly one treatment date.",
+      "cdid_chained_request_cohort_error")
+    n_recoded <- sum(g_unit == 0)
+    g_unit_int <- g_unit; g_unit_int[g_unit_int == 0] <- Inf
+    calendar <- sort(unique(tt_d))
+    y_observed <- !is.na(y)
+    n_obs_unit <- tabulate(pos_unit[y_observed], nbins = n_units)
+  }
 
   # ---- frame: explicit population frame or the panel's units -----------------
   frame_supplied <- !is.null(frame)
-  if (frame_supplied) {
-    chained_request_need(is.data.frame(frame) && nrow(frame) >= 1L && idname %in% names(frame),
-      "`frame` must be a data.frame with the `idname` column (one row per population unit).", "cdid_chained_request_frame_error")
-    fid <- frame[[idname]]
-    chained_request_need(identical(class(fid), class(id)) && !anyNA(fid) && !anyDuplicated(fid),
-      "`frame` ids must have the same type as `data` ids, be unique and non-missing.", "cdid_chained_request_frame_error")
-    absent <- unit_id[!unit_id %in% fid]
-    chained_request_need(!length(absent),
-      paste0(length(absent), " panel unit(s) are missing from `frame` (e.g. ", paste(utils::head(absent, 5L), collapse = ", "),
-             "); the frame must cover every unit in `data`."), "cdid_chained_request_frame_error")
-    frame_ids <- fid
+  if (frame_supplied && !is.null(c_in) && isTRUE(c_in$fid_eq)) {
+    frame_ids <- fid_cand
+    n_frame <- n_units
+    in_panel <- unit_sort
+    frame_only <- integer(0L)
+    row_frame_pos <- pos_unit
+    frame_g <- g_unit_int
   } else {
-    frame <- data[first, , drop = FALSE]
-    rownames(frame) <- NULL
-    frame_ids <- unit_id
+    if (frame_supplied) {
+      chained_request_need(is.data.frame(frame) && nrow(frame) >= 1L && idname %in% names(frame),
+        "`frame` must be a data.frame with the `idname` column (one row per population unit).", "cdid_chained_request_frame_error")
+      fid <- frame[[idname]]
+      chained_request_need(identical(class(fid), class(id)) && !anyNA(fid) && !anyDuplicated(fid),
+        "`frame` ids must have the same type as `data` ids, be unique and non-missing.", "cdid_chained_request_frame_error")
+      absent <- unit_id[!unit_id %in% fid]
+      chained_request_need(!length(absent),
+        paste0(length(absent), " panel unit(s) are missing from `frame` (e.g. ", paste(utils::head(absent, 5L), collapse = ", "),
+               "); the frame must cover every unit in `data`."), "cdid_chained_request_frame_error")
+      frame_ids <- fid
+    } else {
+      if (identical(class(data), "data.frame") &&
+          exists("cdid_fast_df", mode = "function", inherits = TRUE) &&
+          all(vapply(data, function(col) is.null(dim(col)) && !is.object(col), logical(1L)))) {
+        frame <- cdid_fast_df(lapply(data, `[`, first))
+      } else {
+        frame <- data[first, , drop = FALSE]
+        if (frame_supplied) rownames(frame) <- NULL
+      }
+      frame_ids <- unit_id
+    }
+    n_frame <- length(frame_ids)
+    in_panel <- if (frame_supplied) match(frame_ids, unit_id) else seq_len(n_units)
+    frame_only <- which(is.na(in_panel))
+    row_frame_pos <- if (frame_supplied) match(id, frame_ids) else pos_unit
+    frame_g <- if (!length(frame_only) && identical(in_panel, seq_len(n_units))) {
+      g_unit_int
+    } else {
+      fg_tmp <- rep(NA_real_, n_frame)
+      fg_tmp[!is.na(in_panel)] <- g_unit_int[in_panel[!is.na(in_panel)]]
+      fg_tmp
+    }
   }
-  n_frame <- length(frame_ids)
-  in_panel <- match(frame_ids, unit_id)
-  frame_only <- which(is.na(in_panel))
-  # Frame position of every data row (first-appearance unit positions when the
-  # frame is the panel's own roster); shared by every alignment below.
-  row_frame_pos <- if (frame_supplied) match(id, frame_ids) else pos_unit
-
-  # cohorts on the frame: panel units from data; frame-only units from the frame column (0 -> Inf) or unknown
-  frame_g <- rep(NA_real_, n_frame)
-  frame_g[!is.na(in_panel)] <- g_unit_int[in_panel[!is.na(in_panel)]]
   frame_has_g <- frame_supplied && gname %in% names(frame)
   if (frame_has_g) {
     fg <- frame[[gname]]
@@ -628,7 +794,7 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
   # without a pre-anticipation reference stays declared, with unavailable
   # target cells classified by D5; upstream preprocessing must not change the
   # chained sample, cohort shares or IF row universe (D1/D2/D5).
-  rownames(frame) <- NULL
+  if (frame_supplied) rownames(frame) <- NULL
 
   # Pure imputation never evaluates the inactive probability-model promises;
   # the augmented correction evaluates both designs on every F row.
@@ -746,11 +912,19 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
           # Direct plain numeric columns: the panel model matrix is the intercept
           # plus these raw columns, so the original row check is exact on the raw
           # values by unit; no NT-row model matrix is built.
-          complete <- TRUE; agree <- TRUE
-          for (v in xvars) {
-            dv <- data[[v]]
-            if (anyNA(dv)) { complete <- FALSE; break }
-            if (!all(dv == frame[[v]][row_frame_pos])) agree <- FALSE
+          c_chk <- if (!is.null(fk_vf_in) && is.integer(row_frame_pos)) {
+            fk_vf_in(10L, NULL, NULL, list(unname(as.list(data[xvars])), unname(as.list(frame[xvars])), row_frame_pos), NULL)
+          } else NULL
+          if (!is.null(c_chk)) {
+            complete <- !identical(c_chk, -1L)
+            agree <- identical(c_chk, 1L)
+          } else {
+            complete <- TRUE; agree <- TRUE
+            for (v in xvars) {
+              dv <- data[[v]]
+              if (anyNA(dv)) { complete <- FALSE; break }
+              if (!all(dv == frame[[v]][row_frame_pos])) agree <- FALSE
+            }
           }
           chained_request_need(complete, "Covariates in `xformla` have missing values in panel rows.",
             "cdid_chained_request_covariate_error")
@@ -785,12 +959,14 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
     A <- frame_n_obs >= 2L
     U <- if (!sel_norm$enabled || selection_universe == "F") rep(TRUE, n_frame) else
       if (selection_universe == "B") frame_n_obs >= 1L else A
+    x_eval_mask <- if (full_outcome_frame) rep(TRUE, n_frame) else
+      if (isTRUE(cross_pair) && sel_norm$enabled) U else A
     xf <- if (is.null(xformla)) chained_request_default_formula() else xformla
     frame_Z <- covariate_gate(function() cp04_public_design(xf, frame, data, frame_ids, id,
-      A, "xformla", row_frame_pos = row_frame_pos), list(xf, if (sel_norm$enabled) selection_xformla), "xformla")
+      x_eval_mask, "xformla", row_frame_pos = row_frame_pos), list(xf, if (sel_norm$enabled) selection_xformla), "xformla")
     if (is_marker(frame_Z)) {
       merge_prov(frame_Z$prov)
-      frame_Z <- if (is_dated(xf)) carrier("reference_carrier") else cp04_public_design(xf, frame, data, frame_ids, id, A, "xformla",
+      frame_Z <- if (is_dated(xf)) carrier("reference_carrier") else cp04_public_design(xf, frame, data, frame_ids, id, x_eval_mask, "xformla",
         row_frame_pos = row_frame_pos)
     }
     if (!is_dated(xf)) x_static <- frame_Z
@@ -901,8 +1077,8 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
   }
 
   # ---- calendar, cohort universe, targets -------------------------------------
-  cohorts_known <- sort(unique(frame_g[!is.na(frame_g)]))
-  panel_cohorts <- sort(unique(frame_g[!is.na(in_panel)]))
+  cohorts_known <- sort(unique(if (anyNA(frame_g)) frame_g[!is.na(frame_g)] else frame_g))
+  panel_cohorts <- if (!length(frame_only) && !anyNA(frame_g)) cohorts_known else sort(unique(frame_g[!is.na(in_panel)]))
   finite_panel <- panel_cohorts[is.finite(panel_cohorts)]
   with_post <- finite_panel[vapply(finite_panel, function(gg) any(calendar >= gg), logical(1L))]
   without_post <- setdiff(finite_panel, with_post)
@@ -921,26 +1097,75 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
 
   # D61: on the reference route the retained unit weight is V = w_t1 by original
   # id (NA where the unit has no supplied weight at the first calendar date).
-  units <- data.frame(id = frame_ids, cohort = frame_g,
-    weight = if (identical(weight_reduction, "reference_recipes")) first_w else frame_w, stringsAsFactors = FALSE)
-  units$cluster <- if (is.null(cluster_full)) NA else cluster_full
-  units$n_obs <- ifelse(is.na(in_panel), 0L, n_obs_unit[in_panel])
-  units$frame_only <- is.na(in_panel)
+  u_w <- if (identical(weight_reduction, "reference_recipes")) first_w else frame_w
+  u_cl <- if (is.null(cluster_full)) rep(NA, n_frame) else cluster_full
+  u_nobs <- if (!length(frame_only) && identical(in_panel, seq_len(n_units))) {
+    n_obs_unit
+  } else {
+    ifelse(is.na(in_panel), 0L, n_obs_unit[in_panel])
+  }
+  u_fonly <- if (!length(frame_only)) rep.int(FALSE, n_frame) else is.na(in_panel)
+  units <- if (exists("cdid_fast_df", mode = "function", inherits = TRUE)) {
+    cdid_fast_df(list(id = frame_ids, cohort = frame_g, weight = u_w,
+                      cluster = u_cl, n_obs = u_nobs, frame_only = u_fonly))
+  } else {
+    df_u <- data.frame(id = frame_ids, cohort = frame_g, weight = u_w, stringsAsFactors = FALSE)
+    df_u$cluster <- if (is.null(cluster_full)) NA else cluster_full
+    df_u$n_obs <- u_nobs
+    df_u$frame_only <- u_fonly
+    df_u
+  }
 
-  data_internal <- data.frame(id, tt, y, frame_g[row_frame_pos], stringsAsFactors = FALSE)
-  names(data_internal) <- c(idname, tname, yname, gname)
-  rownames(data_internal) <- NULL
+  g_internal_row <- if (!is.null(c_in) && !length(frame_only) &&
+                        identical(in_panel, seq_len(n_units)) && identical(row_frame_pos, pos_unit)) {
+    c_in$g_ord
+  } else {
+    frame_g[row_frame_pos]
+  }
+  data_internal <- if (exists("cdid_fast_df", mode = "function", inherits = TRUE)) {
+    cols_int <- list(id, tt, y, g_internal_row)
+    names(cols_int) <- c(idname, tname, yname, gname)
+    cdid_fast_df(cols_int)
+  } else {
+    df_int <- data.frame(id, tt, y, g_internal_row, stringsAsFactors = FALSE)
+    names(df_int) <- c(idname, tname, yname, gname)
+    rownames(df_int) <- NULL
+    df_int
+  }
+  # The direct fixed-effects route consumes the panel index below and never
+  # constructs a GMM owner. Only GMM may publish this native-preparation cache.
+  if (!retain_panel_index && !is.null(c_in) && exists("cdid_fast_kernel_cache", inherits = TRUE)) {
+    cdid_fast_kernel_cache$last_panel_prep <- list(
+      data_internal = data_internal,
+      cols = c(idname = idname, tname = tname, yname = yname, gname = gname),
+      unit_key = unit_key,
+      pos_unit = pos_unit,
+      tt_d = tt_d,
+      y_ord = c_in$y_ord,
+      g_ord = g_internal_row,
+      calendar = calendar
+    )
+  }
 
   or_basis <- NULL
+  # Cross-pair conditional-MTAR fits the outcome alias map on the selection
+  # roster U (CCDID); every other route keeps the repeat-observer rows A. The
+  # native initializer is admitted only on A, its same input and eligibility
+  # (its record states that row universe); U always uses or_public_basis().
+  or_on_U <- isTRUE(cross_pair) && sel_norm$enabled && !is.null(cp04$U)
   if (!imputation && !augmented && outcome_regression && !x_dated) {
-    basis <- or_public_basis(frame_Z, units$n_obs >= 2L, or_resource)
+    act_rows <- if (or_on_U) cp04$U else units$n_obs >= 2L
+    basis <- if (or_on_U) NULL else cdid_fast_or_public_basis(frame_Z, act_rows, or_resource)
+    if (is.null(basis)) basis <- or_public_basis(frame_Z, act_rows, or_resource)
     frame_Z <- basis$Z; or_basis <- basis$record
     cp04$outcome_recipe <- basis$outcome_recipe
     cp04$or_basis <- or_basis
     cp04$or_preprocess <- list(retained_entries = unname(cp04_payload(or_basis)["entries"]),
       work_ops = or_basis$preprocessing_work_ops_bound)
   } else if (!imputation && !augmented && doubly_robust && !x_dated) {
-    basis <- or_public_basis(frame_Z, units$n_obs >= 2L, or_resource)
+    act_rows <- if (or_on_U) cp04$U else units$n_obs >= 2L
+    basis <- if (or_on_U) NULL else cdid_fast_or_public_basis(frame_Z, act_rows, or_resource)
+    if (is.null(basis)) basis <- or_public_basis(frame_Z, act_rows, or_resource)
     or_basis <- basis$record
     cp04$outcome_recipe <- basis$outcome_recipe
     cp04$or_basis <- or_basis
@@ -1007,7 +1232,7 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
   # NaN/Inf). Everything else keeps the original constructors unchanged. The
   # record is sealed and bound to exactly these objects; no caller data changes.
   prepared <- NULL
-  if (is.numeric(id) && n_frame == n_units && !length(frame_only) && length(calendar) >= 2L &&
+  if (!retain_panel_index && is.numeric(id) && n_frame == n_units && !length(frame_only) && length(calendar) >= 2L &&
       n_rows == as.double(n_units) * length(calendar) && all(n_obs_unit == length(calendar)) &&
       !anyNA(frame_g) && !any(is.nan(y) | is.infinite(y)) &&
       identical(weight_reduction, "static") && identical(wres$kind, "static") && all(frame_w == 1) &&
@@ -1029,7 +1254,7 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
     prepared <- unit_key <- unit_sort <- unit_rank <- pos_unit <- row_order <- NULL
     n_obs_unit <- row_frame_pos <- ui <- uo <- to <- tt_d <- NULL
   }, add = TRUE)
-  list(
+  out <- list(
     data_internal = data_internal, xformla = xf, cp04 = cp04, outcome_pooling = outcome_pooling, or_basis = or_basis, prepared = prepared,
     fix_weights = fix_weights, weight_reduction = weight_reduction, weight_source = wres$kind,
     reference_source = reference_source, reference_route = reference_route, share_weights = first_w,
@@ -1048,6 +1273,17 @@ chained_request_prepare_inputs <- function(data, frame = NULL, yname, tname, idn
       rule = "none: the complete frame and supplied panel rows are retained; D5 classifies cohorts without an admissible reference"),
     frame_order = if (frame_supplied) "frame row order" else "first appearance in data (any period)"
   )
+  if (retain_panel_index) {
+      observed <- if (sum(n_obs_unit) == n_rows) row_order else row_order[!is.na(y[row_order])]
+      unit <- row_frame_pos[observed]
+      if (is.unsorted(unit)) {
+        frame_order <- order(unit, method = "radix")
+        observed <- observed[frame_order]
+        unit <- unit[frame_order]
+      }
+      out$panel_index <- list(y = as.double(y[observed]), unit = unit, period = match(tt[observed], calendar))
+  }
+  out
 }
 
 # ------------------------------------------------------------------------------
@@ -1147,7 +1383,12 @@ chained_request_pretest_record <- function(target_meta) {
 # A failed diagnostic never changes the returned nuisance's fit status.
 chained_request_H_diagnostics <- function(H, n_A) {
   rc <- tryCatch(base::rcond(H, norm = "O"), error = function(e) NA_real_)
-  d <- tryCatch(diag(H), error = function(e) numeric())
+  d <- if (is.matrix(H) && nrow(H) == ncol(H) && nrow(H) >= 1L) {
+    nr <- nrow(H)
+    as.double(H[seq.int(1L, nr * nr, by = nr + 1L)])
+  } else {
+    tryCatch(diag(H), error = function(e) numeric())
+  }
   rc_ok <- length(rc) == 1L && is.finite(rc)
   d_ok <- length(d) > 0L && all(is.finite(d))
   list(rcond_H_1_estimate = list(status = if (rc_ok) "available" else "unavailable",
@@ -1184,21 +1425,64 @@ chained_request_nuisance_diagnostics <- function(res, control, custom, public_ob
     res$resource_accounting$initial_envelope_entries))
   prior_work <- res$resource_accounting$downstream_work_ops
   if (is.null(prior_work)) prior_work <- 0.0
+  cap_cnt <- min(ctrl$max_retained_entries, ctrl$max_matrix_entries)
+  cap_out <- ctrl$max_output_entries
+  cap_wo <- ctrl$max_work_ops
+  safe_lim <- 2^53 - 1
+  fk_pb <- if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(c("ipw_point_view_payload_budget", "ipw_owner_safe_sum"))) {
+    cdid_fast_kernel("C_cdid_point_payload_budget")
+  } else NULL
   gate <- function() {
-    ipw_owner_safe_sum(c(live, entries, scratch),
-      min(ctrl$max_retained_entries, ctrl$max_matrix_entries),
+    s1 <- live + entries + scratch
+    sw <- prior_work + work
+    if (!is.null(fk_pb) && is.finite(s1) && s1 >= 0 && s1 <= cap_cnt && s1 <= safe_lim &&
+        is.finite(entries) && entries >= 0 && entries <= cap_out && entries <= safe_lim &&
+        is.finite(sw) && sw >= 0 && sw <= cap_wo && sw <= safe_lim) {
+      return(invisible(NULL))
+    }
+    ipw_owner_safe_sum(c(live, entries, scratch), cap_cnt,
       "pipeline plus compact nuisance diagnostics counted workspace")
-    ipw_owner_safe_sum(c(entries), ctrl$max_output_entries, "compact nuisance diagnostics output")
-    ipw_owner_safe_sum(c(prior_work, work), ctrl$max_work_ops,
+    ipw_owner_safe_sum(c(entries), cap_out, "compact nuisance diagnostics output")
+    ipw_owner_safe_sum(c(prior_work, work), cap_wo,
       "pipeline plus compact nuisance diagnostics counted work")
   }
   gate()
   charge <- function(x) {
+    rem_wo <- cap_wo - prior_work - work
+    rem_me <- floor(min(cap_out - entries, cap_cnt - live - entries - scratch) / 4)
+    if (!is.null(fk_pb) && is.finite(rem_wo) && rem_wo > 0 && is.finite(rem_me) && rem_me > 0) {
+      if (is.character(x) && is.null(attributes(x)) && length(x) == 1L) {
+        nb <- nchar(x, type = "bytes", allowNA = TRUE)
+        if (is.na(nb)) nb <- 0
+        pb_e <- 9 + ceiling(nb / 2)
+        pb_w <- 704 + 16 * nb
+        if (pb_e <= rem_me && pb_e <= safe_lim && pb_w <= rem_wo && pb_w <= safe_lim) {
+          ne <- entries + 4 * pb_e
+          nw <- work + pb_w
+          if (is.finite(ne) && ne <= safe_lim && is.finite(nw) && nw <= safe_lim) {
+            entries <<- ne
+            work <<- nw
+            gate()
+            return(invisible(NULL))
+          }
+        }
+      }
+      pb <- fk_pb(x, min(safe_lim, rem_me), min(safe_lim, rem_wo))
+      if (!is.null(pb)) {
+        ne <- entries + 4 * pb$entries
+        nw <- work + pb$work
+        if (is.finite(ne) && ne <= safe_lim && is.finite(nw) && nw <= safe_lim) {
+          entries <<- ne
+          work <<- nw
+          gate()
+          return(invisible(NULL))
+        }
+      }
+    }
     remaining <- ctrl
-    remaining$max_work_ops <- ctrl$max_work_ops - prior_work - work
-    remaining$max_matrix_entries <- floor(min(ctrl$max_output_entries - entries,
-      ctrl$max_matrix_entries - live - entries - scratch,
-      ctrl$max_retained_entries - live - entries - scratch) / 4)
+    remaining$max_work_ops <- rem_wo
+    remaining$max_matrix_entries <- rem_me
     pb <- ipw_point_view_payload_budget(x, remaining)
     entries <<- ipw_owner_safe_sum(c(entries, 4 * pb$entries))
     work <<- ipw_owner_safe_sum(c(work, pb$work))
@@ -1206,44 +1490,114 @@ chained_request_nuisance_diagnostics <- function(res, control, custom, public_ob
   }
   # These are compact reporting descriptors, statuses and support counts only.
   charge(list(aux$descriptors, aux$selections, aux$descriptor_status, aux$unsupported_counts))
-  for (fv in fits) {
-    charge(list(fv$nuisance_id, fv$defining_pair, fv$cohorts, fv$dimensions,
-      fv$counts, fv$masses, fv$means, fv$diagnostics, fv$glm_control, fv$control,
-      fv$point_summary_disclosure))
+  fit_refs_all <- if (D > 0L) lapply(fits, `[[`, "ref") else list()
+  fk_vf_nd <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+    cdid_fast_kernel("C_cdid_verify_fast")
+  } else NULL
+  first_fit_idx <- if (D > 0L && !is.null(fk_vf_nd)) fk_vf_nd(9L, fit_refs_all, NULL, NULL, NULL) else NULL
+  fit_pb_e <- numeric(D)
+  fit_pb_w <- numeric(D)
+  for (j in seq_len(D)) {
+    fv <- fits[[j]]
+    j0 <- if (!is.null(first_fit_idx)) first_fit_idx[j] else j
+    if (j0 < j && fit_pb_e[j0] > 0) {
+      rem_wo <- cap_wo - prior_work - work
+      rem_me <- floor(min(cap_out - entries, cap_cnt - live - entries - scratch) / 4)
+      pe_j <- fit_pb_e[j0]
+      pw_j <- fit_pb_w[j0]
+      if (!is.null(fk_pb) && pe_j <= rem_me && pw_j <= rem_wo) {
+        entries <- entries + 4 * pe_j
+        work <- work + pw_j
+        gate()
+      } else {
+        charge(list(fv$nuisance_id, fv$defining_pair, fv$cohorts, fv$dimensions,
+          fv$counts, fv$masses, fv$means, fv$diagnostics, fv$glm_control, fv$control,
+          fv$point_summary_disclosure))
+      }
+    } else {
+      e_before <- entries
+      w_before <- work
+      charge(list(fv$nuisance_id, fv$defining_pair, fv$cohorts, fv$dimensions,
+        fv$counts, fv$masses, fv$means, fv$diagnostics, fv$glm_control, fv$control,
+        fv$point_summary_disclosure))
+      fit_pb_e[j] <- (entries - e_before) / 4
+      fit_pb_w[j] <- work - w_before
+    }
     p <- fv$dimensions$n_covariates
     scratch <- max(scratch, 8.0 * p * p + 32.0 * p + 256.0)
-    work <- ipw_owner_safe_sum(c(work, 32.0 * p * p * p + 64.0 * p * p + 256.0))
+    work <- work + 32.0 * p * p * p + 64.0 * p * p + 256.0
     gate() # LU/rcond/diagonal workspace and arithmetic charged before use
   }
   for (pl in post) charge(pl$link_id)
   for (pl in points) charge(pl$link_id)
   # No matrices are copied; the selected scalar/list payload is stripped of
   # foreign attributes/references using the existing diagnostic scalar copier.
-  clean <- ipw_pipeline_scalar_state
+  clean <- if (!is.null(fk_vf_nd) &&
+               exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+               cdid_are_default_fns("ipw_pipeline_scalar_state")) {
+    function(x) {
+      if (is.null(x)) return(NULL)
+      if (!is.data.frame(x)) {
+        res_c <- fk_vf_nd(7L, x, NULL, NULL, NULL)
+        if (!identical(res_c, "CDID_FALLBACK_DF")) return(res_c)
+      }
+      ipw_pipeline_scalar_state(x)
+    }
+  } else {
+    ipw_pipeline_scalar_state
+  }
   records <- list(); distinct <- integer(D)
+  last_glm_raw <- NULL; last_glm_clean <- NULL
+  last_ctrl_raw <- NULL; last_ctrl_clean <- NULL
   for (j in seq_len(D)) {
-    fv <- fits[[j]]; hit <- NA_integer_
-    if (j > 1L) for (k in seq_len(j - 1L)) {
-      if (identical(fv$ref, fits[[k]]$ref)) { hit <- distinct[k]; break }
+    fv <- fits[[j]]
+    hit <- NA_integer_
+    if (!is.null(first_fit_idx)) {
+      if (first_fit_idx[j] < j) hit <- distinct[first_fit_idx[j]]
+    } else if (j > 1L) {
+      for (k in seq_len(j - 1L)) {
+        if (identical(fv$ref, fits[[k]]$ref)) { hit <- distinct[k]; break }
+      }
     }
     if (is.na(hit)) {
       hit <- length(records) + 1L
+      if (!identical(fv$glm_control, last_glm_raw)) {
+        last_glm_raw <- fv$glm_control
+        last_glm_clean <- clean(fv$glm_control)
+      }
+      if (!identical(fv$control, last_ctrl_raw)) {
+        last_ctrl_raw <- fv$control
+        last_ctrl_clean <- clean(fv$control)
+      }
       records[[hit]] <- list(id = paste0("nuisance:", hit), status = "available", reason = NA_character_,
         source_nuisance_id = fv$nuisance_id, target_cohort = fv$cohorts$g,
         ordered_control_cohorts = clean(fv$cohorts$K), defining_pair = clean(fv$defining_pair),
         cohorts = clean(fv$cohorts), dimensions = clean(fv$dimensions),
         counts = clean(fv$counts), masses = clean(fv$masses), normalizers = clean(fv$means),
-        fit = clean(fv$diagnostics), glm_control = clean(fv$glm_control), control = clean(fv$control),
+        fit = clean(fv$diagnostics), glm_control = last_glm_clean, control = last_ctrl_clean,
         point_summary_disclosure = clean(fv$point_summary_disclosure),
         conditioning = chained_request_H_diagnostics(fv$factors$H, fv$dimensions$n_a_units),
         roles = list(post = FALSE, auxiliary = FALSE))
     }
     distinct[j] <- hit
   }
-  map_link <- function(pl, index, role) {
+  post_fit_idx <- if (D > 0L && M > 0L && !is.null(fk_vf_nd)) {
+    fk_vf_nd(9L, lapply(post, `[[`, "fitted_nuisance_ref"), fit_refs_all, NULL, NULL)
+  } else NULL
+  aux_fit_idx <- if (D > 0L && Q > 0L && !is.null(fk_vf_nd)) {
+    fk_vf_nd(9L, lapply(points, `[[`, "fitted_nuisance_ref"), fit_refs_all, NULL, NULL)
+  } else NULL
+  map_link <- function(pl, index, role, pre_idx = NULL) {
     hit <- NA_integer_
-    if (!is.null(pl$fitted_nuisance_ref)) for (j in seq_len(D)) {
-      if (identical(pl$fitted_nuisance_ref, fits[[j]]$ref)) { hit <- distinct[j]; break }
+    if (!is.null(pl$fitted_nuisance_ref) && D > 0L) {
+      if (!is.null(pre_idx)) {
+        j0 <- pre_idx[index]
+        if (j0 > 0L) hit <- distinct[j0]
+      } else {
+        for (j in seq_len(D)) {
+          if (identical(pl$fitted_nuisance_ref, fits[[j]]$ref)) { hit <- distinct[j]; break }
+        }
+      }
     }
     if (!is.na(hit)) records[[hit]]$roles[[role]] <<- TRUE
     list(index = index, link_id = clean(pl$link_id),
@@ -1252,8 +1606,8 @@ chained_request_nuisance_diagnostics <- function(res, control, custom, public_ob
       reason = if (!is.na(hit)) NA_character_ else if (custom) "external_custom_callback_no_builtin_logit_information" else
         if (is.null(pl)) "no_supported_pair_no_fitted_nuisance" else "no_matching_fitted_nuisance_identity")
   }
-  post_map <- lapply(seq_len(M), function(j) map_link(post[[j]], j, "post"))
-  aux_map <- lapply(seq_len(Q), function(j) map_link(points[[j]], j, "auxiliary"))
+  post_map <- lapply(seq_len(M), function(j) map_link(post[[j]], j, "post", post_fit_idx))
+  aux_map <- lapply(seq_len(Q), function(j) map_link(points[[j]], j, "auxiliary", aux_fit_idx))
   list(status = if (length(records)) "available" else "unavailable",
     reason = if (length(records)) NA_character_ else if (custom) "external_custom_callback_no_builtin_logit_information" else
       "no_supported_pair_no_fitted_nuisance",
@@ -1278,7 +1632,11 @@ chained_request_bind_mp <- function(res, prep, call, params, request, control, p
     "cdid_chained_request_support_only")
   a_ids <- res$panel_owner$a_id
   units <- prep$units
-  units$eligible <- units$id %in% a_ids
+  units$eligible <- if (prep$n_frame_only == 0L && length(a_ids) == nrow(units) && all(units$n_obs >= 2L)) {
+    rep.int(TRUE, nrow(units))
+  } else {
+    units$id %in% a_ids
+  }
   chained_request_need(identical(sum(units$eligible), as.integer(res$panel_owner$n_a_units)),
     "Internal: eligibility derived from the panel owner does not match the frame.")
   if (is.null(prep$cluster_full)) units$cluster <- NULL
@@ -1306,7 +1664,7 @@ chained_request_bind_mp <- function(res, prep, call, params, request, control, p
     pretest = if (identical(pretest$status, "computed")) pretest else NULL,
     covariance_handling = res$covariance_handling, share_law = prep$share_law)
   mp$chained$pt <- chained_pt_assumption_record(res, prep, request)
-  if (identical(request$pt_assumption, "all")) {
+  if (request$pt_assumption %in% c("all", "ctrl")) {
     pretest$interpretation <- mp$chained$pt$pretest_interpretation
     pretest$window_tags <- rep_$target_meta[, intersect(c("target_id", "pt_window_tag", "pt_operator_covered"), names(rep_$target_meta)), drop = FALSE]
   }
@@ -1348,6 +1706,7 @@ chained_request_bind_mp <- function(res, prep, call, params, request, control, p
   mp$chained$covariance_handling <- res$covariance_handling
   mp$chained$nuisance_diagnostics <- chained_request_nuisance_diagnostics(res, control, is.function(params$est_method), mp)
   mp$chained$resource_accounting <- cp04_pipeline_public_resource(res$resource_accounting)
+  mp$chained$chain_info <- build_mp_chain_info(res, prep, request)
   mp$chained$numerical_transfer <- if (is.null(gt)) list(requested = FALSE, performed = FALSE,
     status = "complete_per_fit_error_certification_not_requested_or_performed", certified = FALSE) else list(requested = TRUE,
     certified = isTRUE(res$numerical_transfer$certified),
@@ -1388,6 +1747,15 @@ chained_request_bind_mp <- function(res, prep, call, params, request, control, p
   # D61: first-calendar masses V by original id (NA where absent) on the
   # reference route; static and first-period static calls keep their weights.
   if (!is.null(prep$share_law)) mp$chained$aggregation_state$share_law <- prep$share_law
+  # Issue #16: opt-in eligibility record and the restricted cohort masses that
+  # later aggregation requests read (absent by default).
+  if (identical(prep$missing_reference, "exclude")) {
+    mp$chained$request$missing_reference <- "exclude"
+    mp$chained$reference_eligibility <- chained_reference_eligibility_record(prep, res)
+    el <- prep$reference_eligibility
+    if (!is.null(el) && isTRUE(el$restricted))
+      mp$chained$aggregation_state$share_eligibility <- chained_reference_share_eligibility(el, prep$frame_g)
+  }
   mp
 }
 
@@ -1451,7 +1819,7 @@ chained_aggte_request <- function(MP,
     enclosure = st$enclosure, fixed_signs = NULL, eligible_full = frame$eligible, na.rm = na.rm,
     available = MP$chained$available, bstrap = resolved$bstrap, caller_rng = isTRUE(st$caller_rng),
     balance_e = balance_e, min_e = min_e, max_e = max_e, calendar = st$calendar, cohort_grid = st$cohort_grid,
-    share_law = st$share_law, frame_ids = frame$id),
+    share_law = st$share_law, frame_ids = frame$id, share_eligibility = st$share_eligibility),
     "cdid_ipw_pipeline_accuracy_error", "aggregation_context", aggregation_context)
   obj <- chained_did_AGGTEobj(agg, MP, call, min_e = min_e, max_e = max_e, balance_e = balance_e, requested = resolved)
   if (!is.null(st$public)) {

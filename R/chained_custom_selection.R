@@ -19,45 +19,69 @@
 # needs prerequisites (H1/H2) that are not verified, and g is never inferred.
 
 validate_cp04_custom_backend <- function(backend) {
+  if (cdid_sel_check_validated(backend, "cdid_cp04_custom_backend", "cp04_custom_backend")) {
+    return(invisible(backend))
+  }
   if (!inherits(backend, "cdid_cp04_custom_backend") || !ipw_owner_seal_ok(backend, "cp04_custom_backend"))
     cp04_abort("Expected the immutable conditional_mtar custom-callback backend.", "integrity")
   reader <- if (is.environment(backend$reader_ref) && exists("cp04_reader", backend$reader_ref, inherits = FALSE))
     get("cp04_reader", backend$reader_ref, inherits = FALSE) else NULL
   validate_cp04_reader(reader)
   if (!is.null(backend$reference_ref)) chained_backend_reference(backend)
+  cdid_sel_record_validated(
+    backend, "cp04_custom_backend", reader,
+    get("frame_owner", reader$frame_ref, inherits = FALSE),
+    get("panel_owner", reader$panel_ref, inherits = FALSE),
+    reader$frame_ref
+  )
   invisible(backend)
 }
 
 # One callback call on one model's observed risk set (canonical A order).
+# Issue #16: a restricted recipe's risk set is its eligible observers (the
+# native risk-set kernel scans the full roster and is bypassed for it).
 cp04_custom_callback_fit <- function(reader, spec, sel_fit, up_map, frame, ref, custom_est_method, custom_dots, ctrl) {
   st <- reader$state
-  rows <- integer(); kk <- integer()
-  for (i in seq_along(spec$cohorts)) {
-    a_rows <- chained_reference_cohort_rows(st, spec$cohorts[i], "A")
-    if (length(a_rows)) for (s0 in seq.int(1L, length(a_rows), by = ctrl$max_chunk_rows)) {
-      rr <- a_rows[seq.int(s0, min(length(a_rows), s0 + ctrl$max_chunk_rows - 1L))]
-      S <- cp04_pair_rows(reader, rr, spec$pair)$S
-      rows <- c(rows, rr[S == 1]); kk <- c(kk, rep(i, sum(S == 1)))
+  restricted <- chained_reference_recipe_restricted(ref, spec$reference)
+  fast_pre <- if (restricted) NULL else cdid_fast_sel_trt_fit(4L, reader, spec, sel_fit, up_map, reference = ref)
+  if (!is.null(fast_pre)) {
+    rows <- fast_pre[[1L]]
+    kk <- fast_pre[[2L]]
+    fw <- fast_pre[[3L]]
+    LD <- fast_pre[[4L]]
+    y01 <- list(y0 = fast_pre[[5L]], y1 = fast_pre[[6L]])
+    u_ids <- fast_pre[[7L]]
+    n_obs <- length(rows)
+  } else {
+    rows <- integer(); kk <- integer()
+    for (i in seq_along(spec$cohorts)) {
+      a_rows <- chained_reference_cohort_rows(st, spec$cohorts[i], "A")
+      if (restricted) a_rows <- a_rows[chained_reference_eligible(ref, spec$reference, a_rows)]
+      if (length(a_rows)) for (s0 in seq.int(1L, length(a_rows), by = ctrl$max_chunk_rows)) {
+        rr <- a_rows[seq.int(s0, min(length(a_rows), s0 + ctrl$max_chunk_rows - 1L))]
+        S <- cp04_pair_rows(reader, rr, spec$pair)$S
+        rows <- c(rows, rr[S == 1]); kk <- c(kk, rep(i, sum(S == 1)))
+      }
     }
+    o <- order(st$a_index[rows]); rows <- rows[o]; kk <- kk[o]
+    n_obs <- length(rows)
+    if (n_obs != spec$n_observers) cp04_abort("Observed risk support changed from its owner view.", "identity")
+    if (n_obs < 2L) cdid_custom_ipw_abort("Custom IPW link has fewer than 2 observed risk-set units.",
+      c("cdid_ipw_owner_pair_support_error", "cdid_ipw_pair_support_error", "cdid_ipw_support_error"))
+    u_ids <- sort(unique(unlist(up_map$pair_channels[spec$selection_ids])))
+    fw <- numeric(n_obs); LD <- matrix(0, n_obs, length(u_ids))
+    for (i in seq_along(spec$cohorts)) {
+      sub <- which(kk == i)
+      if (!length(sub)) next
+      q <- spec$selection_ids[i]
+      ld <- selection_pair_cohort_log_deriv(sel_fit, up_map, q, rows[sub])
+      fw[sub] <- ld$pred$weight
+      LD[sub, match(up_map$pair_channels[[q]], u_ids)] <- ld$log_deriv
+    }
+    if (any(!is.finite(fw) | fw <= 0))
+      cdid_abort("Nonfinite or nonpositive estimated-observation weights `i.weights`.", c("cdid_ipw_numeric_error", "cdid_ipw_fit_error"))
+    y01 <- reference_ipw_endpoint_outcomes(reader, rows, spec$pair)
   }
-  o <- order(st$a_index[rows]); rows <- rows[o]; kk <- kk[o]
-  n_obs <- length(rows)
-  if (n_obs != spec$n_observers) cp04_abort("Observed risk support changed from its owner view.", "identity")
-  if (n_obs < 2L) cdid_custom_ipw_abort("Custom IPW link has fewer than 2 observed risk-set units.",
-    c("cdid_ipw_owner_pair_support_error", "cdid_ipw_pair_support_error", "cdid_ipw_support_error"))
-  u_ids <- sort(unique(unlist(up_map$pair_channels[spec$selection_ids])))
-  fw <- numeric(n_obs); LD <- matrix(0, n_obs, length(u_ids))
-  for (i in seq_along(spec$cohorts)) {
-    sub <- which(kk == i)
-    if (!length(sub)) next
-    q <- spec$selection_ids[i]
-    ld <- selection_pair_cohort_log_deriv(sel_fit, up_map, q, rows[sub])
-    fw[sub] <- ld$pred$weight
-    LD[sub, match(up_map$pair_channels[[q]], u_ids)] <- ld$log_deriv
-  }
-  if (any(!is.finite(fw) | fw <= 0))
-    cdid_abort("Nonfinite or nonpositive estimated-observation weights `i.weights`.", c("cdid_ipw_numeric_error", "cdid_ipw_fit_error"))
-  y01 <- reference_ipw_endpoint_outcomes(reader, rows, spec$pair)
   X <- if (is.null(ref)) frame$Z_a[st$a_index[rows], , drop = FALSE] else chained_reference_x(ref, spec$reference, rows)
   cb_args <- c(list(y1 = y01$y1, y0 = y01$y0, D = as.double(kk == 1L), covariates = X, i.weights = fw, inffunc = TRUE),
     custom_dots)
@@ -94,9 +118,10 @@ fit_cp04_custom_backend <- function(reader, link_views, control, glm_control,
   up_map <- build_selection_upstream_map(sel_fit)
   p <- if (is.null(reference)) frame$n_covariates else length(reference$x_columns)
   L <- length(link_views); models <- list(); mkeys <- character(); links <- vector("list", L)
+  lv_ok <- cdid_fast_validate_link_views(link_views, frame)
   for (i in seq_len(L)) {
     v <- link_views[[i]]
-    validate_ipw_link_view(v, frame_owner = frame)
+    if (!lv_ok) validate_ipw_link_view(v, frame_owner = frame)
     source <- v$functional_key
     if (!gmm_scalar_character(source) || !startsWith(source, "cmpcat:"))
       cp04_abort("CP04 requires the supplied comparison-catalog functional key.", "unsupported")
@@ -134,6 +159,10 @@ fit_cp04_custom_backend <- function(reader, link_views, control, glm_control,
     ctrl$max_work_ops, "custom conditional_mtar callback fits")
   base <- sel_fit$accounting$owned_entries + sel_fit$accounting$borrowed_entries
   cp04_budget(ctrl, c(base, model_bound), scratch, work, model_bound, "custom conditional_mtar callback links")
+  # Issue #16: a restricted model delivers its eligible observed risk set; the
+  # view counts above remain the admission bounds.
+  for (m in seq_len(Tm)) if (chained_reference_recipe_restricted(reference, models[[m]]$reference))
+    models[[m]]$n_observers <- cp04_reference_risk_count(reader, models[[m]], reference, ctrl)
   fits <- lapply(models, function(sp) cp04_custom_callback_fit(reader, sp, sel_fit, up_map, frame, reference,
     custom_est_method, custom_dots, ctrl))
   for (i in seq_len(L)) links[[i]]$mu <- fits[[links[[i]]$model]]$estimate
@@ -164,7 +193,13 @@ fit_cp04_custom_backend <- function(reader, link_views, control, glm_control,
   obj$accounting$owned_entries <- actual
   cp04_budget(ctrl, c(obj$accounting$borrowed_entries, actual), obj$accounting$fit_scratch_bound, work, actual,
     "retained custom conditional_mtar backend")
-  ipw_owner_seal(obj, "cp04_custom_backend")
+  sealed <- cdid_fast_seal(obj, "cp04_custom_backend")
+  cdid_sel_record_validated(
+    sealed, "cp04_custom_backend", reader, frame,
+    get("panel_owner", reader$panel_ref, inherits = FALSE),
+    reader$frame_ref
+  )
+  sealed
 }
 
 cp04_custom_if_budget <- function(backend, B, links, details = FALSE) {
@@ -192,14 +227,45 @@ cp04_custom_if_budget <- function(backend, B, links, details = FALSE) {
 evaluate_cp04_custom_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE) {
   validate_cp04_custom_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
-  valid_index <- function(x, n) is.numeric(x) && !is.object(x) && is.null(dim(x)) && length(x) > 0L &&
-    all(is.finite(x)) && all(x == floor(x)) && all(x >= 1 & x <= n) && !anyDuplicated(x)
-  if (!valid_index(rows, st$N) || length(rows) > backend$control$max_chunk_rows ||
-      !valid_index(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
+  if (!cdid_sel_valid_idx(rows, st$N) || length(rows) > backend$control$max_chunk_rows ||
+      !cdid_sel_valid_idx(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
       !is.character(scale) || length(scale) != 1L || is.na(scale) || !scale %in% c("frame", "core"))
     cp04_abort("Invalid explicit IF row/link batch, scale or details flag.")
-  pre <- cp04_custom_if_budget(backend, length(rows), links, details)
   B <- length(rows); N <- st$N
+  meta <- if (!details && cdid_are_default_fns(c("cp04_custom_if_budget", "cp04_budget")))
+    cdid_sel_get_if_meta(backend, B, links, "cp04_custom_if_meta") else NULL
+  if (is.null(meta)) {
+    pre <- cp04_custom_if_budget(backend, B, links, details)
+    link_names <- vapply(backend$links[links], `[[`, character(1L), "link_id")
+    if (!details && cdid_are_default_fns(c("cp04_custom_if_budget", "cp04_budget"))) {
+      cdid_sel_set_if_meta(backend, B, links, pre, link_names, "cp04_custom_if_meta")
+    }
+  } else {
+    pre <- meta$pre
+    link_names <- meta$link_names
+  }
+  # Issue #16: the native IF kernel is not eligibility-aware; a restricted
+  # backend replays the masked upstream rows and its eligible risk sets.
+  ref <- chained_backend_reference(backend)
+  if (!details && !chained_reference_restricted(ref) && is.null(backend$layout) && is.null(backend$pair_outcomes)) {
+    fast_if <- cdid_fast_sel_if_chunk(6L, backend, reader, NULL, ref, rows, links, scale, pre, link_names)
+    if (!is.null(fast_if)) {
+      out <- list(
+        rows = rows, id = st$id[rows], links = links, phi = fast_if$phi, scale = scale,
+        normalization_count = if (scale == "core") st$n_A else st$N,
+        diagnostics = list(
+          n_callback_models = length(pre$tids),
+          n_upstream_coordinates = length(pre$uids),
+          output_entries_bound = pre$output,
+          concurrent_scratch_bound = pre$scratch,
+          work_ops_bound = pre$work
+        )
+      )
+      if (unname(cp04_payload(out)["entries"]) > pre$output)
+        cp04_abort("IF output bound underestimated.", "bound")
+      return(out)
+    }
+  }
   up <- if (length(pre$uids)) evaluate_selection_upstream_chunk(backend$selection_backend, backend$up_map, rows,
     pre$uids)$up else matrix(0, B, 0L)
   models <- vector("list", length(backend$treatments))

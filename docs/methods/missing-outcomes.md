@@ -352,7 +352,7 @@ The last three fits are therefore expected to target the effects, with different
 
 ---
 
-**Reading path, step 9 of 20** · Previous: [Choose IPW, OR or DR in an incomplete panel](../examples/treatment-choice.md) · Next: [Sampling information for the observation model](sampling-information.md)
+**Reading path, step 9 of 22** · Previous: [Choose IPW, OR or DR in an incomplete panel](../examples/treatment-choice.md) · Next: [Sampling information for the observation model](sampling-information.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -379,6 +379,8 @@ The last three fits are therefore expected to target the effects, with different
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](../examples/short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

@@ -27,7 +27,15 @@ reconstruction_choose_adjoint <- function(dense, cell_ids, cells, dense_entries)
     tilde_lambda = tilde_lambda[cids], group_ids = gids, tilde_nu = unname(tilde_nu[gids]))
   # Tiny catalogs may need fewer headers in their original representation.
   # Exact payload comparison changes storage only, never a fitted coefficient.
-  if (unname(cp04_payload(compact)["entries"]) < dense_entries) compact else dense
+  compact_entries <- if (identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+      cdid_are_default_fns(c("cp04_payload", "cp04_payload_native_kernel")) &&
+      is.null(attributes(tilde_lambda)) && is.null(attributes(tilde_nu)) &&
+      all(lengths(lapply(compact$tilde_nu, attributes)) == 0L)) {
+    112 + 2 * length(cids) + 10 * length(gids) + sum(lengths(compact$tilde_nu))
+  } else {
+    unname(cp04_payload(compact)["entries"])
+  }
+  if (compact_entries < dense_entries) compact else dense
 }
 
 # Sorted structural integer IDs permit bounded lookup without a dense map or

@@ -241,6 +241,21 @@ cpt_grid_for_cell <- function(cache, src, prep, xformla, ref, recipe, date_C) {
     if (!identical(x$status, "available")) 0 else length(x$Z) + length(x$distinct$z) +
       length(x$distinct$first) + length(x$distinct$map) + length(x$distinct$mult)
   }, numeric(1L)))
+  if (!dated && length(cache)) {
+    U <- cpt_grid_reference_rows(prep)
+    vars <- all.vars(xformla)
+    if (!length(vars) || (src$frame_supplied && all(vars %in% names(src$frame))) || all(U)) {
+      prev_idx <- which(vapply(cache, function(x) identical(x$source, "static") && identical(x$status, "available"), logical(1L)))
+      if (length(prev_idx)) {
+        prev <- cache[[prev_idx[1L]]]
+        cpt_grid_admit(src, ncol(prev$Z), prev$reference_rows, length(vars))
+        g <- list(status = "available", Z = prev$Z, columns = prev$columns, date = as.double(date_C),
+          source = "static", reference_rows = prev$reference_rows, key = key, distinct = prev$distinct)
+        cache[[key]] <- g
+        return(list(cache = cache, grid = g, key = key))
+      }
+    }
+  }
   g <- if (dated) cpt_grid_dated(src, ref, slot, ref$recipes$design_index[recipe]) else
     cpt_grid_static(src, xformla, cpt_grid_reference_rows(prep), date_C)
   g$key <- key

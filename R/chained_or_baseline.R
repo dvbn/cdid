@@ -30,6 +30,9 @@ or_baseline_visit <- function(reader, spec, ctrl, visit, reference = NULL, compl
   first <- st$cohort_start[spec$cohort]; last <- st$cohort_end[spec$cohort]
   for (start in seq.int(first, last, by = ctrl$max_chunk_rows)) {
     rows <- st$cohort_order[seq.int(start, min(last, start + ctrl$max_chunk_rows - 1))]
+    if (chained_reference_restricted(reference))
+      rows <- rows[chained_reference_eligible(reference, spec$reference, rows)]
+    if (!length(rows)) next
     hit <- if (is.null(panel)) cp04_pair_rows(reader, rows, spec$pair, TRUE) else
       or_baseline_complete_pair_rows(reader, panel, rows, spec$pair, TRUE)
     obs <- which(hit$S == 1)
@@ -123,6 +126,7 @@ or_baseline_complete_facts <- function(reader, recipe, records, specs, ctrl, ref
   cp04_budget(ctrl, c(reader$accounting$owned_entries, reader$accounting$borrowed_owner_entries,
     retained_external_entries, metadata_entries), scratch, c(external_work_ops, 64 * facts),
     8 * length(dates) + 1024, "complete-support facts")
+  if (!all(po$postings$date_count[dates] == po$n_a_units)) return(NULL)
   other_cols <- setdiff(used_cols, icpt_col)
   start <- 1
   while (start <= st$N) {
@@ -237,17 +241,20 @@ or_baseline_complete_record <- function(charges, complete, verification_scan = F
 or_baseline_native_cache <- new.env(parent = emptyenv())
 
 or_baseline_native_kernel <- function(name) {
+  syms <- gmm_require_native_dll()
+  owner <- environment(sys.function())
+  cache <- get0("or_baseline_native_cache", envir = owner, mode = "environment", inherits = FALSE)
+  hit <- if (is.environment(cache)) get0(name, envir = cache, inherits = FALSE) else NULL
+  if (is.list(hit) && identical(hit$owner, owner) &&
+      isTRUE(attr(syms, "calls")$C_gmm_sexp_aliases(hit$syms, syms))) {
+    return(hit$address)
+  }
   arity <- c(C_gmm_cp08_support_chunk = 12L, C_gmm_cp08_pair_rows = 9L, C_gmm_cp08_fit_pass1 = 15L,
     C_gmm_cp08_fit_pass2 = 15L, C_gmm_cp08_or_if_chunk = 17L, C_gmm_cp08_dr_if_prepare = 14L,
     C_gmm_cp08_dr_if_assemble = 17L, C_gmm_cp08_dr_treatment_batch = 19L,
     C_gmm_separate_complete_if = 12L, C_gmm_or_sparse_if = 11L,
     C_gmm_dr_sparse_prepare = 11L, C_gmm_dr_sparse_assemble = 7L,
     C_gmm_dr_separate_sparse_if = 12L)
-  syms <- gmm_require_native_dll()
-  owner <- environment(sys.function())
-  cache <- get0("or_baseline_native_cache", envir = owner, mode = "environment", inherits = FALSE)
-  hit <- if (is.environment(cache)) get0(name, envir = cache, inherits = FALSE) else NULL
-  if (is.list(hit) && identical(hit$owner, owner) && gmm_sexp_aliases(hit$syms, syms)) return(hit$address)
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- if (name %in% names(arity)) tryCatch(base::getNativeSymbolInfo(name, PACKAGE = dlls[["cdid"]]),
     error = function(e) NULL)
@@ -731,21 +738,42 @@ or_baseline_forcing <- function(recipe, fitted, supports, pools, N) {
   p <- length(fitted$keep); S <- length(supports)
   beta_total <- matrix(0, p, S); energy_total <- numeric(S)
   regressions <- fitted$regressions
+  use_fast <- cdid_are_default_fns(c("or_pooled_factor_moments", "cp04_finite"))
+  icpt <- isTRUE(recipe$intercept)
+  p_rec <- recipe$p
+  xi <- if (icpt) c(1L, 1L + fitted$keep) else fitted$keep
+  y_col <- p_rec + 1L + icpt
   for (b in seq_along(pools)) {
     sids <- pools[[b]]$support_ids; rec <- regressions[[b]]
     fa <- fe <- numeric(length(sids)); fb <- matrix(0, p, length(sids))
+    neg_ab <- c(if (icpt) -rec$alpha, -fitted$beta)
     for (k in seq_along(sids)) {
       u <- supports[[sids[k]]]
-      m <- or_pooled_factor_moments(recipe, u$design$summary, fitted$keep, rec$alpha,
-        fitted$beta)
+      if (use_fast) {
+        F_mat <- if (icpt) u$design$summary$raw$factor else u$design$summary$factor
+        if (nrow(F_mat) > 0L) {
+          F_x <- F_mat[, xi, drop = FALSE]
+          rho <- F_mat[, y_col] + as.vector(F_x %*% neg_ab)
+          g_vec <- as.vector(crossprod(F_x, rho))
+          e2_val <- sum(rho^2)
+        } else {
+          g_vec <- numeric(length(xi)); e2_val <- 0
+        }
+      } else {
+        m <- or_pooled_factor_moments(recipe, u$design$summary, fitted$keep, rec$alpha,
+          fitted$beta)
+        g_vec <- m$g; e2_val <- m$e2
+      }
       scale <- if (u$rate > ipw_clip_eps) -1 / (N * u$rate^2) else 0
-      if (recipe$intercept) {
-        fa[k] <- scale * m$g[1L]
-        fb[, k] <- scale * (m$g[-1L] - rec$mean_d * m$g[1L])
-      } else fb[, k] <- scale * m$g
-      fe[k] <- scale * m$e2
+      if (icpt) {
+        fa[k] <- scale * g_vec[1L]
+        fb[, k] <- scale * (g_vec[-1L] - rec$mean_d * g_vec[1L])
+      } else fb[, k] <- scale * g_vec
+      fe[k] <- scale * e2_val
     }
-    cp04_finite(c(fa, fb, fe), "baseline regression rate forcing")
+    if (!use_fast || !is.finite(sum(fa) + sum(fb) + sum(fe))) {
+      cp04_finite(c(fa, fb, fe), "baseline regression rate forcing")
+    }
     regressions[[b]]$forcing_alpha <- fa
     regressions[[b]]$forcing_beta <- fb
     regressions[[b]]$forcing_energy <- fe
@@ -776,23 +804,43 @@ or_baseline_fit_charges <- function(S, G, L, p, N, n_A, B, metadata, header, nam
 or_baseline_assemble <- function(recipe, supports, pools, links, rank_tol, N, visit_rows) {
   blocks <- lapply(seq_along(pools), function(b) list(name = paste0("b", b),
     support_ids = pools[[b]]$support_ids, L = pools[[b]]$transitions))
-  fitted <- or_pooled_fit_blocks(recipe, lapply(supports, function(u)
-      list(summary = u$design$summary, scale = u$v, colmax = u$design$colmax)),
-    blocks, lapply(links, function(l) list(regression = l$regression,
-      support_id = l$support_id)), rank_tol, N, visit_rows, "baseline")
+  fitted <- cdid_fast_or_baseline_pooled_fit(recipe, supports, blocks, rank_tol, N)
+  if (is.null(fitted)) {
+    fitted <- or_pooled_fit_blocks(recipe, lapply(supports, function(u)
+        list(summary = u$design$summary, scale = u$v, colmax = u$design$colmax)),
+      blocks, lapply(links, function(l) list(regression = l$regression,
+        support_id = l$support_id)), rank_tol, N, visit_rows, "baseline")
+  }
   forcing <- or_baseline_forcing(recipe, fitted, supports, pools, N)
+  use_fast <- cdid_are_default_fns(c("or_pooled_link_moments", "ipw_clip_floor", "cp04_finite"))
+  icpt <- isTRUE(recipe$intercept)
+  keep <- fitted$keep; beta_fit <- fitted$beta
   for (i in seq_along(links)) {
     l <- links[[i]]; u <- supports[[l$support_id]]; rec <- forcing$regressions[[l$regression]]
-    m <- or_pooled_link_moments(recipe, fitted$keep, u$pair_mass, u$design$sumZ,
-      u$design$sumY, rec$L, rec$alpha, fitted$beta)
-    rc <- ipw_clip_floor(u$rate); ra <- u$rate > ipw_clip_eps
+    if (use_fast) {
+      mass <- u$pair_mass; sumZ_k <- u$design$sumZ[keep]; sumY <- u$design$sumY
+      fitted_val <- (if (icpt) rec$alpha * mass else 0) + rec$L * sum(sumZ_k * beta_fit)
+      mu_val <- (sumY - fitted_val) / mass
+      c_val <- rec$L * sumZ_k / mass
+      res_val <- sumY - fitted_val - mu_val * mass
+      ra <- u$rate > ipw_clip_eps
+      rc <- if (ra) u$rate else ipw_clip_eps
+    } else {
+      m <- or_pooled_link_moments(recipe, keep, u$pair_mass, u$design$sumZ,
+        u$design$sumY, rec$L, rec$alpha, beta_fit)
+      mu_val <- m$mu; c_val <- m$c; res_val <- m$residual
+      rc <- ipw_clip_floor(u$rate); ra <- u$rate > ipw_clip_eps
+    }
     d <- u$pair_mass / (N * rc)
+    rl <- if (ra) -res_val / (N * rc^2 * d) else 0
     # Retain the ratio's own rate loading (zero at the root), including centering;
     # a floored rate (r <= eps) has no rate path.
-    links[[i]] <- c(l, list(mu = m$mu, c = m$c, d = d, numerator = m$mu * d,
-      rate_loading = if (ra) -m$residual / (N * rc^2 * d) else 0,
+    links[[i]] <- c(l, list(mu = mu_val, c = c_val, d = d, numerator = mu_val * d,
+      rate_loading = rl,
       log_weight_derivative = if (ra) -1 / rc else 0))
-    cp04_finite(c(m$mu, m$c, d, links[[i]]$rate_loading), "baseline link moments")
+    if (!use_fast || !is.finite(mu_val + sum(c_val) + d + rl)) {
+      cp04_finite(c(mu_val, c_val, d, rl), "baseline link moments")
+    }
   }
   beta <- fitted$beta; names(beta) <- fitted$basis$kept_columns
   list(supports = lapply(supports, function(u) list(rate = u$rate, v = u$v, massA = u$massA,
@@ -840,25 +888,66 @@ or_baseline_catalog <- function(records, cohorts, recipe, reference = NULL) {
   links <- vector("list", L)
   pair_bucket <- new.env(hash = TRUE, parent = emptyenv())
   pool_bucket <- new.env(hash = TRUE, parent = emptyenv())
+  use_fast_key <- !dated && cdid_are_default_fns("or_baseline_catalog_key")
+  n_coh_grid <- length(cohorts)
+  pair_grid_cat <- if (use_fast_key) integer(256L * 256L) else NULL
+  pool_grid_cat <- if (use_fast_key && L > 0L && n_coh_grid > 0L && n_coh_grid <= 256L) integer(L * n_coh_grid) else NULL
   for (ell in seq_len(L)) {
     x <- records[[ell]]
-    kp <- or_baseline_catalog_key(x$pair$s_calendar_index, x$pair$t_calendar_index)
-    cand <- get0(kp, envir = pair_bucket, inherits = FALSE)
     pi <- 0L
-    for (ci in cand) if (identical(pairs[[ci]], x$pair)) { pi <- ci; break }
+    si_x <- x$pair$s_calendar_index
+    ti_x <- x$pair$t_calendar_index
+    has_pgrid <- use_fast_key && length(si_x) == 1L && length(ti_x) == 1L &&
+      !is.na(si_x) && !is.na(ti_x) && si_x >= 1L && si_x <= 256L && ti_x >= 1L && ti_x <= 256L
+    if (has_pgrid) {
+      p_gidx <- (as.integer(si_x) - 1L) * 256L + as.integer(ti_x)
+      ci0 <- pair_grid_cat[p_gidx]
+      if (ci0 > 0L && identical(pairs[[ci0]], x$pair)) {
+        pi <- ci0
+      } else if (ci0 == 0L) {
+        pi <- length(pairs) + 1L
+        pairs[[pi]] <- x$pair
+        pair_grid_cat[p_gidx] <- pi
+      }
+    }
     if (!pi) {
-      pairs[[length(pairs) + 1L]] <- x$pair; pi <- length(pairs)
-      if (pi) assign(kp, c(cand, pi), envir = pair_bucket)
+      kp <- if (use_fast_key) paste0(si_x, ":", ti_x) else
+        or_baseline_catalog_key(si_x, ti_x)
+      cand <- get0(kp, envir = pair_bucket, inherits = FALSE)
+      if (has_pgrid && ci0 > 0L && !(ci0 %in% cand)) cand <- c(ci0, cand)
+      for (ci in cand) if (identical(pairs[[ci]], x$pair)) { pi <- ci; break }
+      if (!pi) {
+        pairs[[length(pairs) + 1L]] <- x$pair; pi <- length(pairs)
+        if (pi) assign(kp, c(cand, pi), envir = pair_bucket)
+      }
     }
     spec <- if (dated) list(pair_id = pi, cohorts = x$controls, reference = x$reference) else
       list(pair_id = pi, cohorts = x$controls)
-    kq <- or_baseline_catalog_key(pi, x$controls, if (dated) x$reference else NULL)
-    cand <- get0(kq, envir = pool_bucket, inherits = FALSE)
     ri <- 0L
-    for (ci in cand) if (identical(pools[[ci]], spec)) { ri <- ci; break }
+    ctrl_x <- x$controls
+    has_qgrid <- !is.null(pool_grid_cat) && length(ctrl_x) == 1L && !is.na(ctrl_x) &&
+      ctrl_x >= 1L && ctrl_x <= n_coh_grid && pi >= 1L && pi <= L
+    if (has_qgrid) {
+      q_gidx <- (pi - 1L) * n_coh_grid + as.integer(ctrl_x)
+      q_ci0 <- pool_grid_cat[q_gidx]
+      if (q_ci0 > 0L && identical(pools[[q_ci0]], spec)) {
+        ri <- q_ci0
+      } else if (q_ci0 == 0L) {
+        ri <- length(pools) + 1L
+        pools[[ri]] <- spec
+        pool_grid_cat[q_gidx] <- ri
+      }
+    }
     if (!ri) {
-      pools[[length(pools) + 1L]] <- spec; ri <- length(pools)
-      assign(kq, c(cand, ri), envir = pool_bucket)
+      kq <- if (use_fast_key && length(ctrl_x) == 1L) paste0(pi, ":", ctrl_x) else
+        or_baseline_catalog_key(pi, ctrl_x, if (dated) x$reference else NULL)
+      cand <- get0(kq, envir = pool_bucket, inherits = FALSE)
+      if (has_qgrid && q_ci0 > 0L && !(q_ci0 %in% cand)) cand <- c(q_ci0, cand)
+      for (ci in cand) if (identical(pools[[ci]], spec)) { ri <- ci; break }
+      if (!ri) {
+        pools[[length(pools) + 1L]] <- spec; ri <- length(pools)
+        assign(kq, c(cand, ri), envir = pool_bucket)
+      }
     }
     links[[ell]] <- list(regression = as.integer(ri), pair_id = as.integer(pi),
       cohort = x$target, link_id = x$link_id, source_functional_key = x$source_functional_key,
@@ -866,66 +955,168 @@ or_baseline_catalog <- function(records, cohorts, recipe, reference = NULL) {
     if (dated) links[[ell]]$reference <- x$reference
   }
   pair_bucket <- pool_bucket <- NULL
-  transitions <- vapply(pairs, or_pooled_transitions, numeric(1), route = "baseline")
-  po <- order(vapply(pairs, function(x) as.double(x$s_calendar_index), numeric(1)),
-    vapply(pairs, function(x) as.double(x$t_calendar_index), numeric(1)))
+  n_pairs <- length(pairs); n_coh <- length(cohorts)
+  fast_tr_ok <- cdid_are_default_fns("or_pooled_transitions") && n_pairs > 0L
+  if (fast_tr_ok) {
+    p_s <- p_t <- numeric(n_pairs)
+    for (pi in seq_len(n_pairs)) {
+      pr_i <- pairs[[pi]]
+      si <- pr_i$s_calendar_index; ti <- pr_i$t_calendar_index
+      if (!is.numeric(si) || !is.numeric(ti) || is.object(si) || is.object(ti) ||
+          !is.null(dim(si)) || !is.null(dim(ti)) || length(si) != 1L || length(ti) != 1L ||
+          !is.finite(si) || !is.finite(ti) || si != floor(si) || ti != floor(ti) || ti <= si) {
+        fast_tr_ok <- FALSE
+        break
+      }
+      p_s[pi] <- as.double(si); p_t[pi] <- as.double(ti)
+    }
+  }
+  if (fast_tr_ok) {
+    transitions <- p_t - p_s
+    po <- order(p_s, p_t)
+  } else {
+    transitions <- vapply(pairs, or_pooled_transitions, numeric(1), route = "baseline")
+    po <- order(vapply(pairs, function(x) as.double(x$s_calendar_index), numeric(1)),
+      vapply(pairs, function(x) as.double(x$t_calendar_index), numeric(1)))
+  }
   pairs <- pairs[po]; transitions <- transitions[po]; pair_map <- match(seq_along(po), po)
-  for (i in seq_along(pools)) pools[[i]]$pair_id <- as.integer(pair_map[pools[[i]]$pair_id])
-  qo <- order(vapply(pools, function(s) paste(sprintf("%012d", c(s$pair_id, s$cohorts, s$reference)),
-    collapse = "|"), character(1)), method = "radix")
+  n_pools <- length(pools)
+  single_coh_pools <- !dated
+  q_pid <- integer(n_pools)
+  q_c1 <- integer(n_pools)
+  for (i in seq_len(n_pools)) {
+    np <- pair_map[pools[[i]]$pair_id]
+    pools[[i]]$pair_id <- np
+    q_pid[i] <- np
+    co_i <- pools[[i]]$cohorts
+    if (single_coh_pools) {
+      if (length(co_i) == 1L) q_c1[i] <- as.integer(co_i[1L]) else single_coh_pools <- FALSE
+    }
+  }
+  qo <- if (single_coh_pools) {
+    order(q_pid, q_c1)
+  } else {
+    order(vapply(pools, function(s) paste(sprintf("%012d", c(s$pair_id, s$cohorts, s$reference)),
+      collapse = "|"), character(1)), method = "radix")
+  }
   pools <- pools[qo]; pool_map <- match(seq_along(qo), qo)
   for (i in seq_along(links)) {
     links[[i]]$pair_id <- as.integer(pair_map[links[[i]]$pair_id])
     links[[i]]$regression <- as.integer(pool_map[links[[i]]$regression])
   }
-  # Reverse pair -> pool / link index lists (pool and link order), so each
-  # pair's reference and cohort unions read only its own pools and links.
-  pools_of_pair <- split(seq_along(pools), factor(vapply(pools, function(s) as.integer(s$pair_id), integer(1)),
-    levels = seq_along(pairs)))
-  links_of_pair <- split(seq_along(links), factor(vapply(links, function(l) as.integer(l$pair_id), integer(1)),
-    levels = seq_along(pairs)))
   specs <- list()
-  support_index <- new.env(hash = TRUE, parent = emptyenv())
-  support_key <- function(pi, k, r) paste(as.character(c(pi, k, r)), collapse = ":")
-  for (pi in seq_along(pairs)) {
-    pidx <- pools_of_pair[[pi]]; lidx <- links_of_pair[[pi]]
-    refs <- if (dated) sort(unique(c(unlist(lapply(pools[pidx], `[[`, "reference")),
-      unlist(lapply(links[lidx], `[[`, "reference"))))) else NA_integer_
-    for (r in refs) {
-      pr_idx <- if (dated) pidx[vapply(pools[pidx], function(s) s$reference == r, logical(1))] else pidx
-      lr_idx <- if (dated) lidx[vapply(links[lidx], function(s) s$reference == r, logical(1))] else lidx
-      used <- sort(unique(c(unlist(lapply(pools[pr_idx], `[[`, "cohorts")),
-        unlist(lapply(links[lr_idx], `[[`, "cohort")))))
-      for (k in used) {
-        sp <- list(pair = pairs[[pi]], pair_id = pi, cohort = k, transitions = transitions[pi])
-        if (dated) sp$reference <- r
-        specs[[length(specs) + 1L]] <- sp
-        key <- support_key(pi, k, if (dated) r)
-        # A repeated key is never a candidate: the original scan decides it.
-        assign(key, if (exists(key, envir = support_index, inherits = FALSE)) NA_integer_ else length(specs),
-          envir = support_index)
+  if (!dated && n_pairs > 0L && n_coh > 0L) {
+    used_mat <- matrix(FALSE, n_pairs, n_coh)
+    all_in_range <- TRUE
+    for (i in seq_len(n_pools)) {
+      s <- pools[[i]]
+      cs <- s$cohorts
+      if (!is.integer(cs) || anyNA(cs) || any(cs < 1L | cs > n_coh)) { all_in_range <- FALSE; break }
+      used_mat[s$pair_id, cs] <- TRUE
+    }
+    if (all_in_range) {
+      for (i in seq_along(links)) {
+        l <- links[[i]]
+        ck <- l$cohort
+        if (!is.integer(ck) || length(ck) != 1L || is.na(ck) || ck < 1L || ck > n_coh) { all_in_range <- FALSE; break }
+        used_mat[l$pair_id, ck] <- TRUE
       }
     }
-  }
-  find_support <- function(pi, k, r = NULL) which(vapply(specs, function(s)
-    s$pair_id == pi && s$cohort == k && (!dated || s$reference == r), logical(1)))
-  support_of <- function(pi, k, r = NULL) {
-    cand <- get0(support_key(pi, k, r), envir = support_index, inherits = FALSE)
-    if (length(cand) == 1L && !is.na(cand)) {
-      s <- specs[[cand]]
-      if (isTRUE(s$pair_id == pi && s$cohort == k && (!dated || s$reference == r))) return(cand)
+    sup_mat <- matrix(0L, n_pairs, n_coh)
+    if (all_in_range) {
+      for (pi in seq_len(n_pairs)) {
+        used <- which(used_mat[pi, ])
+        pr_pi <- pairs[[pi]]
+        tr_pi <- transitions[pi]
+        for (k in used) {
+          sp <- list(pair = pr_pi, pair_id = pi, cohort = k, transitions = tr_pi)
+          idx_sp <- length(specs) + 1L
+          specs[[idx_sp]] <- sp
+          sup_mat[pi, k] <- if (sup_mat[pi, k] == 0L) idx_sp else -1L
+        }
+      }
+    } else {
+      pools_of_pair <- split(seq_along(pools), factor(vapply(pools, function(s) as.integer(s$pair_id), integer(1)),
+        levels = seq_along(pairs)))
+      links_of_pair <- split(seq_along(links), factor(vapply(links, function(l) as.integer(l$pair_id), integer(1)),
+        levels = seq_along(pairs)))
+      for (pi in seq_len(n_pairs)) {
+        pidx <- pools_of_pair[[pi]]; lidx <- links_of_pair[[pi]]
+        used <- sort(unique(c(unlist(lapply(pools[pidx], `[[`, "cohorts"), use.names = FALSE),
+          unlist(lapply(links[lidx], `[[`, "cohort"), use.names = FALSE))))
+        for (k in used) {
+          sp <- list(pair = pairs[[pi]], pair_id = pi, cohort = k, transitions = transitions[pi])
+          specs[[length(specs) + 1L]] <- sp
+          if (is.integer(k) && !is.na(k) && k >= 1L && k <= n_coh) {
+            sup_mat[pi, k] <- if (sup_mat[pi, k] == 0L) length(specs) else -1L
+          }
+        }
+      }
     }
-    find_support(pi, k, r)
+    find_support <- function(pi, k, r = NULL) which(vapply(specs, function(s)
+      s$pair_id == pi && s$cohort == k, logical(1)))
+    support_of <- function(pi, k, r = NULL) {
+      if (is.integer(pi) && length(pi) == 1L && !is.na(pi) && pi >= 1L && pi <= n_pairs &&
+          is.integer(k) && length(k) == 1L && !is.na(k) && k >= 1L && k <= n_coh) {
+        cand <- sup_mat[pi, k]
+        if (cand > 0L) {
+          s <- specs[[cand]]
+          if (isTRUE(s$pair_id == pi && s$cohort == k)) return(cand)
+        }
+      }
+      find_support(pi, k, r)
+    }
+  } else {
+    pools_of_pair <- split(seq_along(pools), factor(vapply(pools, function(s) as.integer(s$pair_id), integer(1)),
+      levels = seq_along(pairs)))
+    links_of_pair <- split(seq_along(links), factor(vapply(links, function(l) as.integer(l$pair_id), integer(1)),
+      levels = seq_along(pairs)))
+    support_index <- new.env(hash = TRUE, parent = emptyenv())
+    support_key <- function(pi, k, r) paste(as.character(c(pi, k, r)), collapse = ":")
+    for (pi in seq_along(pairs)) {
+      pidx <- pools_of_pair[[pi]]; lidx <- links_of_pair[[pi]]
+      refs <- if (dated) sort(unique(c(unlist(lapply(pools[pidx], `[[`, "reference")),
+        unlist(lapply(links[lidx], `[[`, "reference"))))) else NA_integer_
+      for (r in refs) {
+        pr_idx <- if (dated) pidx[vapply(pools[pidx], function(s) s$reference == r, logical(1))] else pidx
+        lr_idx <- if (dated) lidx[vapply(links[lidx], function(s) s$reference == r, logical(1))] else lidx
+        used <- sort(unique(c(unlist(lapply(pools[pr_idx], `[[`, "cohorts")),
+          unlist(lapply(links[lr_idx], `[[`, "cohort")))))
+        for (k in used) {
+          sp <- list(pair = pairs[[pi]], pair_id = pi, cohort = k, transitions = transitions[pi])
+          if (dated) sp$reference <- r
+          specs[[length(specs) + 1L]] <- sp
+          key <- support_key(pi, k, if (dated) r)
+          # A repeated key is never a candidate: the original scan decides it.
+          assign(key, if (exists(key, envir = support_index, inherits = FALSE)) NA_integer_ else length(specs),
+            envir = support_index)
+        }
+      }
+    }
+    find_support <- function(pi, k, r = NULL) which(vapply(specs, function(s)
+      s$pair_id == pi && s$cohort == k && (!dated || s$reference == r), logical(1)))
+    support_of <- function(pi, k, r = NULL) {
+      cand <- get0(support_key(pi, k, r), envir = support_index, inherits = FALSE)
+      if (length(cand) == 1L && !is.na(cand)) {
+        s <- specs[[cand]]
+        if (isTRUE(s$pair_id == pi && s$cohort == k && (!dated || s$reference == r))) return(cand)
+      }
+      find_support(pi, k, r)
+    }
   }
   for (i in seq_along(pools)) {
     s <- pools[[i]]; pr <- pairs[[s$pair_id]]
-    pools[[i]]$support_ids <- vapply(s$cohorts, function(k)
-      as.integer(support_of(s$pair_id, k, s$reference)), integer(1))
+    pools[[i]]$support_ids <- if (length(s$cohorts) == 1L) {
+      as.integer(support_of(s$pair_id, s$cohorts[1L], s$reference))
+    } else {
+      vapply(s$cohorts, function(k) as.integer(support_of(s$pair_id, k, s$reference)), integer(1))
+    }
     pools[[i]]$transitions <- transitions[s$pair_id]
     pools[[i]]$block_key <- if (dated) paste0("pair:", pr$s, "-", pr$t, "|pool:",
       paste(cohorts[s$cohorts], collapse = ","), "|reference-design:L_e*z(C^r)|",
       reference$recipes$key[s$reference], "|weights:W_g/r") else paste0("pair:", pr$s, "-", pr$t, "|pool:",
-      paste(cohorts[s$cohorts], collapse = ","), "|", recipe$key, "|weights:w/r")
+      if (length(s$cohorts) == 1L) cohorts[s$cohorts[1L]] else paste(cohorts[s$cohorts], collapse = ","),
+      "|", recipe$key, "|weights:w/r")
   }
   for (i in seq_along(links)) links[[i]]$support_id <- as.integer(
     support_of(links[[i]]$pair_id, links[[i]]$cohort, links[[i]]$reference))
@@ -934,6 +1125,8 @@ or_baseline_catalog <- function(records, cohorts, recipe, reference = NULL) {
 }
 
 validate_or_baseline_backend <- function(backend) {
+  if (!missing(backend) && cdid_check_validated_backend(backend, "or_baseline_backend"))
+    return(invisible(backend))
   if (!inherits(backend, "cdid_or_baseline") ||
       !ipw_owner_seal_ok(backend, "or_baseline_backend"))
     or_baseline_abort("Expected the immutable private baseline OR backend.", "integrity")
@@ -943,6 +1136,11 @@ validate_or_baseline_backend <- function(backend) {
   validate_cp04_reader(reader)
   if (!is.null(backend$reference_ref)) validate_chained_reference_reader(or_baseline_reference(backend))
   if (!is.null(backend$complete_support)) or_baseline_complete_panel(reader, backend$complete_support)
+  if (is.null(backend$reference_ref) && is.null(backend$complete_support)) {
+    cdid_record_validated_backend(backend, "or_baseline_backend", reader,
+      get("frame_owner", reader$frame_ref, inherits = FALSE),
+      get("panel_owner", reader$panel_ref, inherits = FALSE), reader$frame_ref)
+  }
   invisible(backend)
 }
 
@@ -956,7 +1154,16 @@ or_baseline_payload_append <- function(state, records, abort = or_baseline_abort
   n <- length(records)
   if (!is.list(records) || n != state$n + 1L)
     abort("Catalog metadata must be charged one appended record at a time.", "integrity")
-  state$records <- state$records + cp04_payload(records[[n]])
+  fk_pay <- attr(state, "fk_pay", exact = TRUE)
+  if (is.null(fk_pay) && n == 1L && is.null(attributes(records)) &&
+      exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(c("cp04_payload", "cp04_payload_native_kernel"))) {
+    fk_pay <- cdid_fast_kernel("C_gmm_cp08_payload")
+    if (!is.null(fk_pay)) attr(state, "fk_pay") <- fk_pay
+  }
+  rec_n <- records[[n]]
+  pay_n <- if (!is.null(fk_pay)) fk_pay(rec_n, TRUE, environment()) else cp04_payload(rec_n)
+  state$records <- state$records + pay_n
   state$n <- n
   total <- c(entries = n + 8, char_bytes = 0) + state$records
   if (!is.null(attributes(records))) total <- total + cp04_payload(attributes(records), FALSE)
@@ -965,7 +1172,15 @@ or_baseline_payload_append <- function(state, records, abort = or_baseline_abort
 }
 
 or_baseline_payload_verify <- function(state, records, abort = or_baseline_abort) {
-  if (!identical(state$n, length(records)) || !identical(state$total, cp04_payload(records)))
+  if (!identical(state$n, length(records)))
+    abort("Incremental catalog metadata charge disagrees with its recursive payload.", "integrity")
+  fk_pay <- attr(state, "fk_pay", exact = TRUE)
+  if (is.null(fk_pay) && exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(c("cp04_payload", "cp04_payload_native_kernel"))) {
+    fk_pay <- cdid_fast_kernel("C_gmm_cp08_payload")
+  }
+  actual <- if (!is.null(fk_pay)) fk_pay(records, TRUE, environment()) else cp04_payload(records)
+  if (!identical(state$total, actual))
     abort("Incremental catalog metadata charge disagrees with its recursive payload.", "integrity")
   invisible(state$total)
 }
@@ -1064,53 +1279,106 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
   cp04_budget(ctrl, c(base, header), header, c(external_work_ops, 128 * L * L * (J + 1)), header,
     "baseline OR metadata")
   records <- list(); charge <- list(n = 0L, records = c(entries = 0, char_bytes = 0))
-  for (ell in seq_len(L)) {
-    if (is.null(desc)) {
-      v <- link_views[[ell]]
-      validate_ipw_link_view(v, frame_owner = frame)
-      source <- v$functional_key
-    } else {
-      v <- desc[[ell]]
-      source <- v$functional_key
-    }
-    if (!gmm_scalar_character(source) || !startsWith(source, "cmpcat:"))
-      or_baseline_abort("Baseline OR requires the supplied comparison-catalog functional key.")
-    key_bytes <- nchar(source, type = "bytes")
-    cp04_budget(ctrl, c(base, header), header + 16 * key_bytes,
-      c(external_work_ops, 128 * L * L * (J + 1) + 64 * key_bytes), header + 16 * key_bytes,
-      "baseline catalog key")
-    if (is.null(desc)) {
-      if (!is.null(v$candidates) || !is.null(v$loading_beta_candidate))
-        or_baseline_abort("Legacy nuisance candidates are unsupported.")
-      if (!is.null(v$nuisance_ref)) {
-        nv <- get("nuisance_view", v$nuisance_ref, inherits = FALSE)
-        if (!isTRUE(v$nuisance_mask_verified) || !identical(nv$defining_pair, v$pair))
-          or_baseline_abort("Cross-pair or unverified nuisance sharing is unsupported.")
-      }
-      g <- v$cohorts$g; K <- v$cohorts$K
-    } else {
-      g <- link_views$g; K <- link_views$K
-    }
-    target <- match(g, st$cohorts)
-    control_cohorts <- match(sort(K, method = "radix"), st$cohorts)
-    if (anyNA(c(target, control_cohorts)))
+  fast_lv_ok <- is.null(desc) && cdid_fast_validate_link_views(link_views, frame)
+  fast_rec_ok <- is.null(reference) &&
+    ctrl$max_retained_entries >= 1e7 && ctrl$max_matrix_entries >= 1e7 &&
+    ctrl$max_work_ops >= 1e7 && ctrl$max_output_entries >= 1e7 &&
+    base + 2 * header + 4096 * L < ctrl$max_retained_entries &&
+    base + 2 * header + 4096 * L < ctrl$max_matrix_entries &&
+    header + 4096 * L < ctrl$max_output_entries &&
+    external_work_ops + 256 * L * L * (J + 1) + 65536 * L < ctrl$max_work_ops &&
+    cdid_are_default_fns(c("or_baseline_payload_append", "or_baseline_payload_verify",
+                           "cp04_payload", "cp04_budget"))
+  fk_prefix <- if (separate) "cmpcat:OR-baseline-separate-slope-WLS|" else "cmpcat:OR-baseline-shared-slope-WLS|"
+  if (fast_rec_ok) {
+    records <- vector("list", L)
+    desc_target <- if (!is.null(desc)) match(link_views$g, st$cohorts) else NULL
+    desc_ctrl <- if (!is.null(desc)) {
+      if (length(link_views$K) == 1L) match(link_views$K, st$cohorts) else match(sort(link_views$K, method = "radix"), st$cohorts)
+    } else NULL
+    if (!is.null(desc) && anyNA(c(desc_target, desc_ctrl))) {
       or_baseline_abort("Cohorts must belong to the actual common frame.", "support")
-    records[[ell]] <- list(pair = v$pair, target = target, controls = control_cohorts,
-      link_id = v$link_id, source_functional_key = source,
-      functional_key = paste0("cmpcat:OR-baseline-shared-slope-WLS|", substring(source, 8L)))
-    if (separate) records[[ell]]$functional_key <- paste0(
-      "cmpcat:OR-baseline-separate-slope-WLS|", substring(source, 8L))
-    if (!is.null(reference)) {
-      records[[ell]]$reference <- reference$view_recipe[ell]
-      records[[ell]]$functional_key <- paste0(records[[ell]]$functional_key, "|reference:",
-        reference$recipes$key[reference$view_recipe[ell]])
     }
-    charge <- or_baseline_payload_append(charge, records)
-    cp04_budget(ctrl, c(base, header), header + charge$total["entries"],
-      c(external_work_ops, 128 * L * L * (J + 1) + 64 * charge$total["char_bytes"]),
-      header + charge$total["entries"], "baseline catalog metadata")
+    for (ell in seq_len(L)) {
+      if (is.null(desc)) {
+        v <- link_views[[ell]]
+        if (!fast_lv_ok) validate_ipw_link_view(v, frame_owner = frame)
+        source <- v$functional_key
+      } else {
+        v <- desc[[ell]]
+        source <- v$functional_key
+      }
+      if (!gmm_scalar_character(source) || !startsWith(source, "cmpcat:"))
+        or_baseline_abort("Baseline OR requires the supplied comparison-catalog functional key.")
+      if (is.null(desc)) {
+        if (!is.null(v$candidates) || !is.null(v$loading_beta_candidate))
+          or_baseline_abort("Legacy nuisance candidates are unsupported.")
+        if (!is.null(v$nuisance_ref)) {
+          nv <- get("nuisance_view", v$nuisance_ref, inherits = FALSE)
+          if (!isTRUE(v$nuisance_mask_verified) || !identical(nv$defining_pair, v$pair))
+            or_baseline_abort("Cross-pair or unverified nuisance sharing is unsupported.")
+        }
+        g <- v$cohorts$g; K <- v$cohorts$K
+        target <- match(g, st$cohorts)
+        control_cohorts <- if (length(K) == 1L) match(K, st$cohorts) else match(sort(K, method = "radix"), st$cohorts)
+        if (anyNA(c(target, control_cohorts)))
+          or_baseline_abort("Cohorts must belong to the actual common frame.", "support")
+      } else {
+        target <- desc_target; control_cohorts <- desc_ctrl
+      }
+      records[[ell]] <- list(pair = v$pair, target = target, controls = control_cohorts,
+        link_id = v$link_id, source_functional_key = source,
+        functional_key = paste0(fk_prefix, substring(source, 8L)))
+    }
+  } else {
+    for (ell in seq_len(L)) {
+      if (is.null(desc)) {
+        v <- link_views[[ell]]
+        if (!fast_lv_ok) validate_ipw_link_view(v, frame_owner = frame)
+        source <- v$functional_key
+      } else {
+        v <- desc[[ell]]
+        source <- v$functional_key
+      }
+      if (!gmm_scalar_character(source) || !startsWith(source, "cmpcat:"))
+        or_baseline_abort("Baseline OR requires the supplied comparison-catalog functional key.")
+      key_bytes <- nchar(source, type = "bytes")
+      cp04_budget(ctrl, c(base, header), header + 16 * key_bytes,
+        c(external_work_ops, 128 * L * L * (J + 1) + 64 * key_bytes), header + 16 * key_bytes,
+        "baseline catalog key")
+      if (is.null(desc)) {
+        if (!is.null(v$candidates) || !is.null(v$loading_beta_candidate))
+          or_baseline_abort("Legacy nuisance candidates are unsupported.")
+        if (!is.null(v$nuisance_ref)) {
+          nv <- get("nuisance_view", v$nuisance_ref, inherits = FALSE)
+          if (!isTRUE(v$nuisance_mask_verified) || !identical(nv$defining_pair, v$pair))
+            or_baseline_abort("Cross-pair or unverified nuisance sharing is unsupported.")
+        }
+        g <- v$cohorts$g; K <- v$cohorts$K
+      } else {
+        g <- link_views$g; K <- link_views$K
+      }
+      target <- match(g, st$cohorts)
+      control_cohorts <- match(sort(K, method = "radix"), st$cohorts)
+      if (anyNA(c(target, control_cohorts)))
+        or_baseline_abort("Cohorts must belong to the actual common frame.", "support")
+      records[[ell]] <- list(pair = v$pair, target = target, controls = control_cohorts,
+        link_id = v$link_id, source_functional_key = source,
+        functional_key = paste0("cmpcat:OR-baseline-shared-slope-WLS|", substring(source, 8L)))
+      if (separate) records[[ell]]$functional_key <- paste0(
+        "cmpcat:OR-baseline-separate-slope-WLS|", substring(source, 8L))
+      if (!is.null(reference)) {
+        records[[ell]]$reference <- reference$view_recipe[ell]
+        records[[ell]]$functional_key <- paste0(records[[ell]]$functional_key, "|reference:",
+          reference$recipes$key[reference$view_recipe[ell]])
+      }
+      charge <- or_baseline_payload_append(charge, records)
+      cp04_budget(ctrl, c(base, header), header + charge$total["entries"],
+        c(external_work_ops, 128 * L * L * (J + 1) + 64 * charge$total["char_bytes"]),
+        header + charge$total["entries"], "baseline catalog metadata")
+    }
+    or_baseline_payload_verify(charge, records)
   }
-  or_baseline_payload_verify(charge, records)
   ids <- vapply(records, function(x) if (is.null(x$link_id)) "" else x$link_id, character(1))
   if (any(!nzchar(ids)) || anyDuplicated(ids))
     or_baseline_abort("Distinct nonempty link IDs required.")
@@ -1159,9 +1427,14 @@ fit_or_baseline <- function(reader, link_views, control, rank_tol, outcome_recip
   state <- if (is.null(complete)) {
     fixed_supports <- if (is.null(fixed)) NULL else or_separate_complete_supports(reader,
       specs, recipe, seq_along(recipe$columns), ctrl, fixed, scratch)
-    supports <- if (is.null(fixed_supports)) lapply(specs,
-      function(s) if (is.null(qr_buffer)) or_baseline_support(reader, s, recipe, ctrl, reference, complete) else
-        or_baseline_qr_buffered_support(reader, s, recipe, ctrl, qr_buffer$rows)) else fixed_supports$supports
+    supports <- if (!is.null(fixed_supports)) {
+      fixed_supports$supports
+    } else {
+      fast_sup <- if (is.null(reference)) cdid_fast_incomplete_or_supports(reader, specs, recipe, ctrl, qr_buffer, NULL) else NULL
+      if (!is.null(fast_sup)) fast_sup else lapply(specs,
+        function(s) if (is.null(qr_buffer)) or_baseline_support(reader, s, recipe, ctrl, reference, complete) else
+          or_baseline_qr_buffered_support(reader, s, recipe, ctrl, qr_buffer$rows))
+    }
     assemble <- if (separate) or_baseline_separate_assemble else or_baseline_assemble
     ans <- assemble(recipe, supports, pools, links, rank_tol, st$N,
       function(sid, visit) or_baseline_visit(reader, specs[[sid]], ctrl,
@@ -1322,14 +1595,33 @@ or_baseline_complete_if_charges <- function(backend, B, links, details, sets, J,
 evaluate_or_baseline_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE, plan = NULL) {
   validate_or_baseline_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
-  valid_index <- function(x, n) is.numeric(x) && !is.object(x) && is.null(dim(x)) &&
-    length(x) > 0L && all(is.finite(x)) && all(x == floor(x)) &&
-    all(x >= 1 & x <= n) && !anyDuplicated(x)
+  valid_index <- function(x, n) {
+    if (is.integer(x) && !is.object(x) && is.null(dim(x)) && length(x) > 0L && !anyNA(x)) {
+      return(min(x) >= 1L && max(x) <= n && !anyDuplicated(x))
+    }
+    is.numeric(x) && !is.object(x) && is.null(dim(x)) &&
+      length(x) > 0L && all(is.finite(x)) && all(x == floor(x)) &&
+      all(x >= 1 & x <= n) && !anyDuplicated(x)
+  }
   if (!valid_index(rows, st$N) || length(rows) > backend$control$max_chunk_rows ||
       !valid_index(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
       !is.character(scale) || length(scale) != 1L || is.na(scale) || !scale %in% c("frame", "core"))
     or_baseline_abort("Invalid explicit IF row/link batch, scale or details flag.")
-  pre <- or_baseline_if_budget(backend, length(rows), links, details)
+  use_fast_meta <- !details && !is.null(plan) && is.null(backend$reference_ref) && is.null(backend$complete_support) &&
+    is.null(backend$separate_complete) &&
+    cdid_are_default_fns(c("or_baseline_if_budget", "or_baseline_separate_if_budget", "cp04_budget"))
+  meta <- if (use_fast_meta) cdid_get_if_chunk_meta(backend, length(rows), links, "or_base_if_meta") else NULL
+  if (!is.null(meta)) {
+    pre <- meta$pre
+    link_names <- meta$link_names
+  } else {
+    pre <- or_baseline_if_budget(backend, length(rows), links, details)
+    link_names <- NULL
+    if (use_fast_meta) {
+      link_names <- vapply(backend$links[links], `[[`, character(1), "link_id")
+      cdid_set_if_chunk_meta(backend, length(rows), links, pre, link_names, "or_base_if_meta")
+    }
+  }
   if (or_baseline_separate(backend) && !details && !is.null(backend$separate_complete))
     return(if (is.null(plan)) or_separate_complete_if(backend, reader, rows, links, scale, pre) else
       separate_complete_native_if(backend, reader, rows, links, scale, pre, plan))
@@ -1338,7 +1630,7 @@ evaluate_or_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
   if (!or_baseline_separate(backend) && !details && !is.null(backend$complete_support))
     return(or_baseline_native_if_chunk(backend, reader, rows, links, scale, pre, plan))
   if (!details && !is.null(plan) && is.null(backend$reference_ref))
-    return(or_sparse_native_if(backend, reader, rows, links, scale, pre, plan))
+    return(or_sparse_native_if(backend, reader, rows, links, scale, pre, plan, link_names = link_names))
   B <- length(rows); frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   separate <- or_baseline_separate(backend)
   kept <- if (separate) backend$outcome_recipe$slope_index else
@@ -1356,6 +1648,8 @@ evaluate_or_baseline_if_chunk <- function(backend, rows, links, scale = "frame",
   for (j in seq_along(pre$sids)) {
     sid <- pre$sids[j]; s <- backend$support_specs[[sid]]; u <- backend$supports[[sid]]
     ix <- which(ci == s$cohort)
+    if (chained_reference_restricted(ref))
+      ix <- ix[chained_reference_eligible(ref, s$reference, rows[ix])]
     hit <- if (is.null(panel)) cp04_pair_rows(reader, rows[ix], s$pair, TRUE) else
       or_baseline_complete_pair_rows(reader, panel, rows[ix], s$pair, TRUE)
     obs <- ix[hit$S == 1]

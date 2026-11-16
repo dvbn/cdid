@@ -3,8 +3,8 @@
 # G = E'E = C'C, B = C V_r C', s = tr(B)/M, lambda = ridge_relative*s.
 # No ATT penalty, spectral clipping, automatic identity or rank repair.
 
-gmm_weighting_public_choices <- c("optimal", "identity", "two_step")
-gmm_weighting_canonical_choices <- c("optimal", "identity")
+gmm_weighting_public_choices <- c("optimal", "identity", "two_step", "within")
+gmm_weighting_canonical_choices <- c("optimal", "identity", "within")
 gmm_covariance_choices <- "tikhonov"
 gmm_covariance_tuning_names <- c("condition_trigger", "ridge_relative")
 
@@ -22,24 +22,26 @@ resolve_gmm_weighting_choice <- function(
       is.object(weighting) || !is.null(dim(weighting)) || length(weighting) < 1L ||
       anyNA(weighting) || any(!nzchar(weighting))) {
     error_fn(
-      paste0("`", arg, "` must be one of 'optimal', 'identity', or 'two_step'."),
+      paste0("`", arg, "` must be one of 'optimal', 'identity', 'two_step', or 'within'."),
       error_class
     )
   }
   if (length(weighting) > 1L) {
     if (identical(weighting, c("optimal", "identity")) ||
-        identical(weighting, c("optimal", "identity", "two_step"))) {
+        identical(weighting, c("optimal", "identity", "two_step")) ||
+        identical(weighting, c("optimal", "identity", "within")) ||
+        identical(weighting, c("optimal", "identity", "two_step", "within"))) {
       weighting <- weighting[1L]
     } else {
       error_fn(
-        paste0("`", arg, "` must be a single string ('optimal', 'identity', or 'two_step')."),
+        paste0("`", arg, "` must be a single string ('optimal', 'identity', 'two_step', or 'within')."),
         error_class
       )
     }
   }
   if (!weighting %in% gmm_weighting_public_choices) {
     error_fn(
-      paste0("`", arg, "` must be 'optimal', 'identity', or 'two_step'."),
+      paste0("`", arg, "` must be 'optimal', 'identity', 'two_step', or 'within'."),
       error_class
     )
   }
@@ -373,20 +375,21 @@ diagnose_gmm_transformed_covariance <- function(V, gram_info, provenance, strate
       c("cdid_gmm_pd_error", "cdid_gmm_covariance_error"))
   }
 
-  B <- if (gram_info$is_identity_gram) {
-    V
+  if (gram_info$is_identity_gram) {
+    B <- V
   } else {
-    gram_info$C %*% V %*% t(gram_info$C)
+    B <- gram_info$C %*% V %*% t(gram_info$C)
+    if (anyNA(B) || any(!is.finite(B))) {
+      cdid_gmm_abort(
+        "Transformed covariance `B = C V C'` contains nonfinite values.",
+        c("cdid_gmm_pd_error", "cdid_gmm_covariance_error")
+      )
+    }
+    B <- 0.5 * (B + t(B))
+    for (j in seq_len(L)) for (i in seq_len(j)) B[j, i] <- B[i, j]
   }
-  if (anyNA(B) || any(!is.finite(B))) {
-    cdid_gmm_abort(
-      "Transformed covariance `B = C V C'` contains nonfinite values.",
-      c("cdid_gmm_pd_error", "cdid_gmm_covariance_error")
-    )
-  }
-  for (j in seq_len(L)) for (i in seq_len(j)) B[j, i] <- B[i, j]
 
-  is_zero_cov <- all(V == 0.0) && all(B == 0.0)
+  is_zero_cov <- all(V == 0.0) && (gram_info$is_identity_gram || all(B == 0.0))
   eig <- tryCatch(eigen(B, symmetric = TRUE), error = function(e) NULL)
   if (is.null(eig) || anyNA(eig$values) || any(!is.finite(eig$values)) ||
       anyNA(eig$vectors) || any(!is.finite(eig$vectors))) {
@@ -406,7 +409,7 @@ diagnose_gmm_transformed_covariance <- function(V, gram_info, provenance, strate
   if (is_zero_cov) {
     r_eig <- 0.0
   } else {
-    U_D_Ut <- U %*% sweep(t(U), 1L, d, `*`)
+    U_D_Ut <- U %*% (d * t(U))
     r_eig <- gmm_scale_safe_frobenius(B - U_D_Ut)
   }
   eigensystem_refinement <- list(method = "none", original_residual = r_eig)
@@ -683,7 +686,7 @@ solve_gmm_covariance_handler <- function(
       loading_budget_supplied = FALSE, loading_validation_status = "not_requested_D23",
       point_validation_status = "not_requested_D23", complete_inference_certified = FALSE,
       full_inference_status = "complete_per_fit_error_certification_not_requested_or_performed",
-      backend = nb_info$backend, native_backend = nb_info, method = accuracy$method, weighting = "optimal",
+      backend = nb_info$backend, native_backend = nb_info, method = accuracy$method, weighting = strategy$weighting_canonical,
       covariance_handler = "tikhonov",
       computed_target_values = tau, propagation_bounds = NULL,
       conditioning = list(eigenvalues_B = diag_B$eig$values,

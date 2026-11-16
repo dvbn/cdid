@@ -369,7 +369,7 @@ Even though every unit in `panel_data` has three missing outcomes (`y = NA`) and
 
 ---
 
-**Reading path, step 3 of 20** · Previous: [Moving from did](../from-did.md) · Next: [Identify effects when the observed units change composition](identification.md)
+**Reading path, step 3 of 22** · Previous: [Moving from did](../from-did.md) · Next: [Identify effects when the observed units change composition](identification.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -396,6 +396,8 @@ Even though every unit in `panel_data` has three missing outcomes (`y = NA`) and
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

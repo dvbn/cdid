@@ -79,7 +79,7 @@ pair_support <- do.call(rbind, lapply(seq_len(nrow(selected_pairs)), function(j)
   both <- intersect(obs$id[obs$time == s], obs$id[obs$time == t])
   do.call(rbind, lapply(sort(unique(units$g)), function(g) {
     take <- units$g == g
-    data.frame(start = s, end = t, cohort = g, n_roster = sum(take),
+    data.frame(start = s, end = t, cohort = g, n_study_units = sum(take),
                n_both = sum(units$id[take] %in% both),
                share_both = mean(units$id[take] %in% both))
   }))
@@ -150,7 +150,7 @@ Outcome regression (OR), used by `est_method = "reg"` and `"dr"`, and change imp
 | Missing value | How the package reads it |
 | --- | --- |
 | An outcome | `y = NA` is nonresponse at that date, and the row stays. Never recode it as 0 or carry an earlier value forward. |
-| A covariate that changes within units | Read at each cohort's reference date, or at the earlier date of a comparison before treatment, from the actual rows, including rows with `y = NA`. A missing required value is refused with its unit, date, variable and purpose, so keep that row with its covariates. Nothing is carried forward, and a unit table value cannot override changing values in `data`. |
+| A covariate that changes within units | Read at each cohort's reference date, or at the earlier date of a comparison before treatment, from the actual rows, including rows with `y = NA`. The default warns and excludes units lacking a required reference covariate from that cohort’s comparisons. Supply known covariates on the relevant rows with `y = NA` for missing outcomes. Use `missing_reference = "error"` to see the original unit, date, variable and purpose. |
 | A sampling weight that changes within units | `fix_weights = NULL` and `"varying"` are refused; choose `"first_period"` or `"base_period"` from the design of the weights. |
 | A treated unit's weight at the first stored date, in aggregates of such fits | An aggregate that depends on cohort shares is `NA`, with the unit identifiers. One-cohort bins and a one-bin group overall summary cancel these shares exactly. Units never treated do not need the mass. |
 
@@ -230,7 +230,7 @@ Estimation stays serial, results equal those of `cores = 1`, worker buffers coun
 
 ---
 
-**Reading path, step 20 of 20** · Previous: [Results](../reference/results.md) · Last step; back to the [guide home](../README.md)
+**Reading path, step 20 of 22** · Previous: [Results](../reference/results.md) · Next: [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -257,6 +257,8 @@ Estimation stays serial, results equal those of `cores = 1`, worker buffers coun
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | **Diagnose errors and unavailable results** (this page) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](../examples/short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

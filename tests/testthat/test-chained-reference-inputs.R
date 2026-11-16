@@ -337,7 +337,8 @@ testthat::test_that("missing required reference values are refused with ids, nev
   nt <- d$id[d$G == 0 & d$time == 2 & !is.na(d$y)]
   u <- nt[nt %in% d$id[d$time == 4 & !is.na(d$y)]][1L]
   dx <- d; dx$x[dx$id == u & dx$time == 2] <- NA
-  e <- testthat::expect_error(rid_fit(dx, fix_weights = "base_period"), class = "cdid_reference_missing_error")
+  e <- testthat::expect_error(rid_fit(dx, fix_weights = "base_period", missing_reference = "error"),
+    class = "cdid_reference_missing_error")
   testthat::expect_match(conditionMessage(e), paste0("id ", u, ", date 2, variable `x`"), fixed = TRUE)
   testthat::expect_match(conditionMessage(e), "support (", fixed = TRUE)
   dw <- d; dw$w[dw$id == u & dw$time == 2] <- NA
@@ -357,14 +358,16 @@ testthat::test_that("missing required reference values are refused with ids, nev
   u <- dr$id[dr$G == 0 & dr$time == 2 & is.na(dr$y)][1L]
   dx <- dr; dx$x[dx$id == u & dx$time == 2] <- NA
   e <- testthat::expect_error(do.call(rid_fit, c(list(dx), rid_route_args(list(kind = "imputation", est = "dr",
-    imp_pooling = "separate")), list(fix_weights = "base_period"))), class = "cdid_reference_missing_error")
+    imp_pooling = "separate")), list(fix_weights = "base_period", missing_reference = "error"))),
+    class = "cdid_reference_missing_error")
   testthat::expect_match(conditionMessage(e), paste0("id ", u, ", date 2, variable `x`, prediction roster of support ("),
     fixed = TRUE)
   # A separate dated selection formula is demanded on the whole selection roster
   # at the recipe date (its own frozen design; xformla stays complete).
   dz <- dr; dz$z <- round(dz$x - 0.1 * dz$time, 2); dz$z[dz$id == u & dz$time == 2] <- NA
   e <- testthat::expect_error(do.call(rid_fit, c(list(dz), rid_route_args(list(kind = "corollary1", est = "ipw",
-    sel_model = "pair_logit", sel_pooling = "separate")), list(fix_weights = "base_period", selection_xformla = ~z))),
+    sel_model = "pair_logit", sel_pooling = "separate")),
+    list(fix_weights = "base_period", selection_xformla = ~z, missing_reference = "error"))),
     class = "cdid_reference_missing_error")
   testthat::expect_match(conditionMessage(e), paste0("id ", u, ", date 2, variable `z`, selection fitting roster of support ("),
     fixed = TRUE)
@@ -533,4 +536,39 @@ testthat::test_that("dated augmented guards charge live sources and every recipe
     nt * (p_trt + 2)^2 * b$glm_control$maxit + length(b$links) * (p_or + p_trt + G + 4))
   testthat::expect_gte(b$accounting$work_ops_bound, floor)
   testthat::expect_equal(ev$normalization_count, length(unique(d$id)))
+})
+
+testthat::test_that("required dated covariate exclusions apply across chained methods", {
+  testthat::skip_if_not(rid_installed(), "installed cdid required")
+  att <- rid_ns("att_gt")
+  d <- rid_route_panel(n = 60L)
+  excluded <- c(1L, 3L)
+  at_reference <- d$id %in% excluded & d$time == 2L
+  d$x[at_reference] <- NA_real_
+  d$z <- cos(d$id) + d$time / 10
+  d$z[at_reference] <- NA_real_
+  cells <- function(fit, keys) fit$att[match(keys, paste(fit$group, fit$t, sep = "-"))]
+  run <- function(panel, treatment, observation, cross_pair, policy) {
+    date_model <- treatment == "reg"
+    suppressWarnings(att("y", "time", "id", "G", data = panel, xformla = ~x,
+      weightsname = "w", fix_weights = "base_period", est_method = treatment,
+      selection = "conditional_mtar", selection_est_method = observation,
+      selection_xformla = ~z, selection_model = if (date_model) "independent_period_logit" else "pair_logit",
+      selection_pooling = if (date_model) "within_cohort" else "separate",
+      cross_pair = cross_pair, missing_reference = policy, base_period = "universal",
+      gmm_weighting = "identity", bstrap = FALSE, cband = FALSE))
+  }
+  for (cross_pair in c(FALSE, TRUE)) {
+    for (treatment in c("ipw", "reg", "dr")) {
+      for (observation in c("ipw", "imputation", "dr")) {
+        fit <- run(d, treatment, observation, cross_pair, "exclude")
+        early <- run(d[!d$id %in% excluded, ], treatment, observation, cross_pair, "error")
+        late <- run(d[d$G != 4L, ], treatment, observation, cross_pair, "exclude")
+        rid_close(cells(fit, c("4-4", "4-5", "5-5")),
+          c(cells(early, c("4-4", "4-5")), cells(late, "5-5")), 1e-10)
+        testthat::expect_identical(nrow(fit$inffunc), length(unique(d$id)))
+        testthat::expect_equal(fit$chained$reference_eligibility$restricted_targets, 4)
+      }
+    }
+  }
 })

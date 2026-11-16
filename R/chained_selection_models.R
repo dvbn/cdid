@@ -173,6 +173,9 @@ cp04_date_rows <- function(reader, rows, date_spec) {
     cp04_abort("Date calendar_index disagrees with date value t.", "identity")
   }
 
+  fast <- cdid_fast_sel_date_rows(reader, panel, rows, dt, t_val)
+  if (!is.null(fast)) return(fast)
+
   n <- length(rows)
   R <- numeric(n)
   ai <- st$a_index[rows]
@@ -296,7 +299,8 @@ partition_selection_cells <- function(pair_specs, cohorts, all_times = NULL,
   }
 
   # Canonical deduplication of active pair-cohorts (k, ds, dt[, recipe])
-  pc_keys <- paste0(req_k, ":", req_ds, ":", req_dt, vapply(req_r, rtag, character(1)))
+  pc_keys <- if (has_ref) paste0(req_k, ":", req_ds, ":", req_dt, vapply(req_r, rtag, character(1))) else
+    paste0(req_k, ":", req_ds, ":", req_dt)
   first_idx <- which(!duplicated(pc_keys))
   ord_pc <- first_idx[order(req_k[first_idx], req_ds[first_idx], req_dt[first_idx], req_r[first_idx], method = "radix")]
   n_pc <- length(ord_pc)
@@ -309,7 +313,7 @@ partition_selection_cells <- function(pair_specs, cohorts, all_times = NULL,
     dt <- req_dt[ii]
     s_val <- req_s[ii]
     t_val <- req_t[ii]
-    canon_pc_keys[q] <- paste0(k, ":", ds, ":", dt, rtag(req_r[ii]))
+    canon_pc_keys[q] <- if (has_ref) paste0(k, ":", ds, ":", dt, rtag(req_r[ii])) else paste0(k, ":", ds, ":", dt)
     pair_cohorts[[q]] <- list(
       pair_cohort_id = q,
       cohort = k,
@@ -331,7 +335,8 @@ partition_selection_cells <- function(pair_specs, cohorts, all_times = NULL,
     raw_t <- c(vapply(pair_cohorts, function(x) x$pair$s, numeric(1)),
                vapply(pair_cohorts, function(x) x$pair$t, numeric(1)))
     raw_r <- c(pc_ref, pc_ref)
-    ck_keys <- paste0(raw_ck, ":", raw_dt, vapply(raw_r, rtag, character(1)))
+    ck_keys <- if (has_ref) paste0(raw_ck, ":", raw_dt, vapply(raw_r, rtag, character(1))) else
+      paste0(raw_ck, ":", raw_dt)
     keep_c <- which(!duplicated(ck_keys))
     ord_c <- keep_c[order(raw_ck[keep_c], raw_dt[keep_c], raw_r[keep_c], method = "radix")]
     C <- length(ord_c)
@@ -476,6 +481,7 @@ build_selection_block_catalog <- function(reader, link_views,
     cp04_abort("Supply actual private link views.", "input")
 
   L <- length(link_views)
+  lv_ok <- cdid_fast_validate_link_views(link_views, frame)
   raw_specs <- list()
   link_cohorts <- vector("list", L)
   link_pair <- vector("list", L)
@@ -485,7 +491,11 @@ build_selection_block_catalog <- function(reader, link_views,
 
   for (ell in seq_len(L)) {
     v <- link_views[[ell]]
-    validate_ipw_link_view(v, frame_owner = frame)
+    # Lightweight cross-pair cell views carry no owner seal and are never
+    # owner-validated; every other view keeps the fused fast check or the
+    # unchanged per-view validator.
+    is_cp_cell <- inherits(v, "cdid_cross_pair_cell_view")
+    if (!is_cp_cell && !lv_ok) validate_ipw_link_view(v, frame_owner = frame)
     sk <- v$functional_key
     if (!gmm_scalar_character(sk) || !startsWith(sk, "cmpcat:"))
       cp04_abort("Selection models require the supplied comparison-catalog functional key.", "unsupported")
@@ -496,9 +506,16 @@ build_selection_block_catalog <- function(reader, link_views,
       if (!isTRUE(v$nuisance_mask_verified) || !identical(nv$defining_pair, v$pair))
         cp04_abort("Cross-pair or unverified legacy nuisance view sharing is unsupported.", "unsupported")
     }
-    ks <- sort(v$cohorts$K, method = "radix")
-    # A recipe-cohort layout supplies each view's layout cohort indices.
-    cohorts <- if (is.null(view_cohorts)) match(c(v$cohorts$g, ks), st$cohorts) else as.integer(view_cohorts[[ell]])
+    # A recipe-cohort layout supplies each view's layout cohort indices;
+    # a cross-pair cell view carries its active observed cohorts in `v$cohorts$cohorts`.
+    cohorts <- if (!is.null(view_cohorts)) {
+      as.integer(view_cohorts[[ell]])
+    } else if (is_cp_cell && !is.null(v$cohorts$cohorts)) {
+      match(v$cohorts$cohorts, st$cohorts)
+    } else {
+      ks <- if (length(v$cohorts$K) > 1L) sort(v$cohorts$K, method = "radix") else v$cohorts$K
+      match(c(v$cohorts$g, ks), st$cohorts)
+    }
     if (anyNA(cohorts) || any(v$support$by_cohort_pair_count < 1L) || v$support$n_observed_risk_units < 1L)
       cp04_abort("Unsupported full-F cohort or pair support.", "support")
     r <- if (is.null(reference)) NULL else reference$view_recipe[ell]
@@ -827,19 +844,23 @@ fit_selection_block_provider <- function(provider, B_m, design_spec, glm_control
 # Production scans immutable cohort-order ranges and filters U inside each
 # bounded chunk. Even row-index vectors are not replicated across cells.
 # A D60 cell reads its recipe's selection design, weights W_g and repeat rate
-# a_k^{g,U} on the declared roster U of its cohort.
+# a_k^{g,U} on the declared roster U of its cohort. Issue #16: a restricted
+# recipe's roster is U E_g (excluded units are absent from the fit, never
+# unobserved responses); its rate and mass are the recipe's restricted stats.
 selection_owner_block_provider <- function(reader, cids, cells, design_spec, ctrl, selection_model, reference = NULL) {
   st <- reader$state
   function(b, consume) {
     cell <- cells[[cids[b]]]
     k <- cell$cohort
     r <- cell$reference
+    restricted <- chained_reference_recipe_restricted(reference, r)
     a_k <- if (is.null(reference)) st$a[k] else chained_reference_stat(reference, r, k, "a")
     mass_U_k <- if (is.null(reference)) st$mass_U[k] else chained_reference_stat(reference, r, k, "mass_U")
     for (start in seq.int(st$cohort_start[k], st$cohort_end[k], by = ctrl$max_chunk_rows)) {
       idx <- seq.int(start, min(st$cohort_end[k], start + ctrl$max_chunk_rows - 1L))
       rows <- st$cohort_order[idx]
       rows <- rows[st$U[rows]]
+      if (restricted) rows <- rows[chained_reference_eligible(reference, r, rows)]
       if (!length(rows)) next
       D <- if (is.null(reference)) st$Z[rows, design_spec$slope_cols, drop = FALSE] else
         chained_reference_s(reference, r, rows)[, design_spec$slope_cols, drop = FALSE]
@@ -857,6 +878,13 @@ fit_pooled_selection_block <- function(reader, block_spec, cells, design_spec,
                                        glm_control, ctrl,
                                        selection_model = "pair_logit",
                                        selection_pooling = "separate", reference = NULL) {
+  # Issue #16: the native block kernel reads the cohorts' full U rosters; a
+  # block of a restricted recipe (pooling never crosses recipes) uses R.
+  fast <- if (chained_reference_recipe_restricted(reference, block_spec$reference)) NULL else cdid_fast_sel_block_fit(
+    reader, block_spec, cells, design_spec, glm_control, ctrl,
+    selection_model, selection_pooling, reference
+  )
+  if (!is.null(fast)) return(fast)
   st <- reader$state
   cids <- block_spec$cell_ids
   provider <- selection_owner_block_provider(reader, cids, cells, design_spec, ctrl, selection_model, reference)
@@ -889,6 +917,9 @@ fit_pooled_selection_block <- function(reader, block_spec, cells, design_spec,
 }
 
 validate_selection_models <- function(backend) {
+  if (cdid_sel_check_validated(backend, "cdid_selection_models", "selection_models")) {
+    return(invisible(backend))
+  }
   if (!inherits(backend, "cdid_selection_models") ||
       !ipw_owner_seal_ok(backend, "selection_models"))
     cp04_abort("Expected the immutable private selection-models backend.", "integrity")
@@ -899,6 +930,12 @@ validate_selection_models <- function(backend) {
   }
   validate_cp04_reader(reader)
   if (!is.null(backend$reference_ref)) chained_backend_reference(backend)
+  cdid_sel_record_validated(
+    backend, "selection_models", reader,
+    get("frame_owner", reader$frame_ref, inherits = FALSE),
+    get("panel_owner", reader$panel_ref, inherits = FALSE),
+    reader$frame_ref
+  )
   invisible(backend)
 }
 
@@ -1016,19 +1053,28 @@ fit_selection_models <- function(reader, link_views,
   cp04_budget(ctrl, retained_bound, scratch, c(work, external_work_ops),
               metadata_entries + model_bound + 4096, "selection models fit")
 
-  blocks <- lapply(block_specs, function(bs) {
-    fit_pooled_selection_block(
-      reader = reader,
-      block_spec = bs,
-      cells = cells,
-      design_spec = design_spec,
-      glm_control = gc,
-      ctrl = ctrl,
-      selection_model = selection_model,
-      selection_pooling = selection_pooling,
-      reference = reference
-    )
-  })
+  # Issue #16: any restricted recipe sends the batch to the per-block route,
+  # where only that recipe's blocks bypass their native kernel.
+  blocks <- if (chained_reference_recipe_restricted(reference,
+      unlist(lapply(block_specs, `[[`, "reference"), use.names = FALSE))) NULL else cdid_fast_sel_block_fit_batch(
+    reader, block_specs, cells, design_spec, gc, ctrl,
+    selection_model, selection_pooling, reference
+  )
+  if (is.null(blocks)) {
+    blocks <- lapply(block_specs, function(bs) {
+      fit_pooled_selection_block(
+        reader = reader,
+        block_spec = bs,
+        cells = cells,
+        design_spec = design_spec,
+        glm_control = gc,
+        ctrl = ctrl,
+        selection_model = selection_model,
+        selection_pooling = selection_pooling,
+        reference = reference
+      )
+    })
+  }
 
   # Stacked parameter summary in canonical order: all local cell intercepts (if has_intercept)
   # followed by all block slope vectors in canonical block order.
@@ -1093,7 +1139,14 @@ fit_selection_models <- function(reader, link_views,
     cp04_abort("Retained selection model bound underestimated.", "bound")
   obj$accounting$owned_entries <- actual
   obj$accounting$character_bytes <- unname(payload["char_bytes"])
-  ipw_owner_seal(obj, "selection_models")
+  sealed <- cdid_fast_seal(obj, "selection_models")
+  cdid_sel_record_validated(
+    sealed, "selection_models", reader,
+    get("frame_owner", reader$frame_ref, inherits = FALSE),
+    get("panel_owner", reader$panel_ref, inherits = FALSE),
+    reader$frame_ref
+  )
+  sealed
 }
 
 resolve_pair_cohort_id <- function(backend, pair_cohort_id) {

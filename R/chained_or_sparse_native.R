@@ -26,7 +26,12 @@ or_sparse_native_plan <- function(backend, links, B) {
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   panel <- get("panel_owner", reader$panel_ref, inherits = FALSE)
   if (isTRUE(st$reference_carrier) || B > st$N || !is.double(frame$Z_a)) return(NULL)
-  pre <- or_baseline_if_budget(backend, B, links, FALSE)
+  pre <- if (exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
+             identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+    cdid_fast_if_budget(backend, B, links, "or")
+  } else {
+    or_baseline_if_budget(backend, B, links, FALSE)
+  }
   if (any(vapply(pre[c("sids", "gids", "beta_gids")], function(x) !is.null(names(x)), logical(1)))) return(NULL)
   separate <- or_baseline_separate(backend); icpt <- isTRUE(backend$outcome_recipe$intercept)
   gids <- sort(union(pre$gids, pre$beta_gids)); ng <- length(gids); ns <- length(pre$sids); nl <- length(links)
@@ -71,6 +76,8 @@ or_sparse_native_plan <- function(backend, links, B) {
     data$support[, j] <- as.integer(c(s$cohort, match(s$pair$s_calendar_index, dates), match(s$pair$t_calendar_index, dates)))
     data$support_par[, j] <- c(u$rate, u$massA, u$v)
   }
+  use_fast_plan <- exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns(c("or_outcome_block_fit", "or_pooled_wls_gram_solve", "or_wls_gram_solve"))
   for (kb in seq_len(ng)) {
     b <- gids[kb]; rec <- backend$regressions[[b]]; oi <- owner[kb]
     data$block[, kb] <- c(oi, qs[kb], p[kb], cs[kb], cn[kb], as.integer(b %in% pre$beta_gids))
@@ -80,7 +87,8 @@ or_sparse_native_plan <- function(backend, links, B) {
     data$controls[span(cs[kb], cn[kb])] <- match(backend$regression_specs[[b]]$support_ids, pre$sids)
     data$forcing_alpha[span(cs[kb], cn[kb])] <- if (icpt) rec$forcing_alpha else 0
     if (!separate) next
-    f <- or_outcome_block_fit(backend$outcome_groups, b); ii <- span(ps[oi], op[oi])
+    f <- if (use_fast_plan) backend$outcome_groups$groups[[b]] else or_outcome_block_fit(backend$outcome_groups, b)
+    ii <- span(ps[oi], op[oi])
     data$keep[ii] <- backend$outcome_recipe$slope_index[f$keep]
     data$beta[ii] <- f$beta; data$center[ii] <- rec$score_mean_beta
     data$forcing_support[span(fs[oi], fb_n[oi])] <- match(backend$regression_specs[[b]]$support_ids, pre$sids)
@@ -98,14 +106,32 @@ or_sparse_native_plan <- function(backend, links, B) {
     data$owner[, oi] <- c(ps[oi], op[oi], fs[oi], fb_n[oi], vs[oi])
     jj <- which(owner[link_b] == oi)
     if (!length(jj) || !op[oi]) next
-    f <- if (separate) or_outcome_block_fit(backend$outcome_groups, gids[oi]) else backend$shared
+    f <- if (separate) {
+      if (use_fast_plan) backend$outcome_groups$groups[[gids[oi]]] else or_outcome_block_fit(backend$outcome_groups, gids[oi])
+    } else backend$shared
     loads <- vapply(jj, function(j) {
       l <- backend$links[[links[j]]]
       as.double(l$c - if (icpt) backend$regressions[[l$regression]]$mean_d else 0)
     }, numeric(op[oi]))
     dim(loads) <- c(op[oi], length(jj)); dimnames(loads) <- NULL
-    adj <- if (icpt) or_pooled_wls_gram_solve(f$fit, loads, normalizer = st$N) else
-      or_wls_gram_solve(f$fit, loads, normalizer = st$N)
+    if (use_fast_plan && is.list(f$fit) && is.matrix(f$fit$R) &&
+        nrow(f$fit$R) == op[oi] && ncol(f$fit$R) == op[oi] &&
+        is.integer(f$fit$pivot) && length(f$fit$pivot) == op[oi] &&
+        all(abs(diag(f$fit$R)) > 0)) {
+      piv <- f$fit$pivot
+      R_mat <- f$fit$R
+      Z_sol <- forwardsolve(R_mat, loads[piv, , drop = FALSE], upper.tri = TRUE, transpose = TRUE)
+      X_piv <- backsolve(R_mat, Z_sol)
+      adj <- matrix(0.0, op[oi], length(jj))
+      adj[piv, ] <- st$N * X_piv
+      if (!is.finite(sum(adj))) {
+        adj <- if (icpt) or_pooled_wls_gram_solve(f$fit, loads, normalizer = st$N) else
+          or_wls_gram_solve(f$fit, loads, normalizer = st$N)
+      }
+    } else {
+      adj <- if (icpt) or_pooled_wls_gram_solve(f$fit, loads, normalizer = st$N) else
+        or_wls_gram_solve(f$fit, loads, normalizer = st$N)
+    }
     for (k in seq_along(jj)) data$adj[span(ads[jj[k]], op[oi])] <- adj[, k]
   }
   for (j in seq_len(nl)) {
@@ -137,20 +163,42 @@ or_sparse_native_check <- function(plan, backend, links, B, pre) {
   invisible(plan)
 }
 
-or_sparse_native_if <- function(backend, reader, rows, links, scale, pre, plan) {
-  or_sparse_native_check(plan, backend, links, length(rows), pre)
-  st <- reader$state; frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
-  panel <- get("panel_owner", reader$panel_ref, inherits = FALSE)
-  live <- or_sparse_native_live(length(rows), length(links), length(plan$dates), length(pre$sids),
-    ncol(plan$data$block), length(plan$data$beta), max(c(0L, plan$data$block[3L, ])))
-  ipw_owner_safe_sum(c(plan$entries, live), pre$scratch, "sparse OR native replay")
-  res <- or_baseline_native_kernel("C_gmm_or_sparse_if")(panel$observations$y,
+or_sparse_native_if <- function(backend, reader, rows, links, scale, pre, plan, link_names = NULL) {
+  B <- length(rows)
+  use_fast <- !is.null(link_names) && is.list(plan) && !is.null(plan$ref) &&
+    exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns(c("or_sparse_native_check", "or_baseline_native_check", "or_sparse_native_slice",
+                           "or_sparse_native_live", "or_baseline_native_kernel", "cp04_payload"))
+  fast_meta <- if (use_fast) cdid_get_if_chunk_meta(backend, B, links, "or_sp_kern_meta") else NULL
+  st <- reader$state
+  if (!is.null(fast_meta) && is.list(fast_meta$extra) &&
+      identical(fast_meta$extra$plan_ref, plan$ref) &&
+      ipw_owner_seal_ok(plan$ref, "or_sparse_native_plan")) {
+    live <- fast_meta$extra$live
+    fn_if <- fast_meta$extra$fn_if
+    frame <- fast_meta$extra$frame
+    panel <- fast_meta$extra$panel
+  } else {
+    or_sparse_native_check(plan, backend, links, B, pre)
+    frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+    panel <- get("panel_owner", reader$panel_ref, inherits = FALSE)
+    live <- or_sparse_native_live(B, length(links), length(plan$dates), length(pre$sids),
+      ncol(plan$data$block), length(plan$data$beta), max(c(0L, plan$data$block[3L, ])))
+    ipw_owner_safe_sum(c(plan$entries, live), pre$scratch, "sparse OR native replay")
+    fn_if <- or_baseline_native_kernel("C_gmm_or_sparse_if")
+    if (use_fast) {
+      cdid_set_if_chunk_meta(backend, B, links, pre, link_names, "or_sp_kern_meta",
+                             extra = list(plan_ref = plan$ref, live = live, fn_if = fn_if,
+                                          frame = frame, panel = panel))
+    }
+  }
+  res <- fn_if(panel$observations$y,
     panel$postings$post_a_index, panel$postings$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$bounds, frame$Z_a, plan$data, as.double(live))
   if (!identical(res$status[1L], 0L)) or_baseline_native_refuse(res$status, or_baseline_abort)
   phi <- res$phi
   if (scale == "core") phi <- st$lambda * phi
-  dimnames(phi) <- list(NULL, vapply(backend$links[links], `[[`, character(1), "link_id"))
+  dimnames(phi) <- list(NULL, if (!is.null(link_names)) link_names else vapply(backend$links[links], `[[`, character(1), "link_id"))
   out <- list(rows = rows, id = st$id[rows], links = links, phi = phi, scale = scale,
     normalization_count = if (scale == "core") st$n_A else st$N,
     diagnostics = list(n_rate_score_evaluations = length(pre$sids),
@@ -162,7 +210,9 @@ or_sparse_native_if <- function(backend, reader, rows, links, scale, pre, plan) 
     out$diagnostics$outcome_pooling <- "separate"
     out$diagnostics$n_local_beta_blocks <- length(pre$beta_gids)
   }
-  if (unname(cp04_payload(out)["entries"]) > pre$output)
-    or_baseline_abort("Sparse OR IF output bound underestimated.", "bound")
+  if (!(use_fast && (as.double(B) * (length(links) + 6) + 256) <= pre$output)) {
+    if (unname(cp04_payload(out)["entries"]) > pre$output)
+      or_baseline_abort("Sparse OR IF output bound underestimated.", "bound")
+  }
   out
 }
