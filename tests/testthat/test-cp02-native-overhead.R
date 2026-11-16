@@ -134,16 +134,19 @@ noh_compile_dll <- function(c_lines, dll_name, parent_dir, source_dir = NULL) {
   }
   old <- setwd(sub_dir)
   on.exit(setwd(old), add = TRUE)
-  # Preserve compiler/linker diagnostics even when the test runner uses warn=2.
-  out <- suppressWarnings(system2(
+  # Capture the full compiler and linker output, including on Windows.
+  build_log <- file.path(sub_dir, "build.log")
+  status <- suppressWarnings(system2(
     file.path(R.home("bin"), "R"),
     c("CMD", "SHLIB", "-o", shQuote(paste0(dll_name, .Platform$dynlib.ext)),
       shQuote(c(basename(src), companions))),
-    stdout = TRUE, stderr = TRUE
+    stdout = build_log, stderr = build_log
   ))
   so <- file.path(sub_dir, paste0(dll_name, .Platform$dynlib.ext))
-  if (!is.null(attr(out, "status")) || !file.exists(so)) {
-    stop("R CMD SHLIB failed for ", dll_name, ":\n", paste(out, collapse = "\n"), call. = FALSE)
+  if (!identical(status, 0L) || !file.exists(so)) {
+    out <- readLines(build_log, warn = FALSE)
+    stop("R CMD SHLIB failed for ", dll_name, " (status ", status, "):\n",
+      paste(out, collapse = "\n"), call. = FALSE)
   }
   normalizePath(so, mustWork = TRUE)
 }

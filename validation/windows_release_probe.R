@@ -24,6 +24,9 @@ writeLines(c(paste("Source commit", source_commit), paste("Archive SHA256", arch
 # Capture the original linker's untruncated output from the published helper.
 original <- system2("git", c("show", paste0(source_commit,
   ":tests/testthat/test-cp02-native-overhead.R")), stdout = TRUE)
+link_log <- file.path(report, "original-build.log")
+original <- gsub("stdout = TRUE, stderr = TRUE", "stdout = link_log, stderr = link_log", original, fixed = TRUE)
+original <- gsub('!is.null(attr(out, "status"))', '!identical(out, 0L)', original, fixed = TRUE)
 helper <- new.env()
 for (expr in parse(text = original)) {
   if (is.call(expr) && identical(expr[[1L]], as.name("<-")) &&
@@ -40,6 +43,63 @@ insert_probe <- function(path, marker, lines) {
   stopifnot(length(at) == 1L)
   writeLines(append(source, lines, after = at - 1L), path)
 }
+
+# Run the DLL unload/reload tests in a process without live fit objects.
+native_args <- c("--vanilla", "validation/run_full_tests.R", "--native-only",
+  shQuote(paste0("--lib-loc=", normalizePath(lib, winslash = "/"))),
+  "--test-dir=tests/testthat",
+  shQuote(paste0("--output-dir=", file.path(report, "native-overhead"))))
+native_log <- file.path(report, "native-console.log")
+native_status <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"), native_args,
+  stdout = native_log, stderr = native_log))
+writeLines(as.character(native_status), file.path(report, "native-status.txt"))
+
+insert_probe("tests/testthat/test-augmented-replay-operation.R",
+  "fast <- do.call(cdid::att_gt, request)", c(
+    '    contexts <- list()',
+    '    native <- v45_ns("cdid_ia_fast_aug_if_chunk_core")',
+    '    testthat::local_mocked_bindings(cdid_ia_fast_aug_if_chunk_core =',
+    '      function(st, X_F, backend, rows, links, scale, pre, pair_op = NULL) {',
+    '        value <- native(st, X_F, backend, rows, links, scale, pre, pair_op)',
+    '        if (!is.null(value) && spec$selection_model == "pair_logit" && !length(contexts))',
+    '          contexts[[1L]] <<- list(st = st, X_F = X_F, backend = backend)',
+    '        value',
+    '      }, .package = "cdid")'
+  )
+)
+insert_probe("tests/testthat/test-augmented-replay-operation.R", "old <- default_fit()", c(
+  '    if (length(contexts)) {',
+  '      st <- contexts[[1L]]$st',
+  '      backend <- contexts[[1L]]$backend',
+  '      X_F <- contexts[[1L]]$X_F',
+  '      trace <- list()',
+  '      for (g in c(3, 4)) {',
+  '        links <- which(vapply(backend$links, function(link) {',
+  '          st$cohorts[link$target_cohort_index] == g && link$pair$s == 1 && link$pair$t == 2',
+  '        }, logical(1)))',
+  '        if (!length(links)) next',
+  '        for (ell in links) {',
+  '          link <- backend$links[[ell]]',
+  '          bid <- link$or_block_id',
+  '          block <- backend$shared_or$blocks[[bid]]',
+  '          active <- st$cohort_index %in% c(link$target_cohort_index, link$control_cohort_indices)',
+  '          rr <- c(which(!active)[1L], which(active)[1L])',
+  '          pre <- v45_ns("augmented_if_needed_sets")(backend, ell, FALSE)',
+  '          a <- native(st, X_F, backend, rr, ell, "frame", pre)',
+  '          b <- v45_ns("evaluate_augmented_if_chunk")(backend, rr, ell, details = TRUE)',
+  '          if (is.null(a)) next',
+  '          fit <- v45_ns("reconstruction_or_block")(backend$shared_or, bid)$fit',
+  '          trace[[length(trace) + 1L]] <- list(cohort = g, id = st$id[rr],',
+  '            native = sprintf("%a", drop(a$phi)), ordinary = sprintf("%a", drop(b$phi)),',
+  '            components = b$details$links[[1L]]$components, mean_alpha = block$score_mean_alpha,',
+  '            mean_beta = block$score_mean_beta, mass = block$mass, WLS = fit, mean_d = block$mean_d,',
+  '            d_plus = link$d_bar_plus_or, d_minus = link$d_bar_minus_or)',
+  '        }',
+  '      }',
+  '      writeLines(capture.output(dput(trace)), file.path(Sys.getenv("CDID_WINDOWS_PROBE_REPORT"),',
+  '        "augmented-primitive.txt"))',
+  '    }'
+))
 
 # Measure the operands and original-unit coordinates before the unchanged test.
 insert_probe("tests/testthat/test-augmented-replay-operation.R",
@@ -62,52 +122,9 @@ insert_probe("tests/testthat/test-augmented-replay-operation.R",
     '        }'
   )
 )
-pretest <- "tests/testthat/test-chained-conditional-pretest.R"
-insert_probe(pretest, "set.seed(11); r1 <- call_it(); u1 <- stats::runif(1L)", c(
-  '  serial_samples <- list()',
-  '  worker_samples <- list()',
-  '  native_batch <- getFromNamespace("cdid_fast_cpt_batch_cvmb", "cdid")',
-  '  worker_apply <- parallel::parLapply',
-  '  testthat::local_mocked_bindings(cdid_fast_cpt_batch_cvmb = function(E, cells, N) {',
-  '    value <- native_batch(E, cells, N)',
-  '    serial_samples[[length(serial_samples) + 1L]] <<- list(E = E, value = value)',
-  '    value',
-  '  }, .package = "cdid")',
-  '  testthat::local_mocked_bindings(parLapply = function(cl, X, fun, ...) {',
-  '    value <- worker_apply(cl, X, fun, ...)',
-  '    worker_samples[[length(worker_samples) + 1L]] <<- list(signs = X, value = value, args = list(...))',
-  '    value',
-  '  }, .package = "parallel")'
-))
-insert_probe(pretest, 'expect_identical(r1$CvMb, r2$CvMb)', c(
-  '  serial_batches <- ceiling(length(r1$CvMb) / r1$chained$inference$rng$batch_rows)',
-  '  serial_signs <- lapply(serial_samples[seq_len(serial_batches)], `[[`, "E")',
-  '  serial_seed <- .Random.seed'
-))
-insert_probe(pretest, 'expect_identical(r6$CvMb, r1$CvMb)', c(
-  '  probe_dir <- Sys.getenv("CDID_WINDOWS_PROBE_REPORT")',
-  '  worker_signs <- do.call(c, lapply(worker_samples, `[[`, "signs"))',
-  '  pure_batch <- getFromNamespace("cpt_batch_cvmb", "cdid")',
-  '  local_worker_draws <- unlist(lapply(worker_samples, function(s)',
-  '    lapply(s$signs, function(E) do.call(pure_batch, c(list(E = E), s$args)))))',
-  '  stopifnot(length(r1$CvMb) == length(r6$CvMb))',
-  '  write.csv(data.frame(draw = seq_along(r1$CvMb), serial_hex = sprintf("%a", r1$CvMb),',
-  '    worker_hex = sprintf("%a", r6$CvMb), delta = r6$CvMb - r1$CvMb),',
-  '    file.path(probe_dir, "pretest-draws.csv"), row.names = FALSE)',
-  '  writeLines(c(sprintf("sign_batches_identical: %s", identical(serial_signs, worker_signs)),',
-  '    sprintf("rng_state_identical: %s", identical(serial_seed, .Random.seed)),',
-  '    sprintf("max_absolute_draw_delta: %.17g", max(abs(r6$CvMb - r1$CvMb))),',
-  '    sprintf("R_caller_matches_PSOCK: %s", identical(local_worker_draws, r6$CvMb)),',
-  '    sprintf("CvM: %s %s", format(r1$CvM, digits = 17), format(r6$CvM, digits = 17)),',
-  '    sprintf("pvalue: %s %s", format(r1$CvMpval, digits = 17), format(r6$CvMpval, digits = 17)),',
-  '    sprintf("critical: %s %s", format(r1$CvMcval, digits = 17), format(r6$CvMcval, digits = 17)),',
-  '    sprintf("exceedances_identical: %s", identical(r1$CvMb >= r1$CvM, r6$CvMb >= r6$CvM))),',
-  '    file.path(probe_dir, "pretest-diagnostics.txt"))'
-))
-
 reporter <- testthat::ListReporter$new()
 tests <- testthat::test_dir("tests/testthat",
-  filter = "^(augmented-replay-operation|chained-conditional-pretest|cp02-native-overhead)$",
+  filter = "^(augmented-replay-operation|chained-conditional-pretest)$",
   package = "cdid", load_package = "installed",
   reporter = testthat::MultiReporter$new(reporters = list(
     reporter, testthat::SummaryReporter$new(file = file.path(report, "tests.log")))),
@@ -116,6 +133,6 @@ tests <- testthat::test_dir("tests/testthat",
 rows <- as.data.frame(tests)
 cols <- c("file", "test", "failed", "error", "warning", "skipped", "passed")
 write.csv(rows[cols], file.path(report, "tests.csv"), row.names = FALSE)
-stopifnot(length(unique(rows$file)) == 3L)
+stopifnot(length(unique(rows$file)) == 2L)
 print(aggregate(cbind(failed, error, warning, skipped, passed) ~ file, rows, sum))
-if (any(rows$failed > 0L | rows$error | rows$warning > 0L)) quit(status = 1L)
+if (native_status != 0L || any(rows$failed > 0L | rows$error | rows$warning > 0L)) quit(status = 1L)

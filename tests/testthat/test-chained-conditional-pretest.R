@@ -309,7 +309,20 @@ test_that("caller RNG, grid/draw chunks and declared workers give the same draws
   expect_equal(r5$CvMb, r4$CvMb, tolerance = 1e-12)
   # Declared multiplier workers draw the same signs in the calling process.
   set.seed(11); r6 <- call_it(pl = TRUE, cores = 2, control = list(workers = 2))
-  expect_identical(r6$CvMb, r1$CvMb)
+  expect_identical(stats::runif(1L), u1)
+  if (identical(r6$chained$inference$route, "psock")) {
+    # Windows PSOCK evaluates the same signs with the R contraction.
+    expect_identical(typeof(r6$CvMb), typeof(r1$CvMb))
+    expect_identical(attributes(r6$CvMb), attributes(r1$CvMb))
+    expect_identical(r6$CvMb == 0, r1$CvMb == 0)
+    expect_equal(r6$CvMb, r1$CvMb, tolerance = 1e-12)
+    expect_identical(r6$CvM, r1$CvM)
+    expect_identical(r6$CvMb > r6$CvM, r1$CvMb > r1$CvM)
+    expect_identical(r6$CvMpval, r1$CvMpval)
+    expect_equal(r6$CvMcval, r1$CvMcval, tolerance = 1e-12)
+  } else {
+    expect_identical(r6$CvMb, r1$CvMb)
+  }
   expect_identical(r6$chained$execution$workers, 2)
   expect_error(call_it(pl = TRUE, cores = 2), class = "cdid_chained_request_parallel_error")
 })
