@@ -38,7 +38,7 @@ jobs:
           path: source-archive
           run-id: 43918334854
           github-token: ${{ github.token }}
-      - name: Diagnose three Windows test files from the published archive
+      - name: Check the Windows fixes against the published archive
         run: Rscript --vanilla validation/windows_release_probe.R
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

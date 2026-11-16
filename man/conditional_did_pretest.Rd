@@ -76,8 +76,10 @@ conditional_did_pretest(
   because no conditional process is defined for arbitrary functions.}
 
 \item{pl, cores}{Multiplier draws may use \code{cores} worker processes when
-  \code{pl = TRUE} and \code{control$workers} declares them. Signs are drawn
-  in the calling session, so the results equal those of \code{cores = 1}.}
+  \code{pl = TRUE} and \code{control$workers} declares them. The calling
+  session draws the same signs in the same order for every worker count.
+  On Windows, parallel evaluation can change the last digits of the
+  computed statistics through floating-point rounding.}
 
 \item{anticipation, base_period, fix_weights, mode, frame, selection, selection_model, selection_pooling, selection_xformla, selection_universe, selection_rho, selection_justification, selection_est_method, imputation_pooling, outcome_pooling, control}{The
   chained settings of \code{att_gt()}, with the same meanings. They select

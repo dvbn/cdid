@@ -2069,12 +2069,20 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
             rep(if (recipe$intercept) bf$alpha else 0.0, length(ix))
           }
           r_ix <- zc$Z - mhat_ix
+          direct_score <- w_syn_ix * r_ix
+          # Center the fitted score on its own regression support. The
+          # weights sum to N, so this removes the same total residual.
+          center_weight <- if (separate_or) w_syn_ix / bf$mass else NULL
           if (recipe$intercept && !is.na(apos)) {
-            rhs_alpha_dir[ix, apos] <- rhs_alpha_dir[ix, apos] + w_syn_ix * r_ix
+            alpha_score <- direct_score
+            if (separate_or) alpha_score <- alpha_score - center_weight * bf$score_mean_alpha
+            rhs_alpha_dir[ix, apos] <- rhs_alpha_dir[ix, apos] + alpha_score
           }
           if (p_or > 0L) {
             d_tilde_ix <- if (recipe$intercept) sweep(d_or_ix, 2L, bf$mean_d, FUN = "-") else d_or_ix
-            rhs_beta_dir[ix, ] <- rhs_beta_dir[ix, , drop = FALSE] + (w_syn_ix * r_ix) * d_tilde_ix
+            beta_score <- direct_score * d_tilde_ix
+            if (separate_or) beta_score <- beta_score - outer(center_weight, bf$score_mean_beta)
+            rhs_beta_dir[ix, ] <- rhs_beta_dir[ix, , drop = FALSE] + beta_score
           }
         }
         xi_ak <- xi_a[, ci_k]
@@ -2103,11 +2111,6 @@ augmented_evaluate_if_chunk_core <- function(st, X_F, pair_reader, backend, rows
       rhs_beta_q <- up[, pos, drop = FALSE] %*% t(sh$q_beta)
     }
 
-    if (reconstruction_separate(backend$shared_or)) {
-      bf <- backend$shared_or$blocks[[wanted_bids[1L]]]
-      if (recipe$intercept) rhs_alpha_dir[, 1L] <- rhs_alpha_dir[, 1L] - bf$score_mean_alpha
-      if (p_or) rhs_beta_dir <- sweep(rhs_beta_dir, 2L, bf$score_mean_beta)
-    }
     if (!use_imp_forward) {
       memo_or <- !separate_or && !is.null(adjoint_replay)
       # Global shared-slope j forcing collects every contributing block before

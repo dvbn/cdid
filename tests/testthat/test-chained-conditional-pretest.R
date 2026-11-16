@@ -310,6 +310,7 @@ test_that("caller RNG, grid/draw chunks and declared workers give the same draws
   # Declared multiplier workers draw the same signs in the calling process.
   set.seed(11); r6 <- call_it(pl = TRUE, cores = 2, control = list(workers = 2))
   expect_identical(stats::runif(1L), u1)
+  expect_true(r6$chained$inference$route %in% c("fork", "psock"))
   if (identical(r6$chained$inference$route, "psock")) {
     # Windows PSOCK evaluates the same signs with the R contraction.
     expect_identical(typeof(r6$CvMb), typeof(r1$CvMb))

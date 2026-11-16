@@ -238,8 +238,8 @@ cpt_process_nonzero <- function(cells, n_clusters, gchunk, echunk) {
 
 # One common B x C sign stream (caller RNG, batches in draw order, column-major
 # within a batch, exactly as the pipeline's multiplier) or caller-fixed signs
-# (private arithmetic checks only). Declared workers multiply rounds of drawn
-# batches; every draw, statistic and quantile equals the serial result.
+# (private arithmetic checks only). Declared workers process the same sign
+# batches. The Windows R contraction can round differently from native C.
 cpt_multiplier <- function(cells, N, n_clusters, B, br, gchunk, echunk, fixed_signs = NULL, workers = 1) {
   B <- as.integer(B); br <- as.integer(br)
   if (!is.null(fixed_signs) && (!is.matrix(fixed_signs) || !identical(dim(fixed_signs), c(B, as.integer(n_clusters))) ||

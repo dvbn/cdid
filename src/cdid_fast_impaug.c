@@ -2616,6 +2616,9 @@ SEXP C_cdid_ia_aug_if_chunk(
       SEXP j_force_ab_s = cdid_ia_get_elt(bf, "j_force_alpha_beta");
       const double *j_force_ba = (p_or > 0) ? REAL(cdid_ia_get_elt(bf, "j_force_beta_alpha")) : NULL;
       SEXP j_force_bb_s = cdid_ia_get_elt(bf, "j_force_beta_beta");
+      double mass_b = Rf_asReal(cdid_ia_get_elt(bf, "mass"));
+      double sma = separate_or && intercept ? Rf_asReal(cdid_ia_get_elt(bf, "score_mean_alpha")) : 0.0;
+      const double *smb = separate_or && p_or > 0 ? REAL(cdid_ia_get_elt(bf, "score_mean_beta")) : NULL;
 
       for (int idx_k = 0; idx_k < n_kb; ++idx_k) {
         int cid = ctrl_cids[idx_k];
@@ -2639,10 +2642,14 @@ SEXP C_cdid_ia_aug_if_chunk(
           }
           double mhat = alpha_b + mhat_sl;
           double wr = w_syn * (z_c[r] - mhat);
-          if (intercept) ra_dir[r] += wr;
+          /* Center only on the regression's own support. */
+          double center_weight = separate_or ? w_syn / mass_b : 0.0;
+          if (intercept) ra_dir[r] += separate_or ? wr - center_weight * sma : wr;
           for (int m = 0; m < p_or; ++m) {
             double dt_m = intercept ? (d_buf[m] - mean_d_b[m]) : d_buf[m];
-            rb_dir[r + (size_t) m * (size_t) B] += wr * dt_m;
+            double beta_score = wr * dt_m;
+            if (separate_or) beta_score -= center_weight * smb[m];
+            rb_dir[r + (size_t) m * (size_t) B] += beta_score;
           }
         }
 
@@ -2805,17 +2812,7 @@ SEXP C_cdid_ia_aug_if_chunk(
             }
           }
         }
-        if (intercept) {
-          double sma = Rf_asReal(cdid_ia_get_elt(bf, "score_mean_alpha"));
-          for (int r = 0; r < B; ++r) ra_dir[r] -= sma;
-        }
         if (p_or > 0) {
-          const double *smb = REAL(cdid_ia_get_elt(bf, "score_mean_beta"));
-          for (int m = 0; m < p_or; ++m) {
-            double smbm = smb[m];
-            double *dst = rb_dir + (size_t) m * (size_t) B;
-            for (int r = 0; r < B; ++r) dst[r] -= smbm;
-          }
           double *xb_dir = (double *) R_alloc((size_t) B * (size_t) p_or, sizeof(double));
           double *xb_a   = (double *) R_alloc((size_t) B * (size_t) p_or, sizeof(double));
           double *xb_j   = (double *) R_alloc((size_t) B * (size_t) p_or, sizeof(double));
@@ -2836,7 +2833,6 @@ SEXP C_cdid_ia_aug_if_chunk(
           or_beta_q[bid]   = xb_q;
         }
         if (intercept) {
-          double mass_b = Rf_asReal(cdid_ia_get_elt(bf, "mass"));
           for (int r = 0; r < B; ++r) {
             double dot_dir = 0.0, dot_a = 0.0, dot_j = 0.0, dot_q = 0.0;
             for (int m = 0; m < p_or; ++m) {

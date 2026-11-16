@@ -91,7 +91,7 @@ native_results <- NULL
 if (!native_only) {
   self <- sub("^--file=", "", grep("^--file=", command, value = TRUE))
   stopifnot(length(self) == 1L, file.exists(self))
-  native_dir <- file.path(output_dir, "native-overhead")
+  native_dir <- tempfile("native-overhead-", tmpdir = output_dir)
   native_args <- c("--vanilla", shQuote(self), "--native-only",
     shQuote(paste0("--lib-loc=", dirname(package_path))),
     shQuote(paste0("--test-dir=", test_dir)),
@@ -100,9 +100,10 @@ if (!native_only) {
   native_status <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
     native_args, stdout = native_log, stderr = native_log))
   native_rds <- file.path(native_dir, "full-test-results.rds")
-  if (file.exists(native_rds)) native_results <- readRDS(native_rds)
-  if (!identical(native_status, 0L) || is.null(native_results) ||
-      !identical(unique(native_results$file), native_file)) {
+  result <- if (file.exists(native_rds)) tryCatch(readRDS(native_rds), error = identity) else NULL
+  valid_result <- is.data.frame(result) && identical(unique(result$file), native_file)
+  if (valid_result) native_results <- result
+  if (!identical(native_status, 0L) || !valid_result) {
     native_error <- sprintf("Native DLL test process failed (status %s). See %s.",
       native_status, native_log)
   }
