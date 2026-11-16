@@ -127,7 +127,8 @@ noh_compile_dll <- function(c_lines, dll_name, parent_dir, source_dir = NULL) {
     companions <- c("chained_zero_template.c", "chained_legacy_ipw_chunk.c",
       "chained_score_pullback.c", "chained_coarse_pullback.c", "chained_pair_operation.c",
       "cdid_fast_kernels.c", "cdid_fast_selection.c", "cdid_fast_impaug.c", "cdid_fast_pretest.c")
-    bundle <- file.path(source_dir, c("cdid_r_api.h", companions))
+    # Use the package's BLAS and LAPACK link settings for the full bundle.
+    bundle <- file.path(source_dir, c("cdid_r_api.h", "Makevars", "Makevars.win", companions))
     if (!all(file.exists(bundle)) || !all(file.copy(bundle, sub_dir)))
       stop("Incomplete current native source bundle for CP02 test build.", call. = FALSE)
   }
