@@ -1,6 +1,6 @@
 # cdid <img src="https://raw.githubusercontent.com/dvbn/cdid/main/man/figures/logo.png" align="right" width="120" alt="cdid logo" />
 
-`cdid` estimates group-time average treatment effects, ATT(g,t), by chained difference-in-differences (chained DiD). It builds on the [`did` package](https://bcallaway11.github.io/did/) and extends its familiar `att_gt()`, `aggte()` and `ggdid()` workflow to panels with missing outcomes. Each unit can contribute changes between the dates at which it is observed.
+`cdid` brings widely used difference-in-differences estimators into a common framework for complete and incomplete panels. It reproduces documented specifications of established methods and extends them with chained comparisons, observation weighting, change imputation and doubly robust corrections for selective missingness, by leveraging the chained difference-in-differences (chained DiD).
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md) · [User guide](https://github.com/dvbn/cdid/blob/main/docs/README.md) · [Author website](https://www.davidbenatia.com/research/)
 
