@@ -1,0 +1,235 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\emergencystretch=1.5em
+
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\newtheorem{lemma}{Lemma}
+\theoremstyle{definition}
+\newtheorem{assumption}{Assumption}
+\newtheorem{definition}{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\title{Cross-Pair Chained Moments, Control-Cohort Parallel Trends (\texttt{PT-ctrl}), and Within-Unit Covariance GMM Weighting in \texttt{cdid}}
+\author{Technical Note CP10 --- \texttt{cdid} Documentation}
+\date{November 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We extend chained difference-in-differences to staggered treatment adoption with short or irregular observation windows. Same-pair comparisons can identify long-horizon effects by chaining contiguous untreated windows under post-reference parallel trends. Cross-pair comparisons extend this argument to designs in which the target cohort and clean control cohorts are observed on different date pairs. Control parallel trends add a restriction on untreated trends among clean control cohorts before the target cohort's reference period.
+
+For matched samples without covariates or observation corrections and with nested observation windows within each cohort, Theorem~\ref{thm:equiv} gives equality of the available point estimates with stacked target-slice unit-fixed-effect regression. This result uses cross-pair moments, control parallel trends from the earliest date, a universal reference period, the analytical within-unit weighting matrix and the same unit weights. When units in each cohort share a common observation window, the point estimates also equal the cohort-fixed-effect regression coefficients. Within-unit differences eliminate fixed outcome levels. The identification of treatment effects still requires representative changes and parallel trends. The framework allows feasible two-step weighting, covariate adjustment and inference based on original-unit influence functions.
+\end{abstract}
+
+\section{Setup and Notation}
+
+Consider a study population of units $i \in \{1,\dots,N\}$ observed over a subset of finite calendar dates $\mathcal{T} = \{t_1 < t_2 < \dots < t_T\}$. Let $G_i \in \mathcal{G} \cup \{\infty\}$ denote unit $i$'s first treatment date ($G_i = \infty$ for never-treated units, encoded publicly as $0$), let $X_i \in \mathbb{R}^p$ denote time-invariant baseline covariates, and let $w_i > 0$ denote fixed unit sampling weights. At calendar date $t \in \mathcal{T}$, unit $i$ has latent potential outcomes $Y_{it}(g)$ for $g \in \mathcal{G}$ and untreated potential outcome $Y_{it}(\infty)$, observed outcome $Y_{it} = Y_{it}(G_i)$ when the observation indicator $S_{it} = 1$, and missing ($Y_{it} = \mathtt{NA}$) when $S_{it} = 0$. Let $S_{i,s,t} = S_{is} S_{it}$ indicate joint observation at ordered dates $s < t$.
+
+Given integer anticipation horizon $\delta \ge 0$, cohort $g$'s canonical pre-exposure reference date in the stored calendar is
+\[
+b_g = \max\{d \in \mathcal{T} : d + \delta < g\}.
+\]
+Cohort $k \in \mathcal{G} \cup \{\infty\}$ is a \emph{clean control} for target cohort $g$ at date $t$ under not-yet-treated controls (\texttt{control\_group = "notyettreated"}) if $k > g$ and $t + \delta < k$ (or $k = \infty$ under \texttt{control\_group = "nevertreated"}). The target parameter is the population group-time average treatment effect
+\[
+\mathrm{ATT}(g,t) = \mathbb{E}\bigl[Y_t(g) - Y_t(\infty) \mid G = g\bigr], \qquad t \ge g - \delta.
+\]
+
+\begin{assumption}[Mean-Change Representativeness Within Cohorts]\label{ass:mtar}
+For every cohort $k \in \mathcal{G} \cup \{\infty\}$ and every ordered date pair $(s,t)$ with $\mathbb{P}(S_{s,t}=1 \mid X, G=k) > 0$,
+\[
+\mathbb{E}\bigl[Y_t - Y_s \mid X, G = k, S_{s,t} = 1\bigr] = \mathbb{E}\bigl[Y_t - Y_s \mid X, G = k\bigr].
+\]
+\end{assumption}
+
+Assumption~\ref{ass:mtar} permits observation $S_{it}$ to depend arbitrarily on time-invariant unobserved heterogeneity $\alpha_i$ in $Y_{it}(\infty) = \alpha_i + u_{it}$, provided $\alpha_i$ is mean-independent of the innovations $u_{it} - u_{is}$ conditional on $(X_i, G_i)$. By contrast, level-based cohort-fixed-effect regressions additionally require time-invariant conditional mean $\mathbb{E}[\alpha_i \mid G_i = k, S_{it} = 1]$ across $t$.
+
+\section{The Parallel-Trends Hierarchy: \texttt{PT-post}, \texttt{PT-ctrl}, and \texttt{PT-all}}
+
+For a fixed target cohort $g \in \mathcal{G}$ and common start date $t_{\mathrm{start}} \in \mathcal{T}$ ($t_{\mathrm{start}} \le b_g$; defaulting to $\min \mathcal{T}$ under \texttt{PT-ctrl}), define the following three conditional parallel-trends regimes:
+
+\begin{enumerate}
+\item \textbf{\texttt{PT-post} (\texttt{pt\_assumption = "post"}):} For all dates $s, t \ge b_g$ and every clean cohort $k$ with $\max(s,t) + \delta < k$,
+\[
+\mathbb{E}\bigl[Y_t(\infty) - Y_s(\infty) \mid X, G = g\bigr] = \mathbb{E}\bigl[Y_t(\infty) - Y_s(\infty) \mid X, G = k\bigr].
+\]
+Trends prior to $b_g$ are completely unrestricted, both between $g$ and $k$ and among distinct control cohorts $k \neq k'$.
+
+\item \textbf{\texttt{PT-ctrl} (\texttt{pt\_assumption = "ctrl"}):} Maintains \texttt{PT-post} and adds equality of untreated trends \emph{among clean control cohorts} from $t_{\mathrm{start}}$ onward: for all clean cohorts $k, k'$ for target $g$ and all $s, t \ge t_{\mathrm{start}}$ with $\max(s,t) + \delta < \min(k, k')$,
+\[
+\mathbb{E}\bigl[Y_t(\infty) - Y_s(\infty) \mid X, G = k\bigr] = \mathbb{E}\bigl[Y_t(\infty) - Y_s(\infty) \mid X, G = k'\bigr].
+\]
+Crucially, target cohort $g$'s own pre-reference untreated drift $\mathbb{E}[Y_u(\infty) - Y_{b_g}(\infty) \mid X, G = g]$ ($u < b_g$) remains completely unrestricted.
+
+\item \textbf{\texttt{PT-all} (\texttt{pt\_assumption = "all"}):} Maintains \texttt{PT-post} and additionally restricts target cohort $g$'s own untreated pre-reference drift on $[t_{\mathrm{start}}, b_g]$ to match its clean control cohorts: for all $s, t \ge t_{\mathrm{start}}$ and clean $k$ with $\max(s,t) + \delta < k$,
+\[
+\mathbb{E}\bigl[Y_t(\infty) - Y_s(\infty) \mid X, G = g\bigr] = \mathbb{E}\bigl[Y_t(\infty) - Y_s(\infty) \mid X, G = k\bigr].
+\]
+\end{enumerate}
+
+\begin{proposition}[Single-Cohort Non-Nesting vs.\ Joint Implication]\label{prop:hierarchy}
+Fix a single target cohort $g$ with at least two clean control cohorts $k' > k > g$ observed on dates $s < t < b_g$:
+\begin{enumerate}
+\item[(i)] \texttt{PT-ctrl}$(g)$ does not imply \texttt{PT-all}$(g)$, because target cohort $g$ may deviate arbitrarily from the shared control trend prior to $b_g$. Conversely, in the same-pair comparison catalog where \texttt{PT-all}$(g)$ restricts $\beta_{g,\mathcal{K}}(u) = 0$ across nested comparison pools $\mathcal{K}$ with positive cohort masses, \texttt{PT-all}$(g)$ implies \texttt{PT-ctrl}$(g)$; if instead \texttt{PT-all}$(g)$ is stated only against an aggregate pool $\{G > g\}$, it does not restrict individual sub-cohorts $k, k' > g$ separately.
+\item[(ii)] Jointly across nested not-yet-treated comparison pools $\{G \ge k\}$ with positive cohort masses $\mathbb{P}(G = k \mid X) > 0$ (as invoked by Callaway and Sant'Anna \cite{CS2021} and same-pair \texttt{cdid}'s fixed-horizon control-pool reuses \cite{BBD2025}), \texttt{PT-post} from $b_{g_{\min}}$ onward ($g_{\min} = \min \mathcal{G}$) already implies that all cohorts untreated at $v > b_{g_{\min}}$ share identical conditional untreated increments after $b_{g_{\min}}$. Consequently, the additional empirical content of \texttt{PT-ctrl} beyond nested-pool \texttt{PT-post} is confined to calendar dates strictly prior to $b_{g_{\min}}$.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+Part (i) follows immediately by setting $\mathbb{E}[Y_t(\infty)-Y_s(\infty)\mid G=g] \neq \lambda_t - \lambda_s = \mathbb{E}[Y_t(\infty)-Y_s(\infty)\mid G=k]$ for all $k > g$ at $s < t < b_g$. For Part (ii), by definition $b_{g_{\min}} = \max\{d \in \mathcal{T} : d + \delta < g_{\min}\}$, so every stored calendar date $v \in \mathcal{T}$ with $v > b_{g_{\min}}$ satisfies $v + \delta \ge g_{\min}$. For any ordered dates $b_{g_{\min}} \le u < v$ and consecutive clean adoption dates $k_1 < k_2$ with $v + \delta < k_1$, nested-pool \texttt{PT-post} for target $g_{\min}$ equates $\mathbb{E}[\Delta Y_{u,v}(\infty) \mid X, G = g_{\min}]$ to both $\mathbb{E}[\Delta Y_{u,v}(\infty) \mid X, G \ge k_1]$ and $\mathbb{E}[\Delta Y_{u,v}(\infty) \mid X, G \ge k_2]$. Since $\{G \ge k_1\} = \{G = k_1\} \sqcup \{G \ge k_2\}$ with $\mathbb{P}(G = k_1 \mid X) > 0$, taking the law-of-iterated-expectations difference yields $\mathbb{E}[\Delta Y_{u,v}(\infty) \mid X, G = k_1] = \mathbb{E}[\Delta Y_{u,v}(\infty) \mid X, G \ge k_2]$, and backward induction over $k$ shows that all cohorts clean at $v$ share the same conditional untreated increment on $(u,v)$.
+\end{proof}
+
+\section{Contiguous Short Windows vs.\ Disjoint Cross-Pair Chaining}
+
+For a target cohort $g$, let $\mathcal{H}_g$ denote the bipartite cohort-date observation graph linking clean control cohorts $k > g$ to calendar dates $u \in \mathcal{T}$ where $u + \delta < k$ and $\mathbb{P}(S_u = 1, G = k) > 0$.
+
+\begin{theorem}[Identification under Contiguous and Disjoint Windows]\label{thm:ident}
+Suppose Assumption~\ref{ass:mtar} holds without covariates ($X_i \equiv 1$) or with common support in $X_i$.
+\begin{enumerate}
+\item[(a)] \textbf{Contiguous observation windows (same-pair \texttt{PT-post} suffices):} Suppose that for each clean cohort $k > g$, the set of clean observed dates $\mathcal{T}_k^{(g)} = \{u \in \mathcal{T} : u + \delta < k,\; \mathbb{P}(S_u=1, G=k)>0\}$ is a contiguous interval of stored calendar dates $[a_k, c_k] \cap \mathcal{T}$ with unit-level persistence ($S_{i,u,v}=1$ for $u,v \in \mathcal{T}_k^{(g)}$ on a positive-mass subset of cohort $k$), and cohort $g$ has positive mass observed across $[b_g, t] \cap \mathcal{T}$. If $b_g$ and $t$ lie in the same connected component of $\mathcal{H}_g$, then $\mathrm{ATT}(g,t)$ is identified by same-pair \texttt{cdid} (\texttt{cross\_pair = FALSE}) under \texttt{PT-post} alone.
+\item[(b)] \textbf{General incomplete panels (\texttt{cross\_pair = TRUE}):} Define the cross-pair moment catalog for target cohort $g$:
+\begin{align*}
+m^{\mathrm{tgt}}_{g,s,t} &= \mathbb{E}\bigl[Y_t - Y_s \mid G=g, S_{s,t}=1\bigr] = \gamma_g(t) - \gamma_g(s), \\
+m^{\mathrm{ctrl}}_{g,k,s,t} &= \mathbb{E}_{X \mid G=g}\Bigl[\mathbb{E}\bigl[Y_t - Y_s \mid X, G=k, S_{s,t}=1\bigr]\Bigr] = \lambda_{g,k}(t) - \lambda_{g,k}(s), \qquad t + \delta < k,
+\end{align*}
+anchored at $\gamma_g(b_g) = \lambda_{g,k}(b_g) = 0$, where $\lambda_{g,k}(u) \equiv \lambda_g(u)$ for $u \ge b_g$ under \texttt{PT-post} and additionally for $u \ge t_{\mathrm{start}}$ under \texttt{PT-ctrl}. Then:
+\begin{enumerate}
+\item[(i)] Under \texttt{PT-ctrl} with $t_{\mathrm{start}} = \min \mathcal{T}$, $\mathrm{ATT}(g,t) = \gamma_g(t) - \lambda_g(t)$ is identified from the linear system $m = A\theta$ if and only if $(b_g, t)$ is connected in cohort $g$'s own pair-observation graph $\mathcal{G}^{\mathrm{tgt}}_g$ and $(b_g, t)$ is connected in the union of clean control pair-observation graphs $\bigcup_{k} \mathcal{G}^{\mathrm{ctrl}}_{g,k}$.
+\item[(ii)] There exist incomplete panel designs (for example, $\mathcal{T}_3 = \{1,2,4\}$, $\mathcal{T}_4 = \{2,3\}$, $\mathcal{T}_5 = \{3,4\}$, $b_3 = 2, t = 4$) in which no control cohort is observed at both $(2,4)$ and cohort $3$ is never observed at $3$---so same-pair DiD has zero causal links---yet \texttt{att\_gt(..., cross\_pair = TRUE)} identifies $\mathrm{ATT}(3,4) = m^{\mathrm{tgt}}_{3,2,4} - m^{\mathrm{ctrl}}_{3,4,2,3} - m^{\mathrm{ctrl}}_{3,5,3,4}$ under \texttt{PT-post}, \texttt{PT-ctrl}, and \texttt{PT-all}.
+\end{enumerate}
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+For (a), order the stored dates between $b_g$ and $t$ as $u_0 = b_g < u_1 < \dots < u_H = t$. If some consecutive step $(u_{h-1}, u_h)$ were not covered by any clean cohort $k > g$, every contiguous interval $\mathcal{T}_k^{(g)}$ would lie entirely in $\{u \le u_{h-1}\}$ or entirely in $\{u \ge u_h\}$, partitioning $\mathcal{H}_g$ into two disconnected components separating $b_g$ from $t$, a contradiction. Hence for each $h = 1,\dots,H$, some $k_h > g$ satisfies $u_h + \delta < k_h$ and covers $(u_{h-1}, u_h)$, so $k_h$ belongs to the clean control pool $\mathcal{K}_{\mathrm{orig}}(g, u_{h-1}, u_h)$ of same-pair \texttt{cdid} \cite{BBD2025}, and summing the $H$ adjacent same-pair comparisons telescopes to $\mathrm{ATT}(g,t)$ under \texttt{PT-post}.
+
+For (b)(i), under \texttt{PT-ctrl} with $t_{\mathrm{start}} = \min\mathcal{T}$, every control link $(s,t)$ of every clean cohort $k$ has incidence vector $e_{\lambda_g(t)} - e_{\lambda_g(s)}$, while every target link $(s,t)$ has incidence vector $e_{\gamma_g(t)} - e_{\gamma_g(s)}$. The incidence matrix $A_g = \mathrm{blkdiag}(A_g^{\mathrm{tgt}}, A_g^{\mathrm{ctrl}})$ decomposes into two independent directed incidence matrices grounded at $b_g$. By standard graph-incidence rank theory, $e_{\gamma_g(t)} - e_{\gamma_g(b_g)} \in \mathrm{row}(A_g^{\mathrm{tgt}})$ iff $b_g$ and $t$ are connected in $\mathcal{G}_g^{\mathrm{tgt}}$, and $e_{\lambda_g(t)} - e_{\lambda_g(b_g)} \in \mathrm{row}(A_g^{\mathrm{ctrl}})$ iff $b_g$ and $t$ are connected in $\bigcup_{k} \mathcal{G}^{\mathrm{ctrl}}_{g,k}$. Part (b)(ii) follows immediately by verifying $m^{\mathrm{tgt}}_{3,2,4} = \mathrm{ATT}(3,4) + (\lambda_4 - \lambda_2)$, $m^{\mathrm{ctrl}}_{3,4,2,3} = \lambda_3 - \lambda_2$, and $m^{\mathrm{ctrl}}_{3,5,3,4} = \lambda_4 - \lambda_3$ under \texttt{PT-post} alone.
+\end{proof}
+
+\section{Within-Unit Covariance, Spanning Forests, and Regression Duality}
+
+For each target cohort $g$, define the target-slice sample $\mathcal{S}_g$ consisting of all observed cells $(i,t)$ with $S_{it}=1$ and either $G_i = g$ or ($G_i$ is a clean control cohort for $g$ and $t + \delta < G_i$). Consider the weighted within-unit fixed-effect slice regression on $\mathcal{S}_g$:
+\begin{equation}\label{eq:unit_fe_slice}
+\min_{\{\alpha_i^{(g)}\}, \{\lambda_u^{(g)}\}, \{\tau_{g,u}\}} \sum_{(i,t) \in \mathcal{S}_g} w_i \Bigl(Y_{it} - \alpha_i^{(g)} - \lambda_t^{(g)} - \sum_{u \in \mathcal{T}_g \setminus \{b_g\}} \tau_{g,u} \mathbf{1}\{G_i = g, t = u\}\Bigr)^2,
+\end{equation}
+normalized by $\lambda_{b_g}^{(g)} = 0$. Regression~\eqref{eq:unit_fe_slice} simultaneously estimates all pre-treatment leads $\tau_{g,u}$ ($u < b_g$) and post-treatment effects $\tau_{g,u}$ ($u \ge g - \delta$) relative to the universal baseline $b_g$.
+
+Now consider the cross-pair moment catalog without covariates ($X_i \equiv 1$). Each link $\ell = (g, r_\ell, k_\ell, s_\ell, t_\ell)$ computes the weighted cohort mean change
+\[
+\hat{m}_\ell = \sum_{i \in I_\ell} \tilde{\omega}_{\ell, i} (Y_{i, t_\ell} - Y_{i, s_\ell}), \qquad \tilde{\omega}_{\ell, i} = \frac{w_i}{\sum_{j \in I_\ell} w_j},
+\]
+where $I_\ell = \{i : G_i = k_\ell,\; S_{i, s_\ell, t_\ell} = 1\}$. Define the analytical \emph{within-unit covariance matrix} $\Omega^{\mathrm{within}}$ across links $\ell, \ell'$ under homoskedastic uncorrelated level shocks $\mathrm{Cov}(\varepsilon_{it}, \varepsilon_{jt'}) = \sigma^2 w_i^{-1} \mathbf{1}\{i=j, t=t'\}$ within each slice $g$:
+\begin{equation}\label{eq:v_within}
+\Omega^{\mathrm{within}}_{\ell, \ell'} = \mathbf{1}\{g_\ell = g_{\ell'}\} \bigl(\mathbf{1}\{t_\ell = t_{\ell'}\} + \mathbf{1}\{s_\ell = s_{\ell'}\} - \mathbf{1}\{t_\ell = s_{\ell'}\} - \mathbf{1}\{s_\ell = t_{\ell'}\}\bigr) \sum_{i \in I_\ell \cap I_{\ell'}} \frac{W_A}{w_i} \tilde{\omega}_{\ell, i} \tilde{\omega}_{\ell', i},
+\end{equation}
+where $W_A = \sum_{i \in A} w_i$.
+
+\subsection{Exact Mask-Group Spanning-Forest Reduction and Gram Matrix \texorpdfstring{$G = E^\top E$}{G = E'E}}
+
+Within any equivalence class of links sharing identical $(g_\ell, r_\ell, I_\ell)$ (and identical clean pool boundary when $s_\ell < b_g < t_\ell$ under \texttt{PT-post}), any cycle $(s, u) + (u, t) - (s, t) = 0$ holds identically unit-by-unit because the underlying unit weights $\tilde{\omega}_{\ell, i}$ are identical on $I_\ell$. Selecting a shortest-span spanning forest $\mathcal{F}$ of the class's date-pair edges expresses the full class moment vector as $\hat{m}_{\mathrm{full}} = E \hat{m}_{\mathcal{F}}$, where each dropped link row $e_d^\top$ of $E$ is the signed $(\pm 1)$ unique tree path between $s_d$ and $t_d$ in $\mathcal{F}$. Passing the exact integer Gram block
+\[
+G_{\mathrm{class}} = E_{\mathrm{class}}^\top E_{\mathrm{class}} = I_{|\mathcal{F}|} + E_{\mathrm{drop}}^\top E_{\mathrm{drop}}
+\]
+into the covariance-ridge Tikhonov solver reconstructs the unreduced normal equations identically ($E^\top (E V_{\mathcal{F}} E^\top + \lambda I)^+ E = (G V_{\mathcal{F}} + \lambda I)^{-1} G$) even when a mask class forms a non-clique subgraph of dates.
+
+\begin{theorem}[Exact GLS / Within-Unit Regression Equivalence]\label{thm:equiv}
+Let $\hat{\theta}^{\mathrm{GMM}}$ solve $\min_\theta (\hat{m}_r - A_r \theta)^\top (\Omega_r^{\mathrm{within}})^{-1} (\hat{m}_r - A_r \theta)$ on the spanning-forest-reduced cross-pair catalog under \texttt{pt\_assumption = "ctrl"}, \texttt{pt\_start = NULL} ($\min\mathcal{T}$), and \texttt{base\_period = "universal"}.
+\begin{enumerate}
+\item[(a)] \textbf{Nested within-cohort observation windows (including multi-wave monotone attrition):} Suppose that within each cohort $k$, the distinct multi-period unit observation sets $\{\mathcal{O}_{k,1} \subset \mathcal{O}_{k,2} \subset \dots \subset \mathcal{O}_{k,M_k}\}$ are nested (for instance, balanced cohort windows or absorbing post-treatment dropout across arbitrary waves). Then for every target cohort $g$ and every estimable pre-treatment and post-treatment period $u \in \mathcal{T}_g \setminus \{b_g\}$, the GMM contrast $\hat{\tau}^{\mathrm{GMM}}_{g,u} = \hat{\gamma}_g(u) - \hat{\lambda}_g(u)$ equals the within-unit OLS coefficient $\hat{\tau}_{g,u}$ from \eqref{eq:unit_fe_slice} identically in exact arithmetic.
+\item[(b)] \textbf{Cohort-balanced observation windows:} Suppose every unit in cohort $k$ is observed on the same cohort-specific date set $\mathcal{T}_k$ ($S_{it} = \mathbf{1}\{t \in \mathcal{T}_{G_i}\}$). Then the cohort-fixed-effect slice regression
+\[
+Y_{it} = \mu_{G_i}^{(g)} + \lambda_t^{(g)} + \sum_{u \in \mathcal{T}_g \setminus \{b_g\}} \tau_{g,u} \mathbf{1}\{G_i = g, t = u\} + e_{it}, \qquad (i,t) \in \mathcal{S}_g,
+\]
+yields the exact same point estimates $\hat{\tau}_{g,u}$ as \eqref{eq:unit_fe_slice} and hence as \texttt{att\_gt()} with \texttt{cross\_pair = TRUE}, \texttt{pt\_assumption = "ctrl"}, \texttt{gmm\_weighting = "within"}, and \texttt{base\_period = "universal"}. Furthermore, \texttt{aggte(..., type = "dynamic", na.rm = TRUE)} weights estimable cohorts at event time $e = t - g$ proportionally to their study-frame cohort masses $W_g / \sum_{g' \in \mathcal{G}_e} W_{g'}$.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+Fix slice $g$, which decouples from $g' \neq g$ in \eqref{eq:v_within} because $\Omega^{\mathrm{within}}$ is block-diagonal across $g$. Partition units in slice $g$ with $|\mathcal{O}_i| \ge 2$ into distinct observation-pattern strata $m = 1,\dots,M_g$, where all units $i \in U_m$ share cohort $k_m$ and observed date set $\mathcal{O}_m = \{t_{m,0} < t_{m,1} < \dots < t_{m, d_m}\}$ ($d_m \ge 1$), with total weight $W_m = \sum_{i \in U_m} w_i$. Singleton units ($|\mathcal{O}_i| = 1$) are absorbed by $\alpha_i^{(g)}$ in \eqref{eq:unit_fe_slice} and carry zero information on $(\lambda^{(g)}, \tau_g)$.
+
+Let $B_m \in \mathbb{R}^{d_m \times |\mathcal{O}_m|}$ denote the adjacent forward-difference operator $(B_m y_i)_h = y_{i, t_{m,h}} - y_{i, t_{m,h-1}}$. Since $\ker(B_m) = \mathrm{span}(\mathbf{1}_{|\mathcal{O}_m|})$, projecting out $\alpha_i^{(g)}$ in \eqref{eq:unit_fe_slice} is equivalent by GLS/FWL duality to minimizing
+\[
+\sum_{m=1}^{M_g} \sum_{i \in U_m} w_i \bigl(B_m y_i - B_m X_{m} \theta_g\bigr)^\top (B_m B_m^\top)^{-1} \bigl(B_m y_i - B_m X_{m} \theta_g\bigr),
+\]
+where $\theta_g = (\gamma_g, \lambda_g)^\top$ and $B_m X_m = A_{g,m}$. Orthogonal decomposition around the stratum mean $\overline{\Delta y}_m = W_m^{-1} \sum_{i \in U_m} w_i B_m y_i$ yields the sufficient-statistic GLS objective
+\[
+\sum_{m=1}^{M_g} W_m \bigl(\overline{\Delta y}_m - A_{g,m} \theta_g\bigr)^\top (B_m B_m^\top)^{-1} \bigl(\overline{\Delta y}_m - A_{g,m} \theta_g\bigr).
+\]
+When observation sets within cohort $k$ are nested ($\mathcal{O}_{k,1} \subset \dots \subset \mathcal{O}_{k,M_k}$), backward elimination from the largest date set $\mathcal{O}_{k,M_k}$ expresses every stratum difference vector $\overline{\Delta y}_m$ as an invertible linear combination of the retained cohort-pair means $\{\hat{m}_\ell : k_\ell = k\}$. Because GLS under $(\Omega^{\mathrm{within}})^{-1}$ is invariant under invertible linear transformations of the moment vector, and on disjoint stratum differences $\Omega^{\mathrm{within}}$ equals $\mathrm{diag}_m\bigl((W_A/W_m) B_m B_m^\top\bigr)$, the cohort-pair GMM objective coincides identically with \eqref{eq:unit_fe_slice} up to $W_A^{-1}$, proving (a).
+
+For (b), when every unit in cohort $k$ has identical observation set $\mathcal{T}_k$, the unit-demean operator $I - |\mathcal{T}_k|^{-1}\mathbf{1}\mathbf{1}^\top$ commutes with cohort averaging because all time-varying regressors in \eqref{eq:unit_fe_slice} are constant within each $(k, t)$ cell. Hence within-unit demeaning and within-cohort demeaning produce identical normal equations, proving $\hat{\tau}^{\mathrm{cohort\text{-}FE}}_{g,u} = \hat{\tau}^{\mathrm{unit\text{-}FE}}_{g,u} = \hat{\tau}^{\mathrm{GMM}}_{g,u}$.
+\end{proof}
+
+\section{Selective-Attrition Robustness, Optimal GMM, and Covariate M-Estimation Inference}
+
+\begin{proposition}[Composition Bias in Cohort-FE Slice Regression vs.\ Consistency of Within-Unit Chained GMM]\label{prop:attrition}
+Suppose $Y_{it}(\infty) = \alpha_i + \lambda_t + u_{it}$ with $\mathbb{E}[u_{it} - u_{is} \mid G_i = k, S_{is} = S_{it} = 1] = 0$, while treated units experience post-treatment attrition correlated with $\alpha_i$ such that $\delta_g(t) \coloneqq \mathbb{E}[\alpha_i \mid G_i = g, S_{it} = 1] - \mathbb{E}[\alpha_i \mid G_i = g, S_{i,b_g} = 1] \neq 0$, whereas control cohorts satisfy $\mathbb{E}[\alpha_i \mid G_i = k, S_{it} = 1] = \bar{\alpha}_k$. Then cohort-FE slice regression converges in probability to $\mathrm{ATT}(g,t) + \delta_g(t)$, whereas \texttt{att\_gt(..., cross\_pair = TRUE)} (under both \texttt{"within"} and \texttt{"optimal"} weighting) is consistent for $\mathrm{ATT}(g,t)$ under Assumption~\ref{ass:mtar}.
+\end{proposition}
+
+\begin{proof}
+In cohort-FE slice regression, $\bar{Y}_{g,t} = \mathbb{E}[\alpha_i \mid G_i=g, S_{it}=1] + \lambda_t + \mathrm{ATT}(g,t) + o_p(1)$, so a single cohort intercept $\mu_g^{(g)}$ fails to cancel $\delta_g(t) \neq 0$. By contrast, every primitive moment $\hat{m}_\ell$ in chained GMM averages $Y_{i,t_\ell} - Y_{i,s_\ell}$ on units with $S_{i,s_\ell,t_\ell}=1$, cancelling $\alpha_i$ identically unit-by-unit.
+\end{proof}
+
+\subsection{Doubly Robust Cross-Pair Moments and Physical-Unit Influence Functions}
+
+When baseline covariates $X_i$ are supplied via \texttt{xformla}, each clean control link $\ell = (g, \mathrm{control}, k, s, t)$ reconstructs the counterfactual change for target cohort $g$'s study-frame covariate distribution $P(X \mid G = g)$ using $I_t = \{i \in A : G_i = g\}$, $I_k = \{i \in A : G_i = k\}$, and $I_c = \{i \in I_k : S_{i,s,t} = 1\}$. Because $I_c$ subsamples cohort $k$ at empirical pair observation rate $\hat{r}_{k,s,t} = (\sum_{j \in I_c} w_j)/M_k \in (0,1]$ where $M_k = \sum_{j \in I_k} w_j$, control propensity weights are inverse-rate calibrated via $v_j = w_j / \tilde{r}_{k,s,t}$ ($\tilde{r}_{k,s,t} = \max(\hat{r}_{k,s,t}, \epsilon)$, $v_i = w_i$ for $i \in I_t$) so that the propensity score estimates $\mathbb{P}(G = g \mid X, G \in \{g,k\})$ without pair-attrition log-odds distortion even when \texttt{xformla} omits an intercept:
+\[
+\hat{m}_\ell^{\mathrm{DR}} = \frac{1}{W_t}\sum_{i \in I_t} w_i \hat{\mu}_{k,s,t}(X_i) + \frac{1}{B_c}\sum_{j \in I_c} b_j\bigl(\Delta Y_{j,s,t} - \hat{\mu}_{k,s,t}(X_j)\bigr), \qquad b_j = v_j \frac{\hat{\pi}_{g,k}(X_j)}{1 - \hat{\pi}_{g,k}(X_j)},
+\]
+where $\hat{\mu}_{k,s,t}(X) = X^\top \hat{\beta}_{k,s,t}$ is fitted by rank-checked WLS of $\Delta Y_{j,s,t}$ on $X_j$ over $j \in I_c$ (verifying that any rank-deficient column alias on $X_c$ holds identically on $X_t$), $\hat{\pi}_{g,k}(X) = \Lambda(X^\top \hat{\gamma}_{g,k})$ is the separation-checked weighted propensity logit of $\mathbf{1}\{G = g\}$ on $I_t \cup I_c$ with weights $v_u$, $W_t = \sum_{i \in I_t} w_i$, and $B_c = \sum_{j \in I_c} b_j$. Setting $\hat{\mu} \equiv 0$ recovers IPW (\texttt{est\_method = "ipw"}); omitting inverse-odds residual reweighting recovers OR (\texttt{est\_method = "reg"}).
+
+Let $\phi_{i,\ell}$ denote the centered M-estimation influence function of unit $i \in \{1,\dots,N_A\}$ for link $\ell$, incorporating the direct moment residual together with the Fr\'echet derivatives with respect to $\hat{\beta}_{k,s,t}$, $\hat{\gamma}_{g,k}$, and $\hat{r}_{k,s,t}$:
+\begin{align*}
+\phi_{i,\ell}^{\mathrm{DR}} &= \mathbf{1}\{i \in I_t\} \frac{N_A w_i}{W_t}\bigl(\hat{\mu}_{k,s,t}(X_i) - \bar{\mu}_t\bigr) \\
+&\quad + \mathbf{1}\{i \in I_c\} N_A \biggl[\frac{b_i}{B_c}\bigl(e_i - \bar{e}_{\mathrm{att}}\bigr) + w_i X_i^\top (X_c^\top W_c X_c)^+(\bar{X}_t - \bar{X}_{c,\mathrm{att}}) e_i\biggr] \\
+&\quad + \mathbf{1}\{i \in I_t \cup I_c\} v_i \bigl(D_i - \hat{\pi}_{g,k}(X_i)\bigr) X_i^\top H_{\gamma}^{-1} G_{\gamma} \\
+&\quad + \frac{N_A w_i}{M_k}\bigl(\mathbf{1}\{i \in I_c\} - \hat{r}_{k,s,t}\mathbf{1}\{i \in I_k\}\bigr)\lambda_{r,\ell},
+\end{align*}
+where $e_i = \Delta Y_{i,s,t} - \hat{\mu}_{k,s,t}(X_i)$, $a_j = \mathbf{1}\{\eta_{\min} < X_j^\top \hat{\gamma}_{g,k} < \eta_{\max}\}$ is the active interior linear-predictor indicator, $H_\gamma = N_A^{-1}\sum_{u \in I_t \cup I_c} v_u \hat{\pi}_{g,k}(X_u)(1-\hat{\pi}_{g,k}(X_u))X_u X_u^\top$, $G_\gamma = B_c^{-1}\sum_{j \in I_c} b_j (e_j - \bar{e}_{\mathrm{att}}) a_j X_j$, and $\lambda_{r,\ell} = \mathbf{1}\{\hat{r}_{k,s,t} > \epsilon\} A_{\gamma,r}^\top H_\gamma^{-1} G_\gamma$ with score-rate Jacobian $A_{\gamma,r} = (N_A \tilde{r}_{k,s,t}^2)^{-1}\sum_{j \in I_c} w_j \hat{\pi}_{g,k}(X_j) X_j$ (the direct partial $\partial \hat{m}_\ell^{\mathrm{DR}} / \partial \tilde{r}_{k,s,t}$ vanishes identically because $\tilde{r}_{k,s,t}^{-1}$ cancels from $b_j / B_c$ and single-cohort WLS).
+
+Because $\Phi = (\phi_{i,\ell}) \in \mathbb{R}^{N_A \times L}$ is indexed by \emph{physical units} $i$ across all cohort slices $g \in \mathcal{G}$ simultaneously:
+\begin{enumerate}
+\item Under \texttt{gmm\_weighting = "optimal"}, feasible two-step GMM uses $\widehat{V}_{\mathrm{opt}} = N_A^{-1} \Phi^\top \Phi$ (with exact Gram-preserving Tikhonov regularization when needed), exploiting both within-slice serial correlation/heteroskedasticity and cross-slice correlation generated by control units serving multiple earlier-treated cohorts $g_1 < g_2 < G_i$.
+\item Under any symmetric GMM weight matrix $M_W$ (including \texttt{"within"}, \texttt{"optimal"}, and \texttt{"identity"}) and target contrast matrix $C_{\mathrm{target}} \in \mathbb{R}^{J \times p}$, the target loading matrix $\Lambda_W = M_W A (A^\top M_W A)^+ C_{\mathrm{target}}^\top$ maps $\Phi$ to physical-unit target influence functions $\Psi = \Phi \Lambda_W$, delivering valid sandwich standard errors, cluster-robust variance estimation, simultaneous multiplier-bootstrap confidence bands, and joint cross-cohort event-study inference via \texttt{aggte()}.
+\end{enumerate}
+
+\subsection{Conditional-MTAR Selection Regimes, Pooled Regressions, Reference-Date Inputs, and General Level-Loading Covariance}
+
+The cross-pair and within-unit GMM architecture extends across the full \texttt{cdid} nuisance hierarchy on the study roster $F$ ($|F| = N \ge N_A$):
+\begin{enumerate}
+\item \textbf{Counterfactual outcome pooling (\texttt{outcome\_pooling = "separate"} or \texttt{"pooled"}):} Under \texttt{"pooled"}, control outcome-change regressions share a common slope vector $\beta_{\mathrm{or}}$ scaled by stored-calendar transition count $L_\ell = i_{t_\ell} - i_{s_\ell}$ across all active control links (and supported pre-trend links), with local block intercepts when \texttt{xformla} includes an intercept. Target links $r_\ell = \mathrm{target}$ reconstruct $\mathbb{E}[\Delta Y_{s_\ell, t_\ell} \mid G = g]$ directly within cohort $g$ without invoking a counterfactual regression.
+\item \textbf{Conditional-MTAR observation regimes (\texttt{selection = "conditional\_mtar"}):} Let $U \in \{F, B, A\}$ denote the declared selection fitting universe with known normalized density ratios $\rho_i = f(X_i \mid G_i, U) / f(X_i \mid G_i)$ ($\rho_i \equiv 1$ when $U = F$). Across all three observation-correction methods (\texttt{selection\_est\_method}):
+\begin{itemize}
+\item \emph{Observation weighting (\texttt{"ipw"}):} Fits pair or independent-date logits (\texttt{selection\_model} set to \texttt{"pair\_logit"} or \texttt{"independent\_period\_logit"}) under \texttt{selection\_pooling} (\texttt{"separate"}, \texttt{"within\_cohort"}, or \texttt{"across\_cohorts"}). On a target link $(g, \mathrm{target}, g, s, t)$, inverse-probability weights $w_i \hat{a}_{U,g} \hat{\pi}_{g,s,t}(X_i) / \rho_i$ with $\hat{\pi} = 1/\max(\hat{q}, \epsilon)$ reconstruct cohort $g$'s population mean change directly. On a cross-pair control link $(g, \mathrm{control}, k, s, t)$ where target cohort $g$ need not be observed at $(s,t)$, cohort $g$'s covariate distribution $P(X \mid G = g)$ is represented on $U_g$ with weights $w_i \hat{a}_{U,g} / \rho_i$, while control cohort $k$'s observed changes on $I_c$ carry weights $w_j \hat{a}_{U,k} \hat{\pi}_{k,s,t}(X_j) / \rho_j$, calibrating the synthetic treatment propensity logit $\mathbb{P}(D = 1 \mid X)$ on $(U_g, w_i \hat{a}_{U,g}/\rho_i) \sqcup (I_c, w_j \hat{a}_{U,k} \hat{\pi}_{k,s,t}(X_j)/\rho_j)$.
+\item \emph{Actual-change imputation (\texttt{"imputation"}, $U = F$):} Stage~1 fits cohort-pair actual-change WLS models $\hat{m}_{h,s,t}^{\mathrm{act}}(X)$ across active cells under \texttt{imputation\_pooling} (\texttt{"separate"}, \texttt{"within\_cohort"}, or \texttt{"across\_cohorts"}), reconstructing full-roster pseudo-changes $\tilde{Y}_{i,\ell} = \hat{m}_{h_\ell, s_\ell, t_\ell}^{\mathrm{act}}(X_i)$ for every $i \in F_{h_\ell}$. Target links average $\tilde{Y}_{i,\ell}$ on $F_g$; control links apply treatment IPW, OR, or DR on $F_g \sqcup F_k$ without pair-attrition distortion.
+\item \emph{Augmented correction (\texttt{"dr"}, $U = F$):} Combines Stage-1 actual-change imputation $\hat{m}_{h,s,t}^{\mathrm{act}}(X_i)$ on $F_h$ with observation-weighted residual correction $S_{i,s,t}\hat{\pi}_{h,s,t}(X_i)\bigl(\Delta Y_{i,s,t} - \hat{m}_{h,s,t}^{\mathrm{act}}(X_i)\bigr)$ on both target links ($h = g$) and control links ($h = k$), propagating the coupled Stage-1 WLS, observation-logit, synthetic-propensity, and counterfactual-OR Jacobians simultaneously.
+\end{itemize}
+\item \textbf{Reference-date covariates and weights (\texttt{fix\_weights}):} When covariates vary within unit across time or sampling weights vary across dates (\texttt{fix\_weights = "first\_period"} or \texttt{"base\_period"}), every catalog link in slice $g$ under \texttt{cross\_pair = TRUE} evaluates unit designs at cohort $g$'s reference date $b_g$ (preserving exact population cancellation of pre-reference differentials across chained links) and anchors sampling weights at the active recipe ($t_1$ or $b_g$), whereas single-pair auxiliary pre-treatment reporting links under \texttt{cross\_pair = FALSE} evaluate unit designs at $s_\ell$; \texttt{aggte()} propagates first-period cohort-share weights $V_i = w_{i, t_1}$.
+\item \textbf{General level-loading within-unit covariance and post-fit forest verification:} Expressing any linear or linearized link estimator on $A$ as $\hat{m}_\ell = \text{const} + \sum_{\tau \in \mathcal{T}} \sum_{i \in A} U_{i,\tau,\ell} Y_{i,\tau}$, the analytical homoskedastic within-unit level covariance within slice $g_\ell = g_{\ell'}$ is
+\[
+\Omega^{\mathrm{within}}_{\ell, \ell'} = \mathbf{1}\{g_\ell = g_{\ell'}\} \sum_{\tau \in \mathcal{T}} \sum_{i \in A_{r(\ell)} : w_{i,r(\ell)} > 0} \frac{N_A \bar{w}_{A,r(\ell)}}{w_{i,r(\ell)}} U_{i,\tau,\ell} U_{i,\tau,\ell'},
+\]
+where $\bar{w}_{A,r} = |A_r|^{-1} \sum_{i \in A_r} w_{i,r}$ denotes the average sampling weight on recipe $r$'s supported repeat-observer units $A_r \subseteq A$ ($N_A \bar{w}_{A,r} = W_A$ whenever $A_r = A$), which reduces identically to \eqref{eq:v_within} when covariates are absent and guarantees positive semidefiniteness and exact uniform-weight invariance across all covariate, pooling, reference-weight, and selection specifications. Cycle edges within candidate mask groups are eliminated only when both fitted moments $\hat{m}_\ell$ and date-level loading vectors $\{U_{\cdot,\tau,\ell}\}_{\tau \in \mathcal{T}}$ satisfy exact tree-path additivity, preserving the full-catalog GLS criterion via $G = E^\top E$. All M-estimation nuisance scores (including off-$A$ units in $F \setminus B$ and $B \setminus A$) are mapped directly to the $N \times J$ full-roster influence matrix $\Psi_F$.
+\end{enumerate}
+
+\begin{thebibliography}{9}
+\bibitem{BBD2025}
+Bell\'ego, C., Benatia, D., and Dortet-Bernadet, V. (2025).
+\newblock The Chained Difference-in-Differences.
+\newblock \emph{Journal of Econometrics}, 248, 105783.
+
+\bibitem{CS2021}
+Callaway, B. and Sant'Anna, P.~H.~C. (2021).
+\newblock Difference-in-Differences with Multiple Time Periods.
+\newblock \emph{Journal of Econometrics}, 225(2), 200--230.
+\end{thebibliography}
+
+\end{document}

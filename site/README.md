@@ -5,11 +5,10 @@ Bootstrap 5 and Flatly. It installs nothing and does not publish or deploy the
 site. Keep the repository and generated files private. The robots metadata is
 an indexing preference; access remains controlled by where you keep the files.
 
-The home page comes from `docs/README.md`. The 20 reading-path pages and
-`validation/SETUP.md` become 21 articles. Release
+The home page comes from `docs/README.md`. The guide pages under `docs/` become articles. Release
 `NEWS.md` becomes pkgdown's `news/index.html`, and the source `man/*.Rd` files
 provide the function reference, including the re-exported plotting functions.
-The five existing plots and all supplied logos are copied without alteration.
+The existing plots and all supplied logos are copied without alteration.
 No new vignette is written. Markdown fences remain static; help examples are
 shown without running them. Recorded versions and results remain unchanged.
 
@@ -24,7 +23,8 @@ shown without running them. Recorded versions and results remain unchanged.
 
 Use a complete, current cdid source checkout with a release `Version` and
 matching ordinary version headings in `NEWS.md` (for example, `# cdid 1.0.0.0`).
-Both README files must have identical content after relative links are rebased.
+The builder checks links in the repository quick start (`README.md`) and
+uses the guide home (`docs/README.md`) as the site home page.
 The input documents must be user documentation: replace authoring notes,
 development headings and authoring-tool references before building. The builder
 reports these problems without rewriting your source or recorded output.

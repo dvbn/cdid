@@ -345,7 +345,7 @@ On `pulse_panel`, the $+0.5$ untreated pulse at period $1$ leaves all untreated 
 
 ---
 
-**Reading path, step 14 of 20** · Previous: [Parallel trends](../methods/parallel-trends.md) · Next: [GMM weighting and covariance regularization](../methods/gmm.md)
+**Reading path, step 14 of 22** · Previous: [Parallel trends](../methods/parallel-trends.md) · Next: [GMM weighting and covariance regularization](../methods/gmm.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -372,6 +372,8 @@ On `pulse_panel`, the $+0.5$ untreated pulse at period $1$ leaves all untreated 
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

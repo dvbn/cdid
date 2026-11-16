@@ -151,6 +151,49 @@ ipw_fitted_view_to_owner_control <- function(ctrl) {
 }
 
 ipw_fitted_view_char_bytes <- function(chr_list, control) {
+  if (is.list(control) && is.numeric(control$max_work_ops) && length(control$max_work_ops) == 1L &&
+      !is.na(control$max_work_ops) && is.numeric(control$max_matrix_entries) &&
+      length(control$max_matrix_entries) == 1L && !is.na(control$max_matrix_entries) &&
+      exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(c("ipw_owner_safe_sum", "ipw_owner_safe_product"))) {
+    tot_b <- 0.0
+    max_b <- 0.0
+    wrk_b <- 128.0
+    fast_ok <- TRUE
+    for (x in chr_list) {
+      if (!is.null(x) && is.character(x)) {
+        nx <- length(x)
+        if (nx > 4096L) {
+          fast_ok <- FALSE
+          break
+        }
+        if (nx > 0L) {
+          nb_v <- as.double(nchar(x, type = "bytes"))
+          if (any(!is.finite(nb_v)) || any(nb_v < 0.0)) {
+            fast_ok <- FALSE
+            break
+          }
+          sb <- sum(nb_v)
+          mb <- max(nb_v)
+          tot_b <- tot_b + sb
+          if (mb > max_b) max_b <- mb
+          wrk_b <- wrk_b + sb + 8.0 * nx
+        }
+      }
+    }
+    slots_b <- ceiling(tot_b / 2.0) + 32.0
+    if (fast_ok && wrk_b <= 4503599627370495 && wrk_b <= control$max_work_ops &&
+        slots_b <= 4503599627370495 && slots_b <= control$max_matrix_entries &&
+        8.0 * slots_b <= 4503599627370495) {
+      return(list(
+        source_bytes = tot_b,
+        max_string_bytes = max_b,
+        charged_slots = slots_b,
+        charged_bytes = 8.0 * slots_b,
+        work_ops_bound = wrk_b
+      ))
+    }
+  }
   total_bytes <- 0; max_bytes <- 0; work <- 128
   for (x in chr_list) {
     if (!is.null(x) && is.character(x)) for(j in seq_along(x)) {
@@ -171,6 +214,13 @@ ipw_fitted_view_char_bytes <- function(chr_list, control) {
 # chunk is normalized at a time; no original-scale squares or retained arrays.
 # The caller reserves metadata, scratch and work in the fitted-view preflight.
 ipw_fitted_diagnostic_summary <- function(v, chunk_rows, kish) {
+  if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+    fk_ds <- cdid_fast_kernel("C_cdid_diag_summary")
+    if (!is.null(fk_ds)) {
+      fast_ds <- fk_ds(v, chunk_rows, kish)
+      if (!is.null(fast_ds)) return(fast_ds)
+    }
+  }
   unavailable <- function(reason) {
     if (kish) list(status = "unavailable", reason = reason, value = NA_real_) else
       list(status = "unavailable", reason = reason, min = NA_real_, max = NA_real_)

@@ -193,10 +193,8 @@ jobs:
         env:
           _R_CHECK_LIMIT_CORES_: 'true'
         run: |
-          # Executes testthat::test_dir("check/cdid.Rcheck/tests/testthat",
-          # filter = NULL, package = "cdid", load_package = "installed",
-          # reporter = ..., stop_on_failure = TRUE, stop_on_warning = TRUE)
-          # against the installed package library in check/cdid.Rcheck.
+          # Checks every packaged test file against the installed library.
+          # The DLL lifecycle file runs in a separate R process.
           status <- system2(
             file.path(R.home("bin"), "Rscript"),
             c(

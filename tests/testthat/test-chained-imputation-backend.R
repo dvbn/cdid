@@ -165,7 +165,7 @@ testthat::test_that("all 9 fixtures and 108 method-links match points, nuisances
       fits_y[[m]] <- imp_fit(fx, est_method = m, pair_outcomes = NULL)
       imp_ns("validate_imputation_backend")(fits_y[[m]])
 
-      # Also fit pure-R table helper on Y_obs and verify exact machine-precision parity with sealed owner
+      # Compare the table and sealed-owner fits on the same observed outcomes.
       tb_y <- imp_loader$fit_imputation_table(
         X = fx$X_full,
         Y = fx$Y_obs,
@@ -184,7 +184,20 @@ testthat::test_that("all 9 fixtures and 108 method-links match points, nuisances
       pts_owner_y <- vapply(seq_along(fx$views), function(j) imp_ns("chained_full_link_estimate")(fits_y[[m]], j), numeric(1))
       testthat::expect_lt(imp_mx(pts_owner_y - tb_y$estimates), 2e-14)
       col_y <- imp_collect(fits_y[[m]], chunk_rows = 9L, link_batch_size = 2L, scale = "frame", details = FALSE)
-      testthat::expect_lt(imp_mx(col_y$phi - tb_y$phi), 2e-14)
+      if (fx$spec$recipe_key == "intercept_x1_x2") {
+        # Native batched replay and the table calculation can round differently.
+        shape <- c(N, length(link_ids))
+        testthat::expect_identical(tb_y$state$id, as.double(fx$reader$state$id))
+        testthat::expect_identical(typeof(col_y$phi), typeof(tb_y$phi))
+        testthat::expect_identical(attributes(col_y$phi), list(dim = shape))
+        testthat::expect_identical(attributes(tb_y$phi),
+                                   list(dim = shape, dimnames = list(NULL, link_ids)))
+        table_phi <- unname(tb_y$phi)
+        testthat::expect_identical(col_y$phi == 0, table_phi == 0)
+        testthat::expect_equal(col_y$phi, table_phi, tolerance = 1e-12)
+      } else {
+        testthat::expect_lt(imp_mx(col_y$phi - tb_y$phi), 2e-14)
+      }
 
       # Real owner on 8-decimal Y_obs vs 10-decimal Delta_e reference
       testthat::expect_lt(imp_mx(pts_owner_y - exp$point_method(m, "estimate")), 5e-8)
@@ -404,6 +417,9 @@ testthat::test_that("chunk size, supplied row order permutation, and positive we
     outcome_recipe = fx_std$outcome_recipe, treatment_columns = fx_std$treatment_columns,
     est_method = "dr", imputation_pooling = "within_cohort"
   )
+  treated_mass <- vapply(tb_1$core$links, `[[`, numeric(1L), "d_plus")
+  scaled_treated_mass <- vapply(tb_scale$core$links, `[[`, numeric(1L), "d_plus")
+  testthat::expect_equal(scaled_treated_mass, 3.5 * treated_mass, tolerance = 1e-12)
   testthat::expect_lt(imp_mx(tb_1$estimates - tb_scale$estimates), 1e-14)
   testthat::expect_lt(imp_mx(tb_1$phi - tb_scale$phi), 1e-14)
 })

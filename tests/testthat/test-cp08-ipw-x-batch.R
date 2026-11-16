@@ -117,6 +117,75 @@ xb_expect_match <- function(a, b, tol = 1e-12, info = NULL) {
   bad <- mismatch(a, b, "root")
   expect_true(length(bad) == 0L, info = paste(c(info, head(bad, 12L)), collapse = "\n"))
 }
+
+# The complete p=3 fixture is just identified with a rank-deficient
+# weight covariance. A null eigenvalue and a zero multiplier can round
+# differently across the two paths. Check the meaning of their diagnostics
+# for each fit before comparing the remaining inference and design fields.
+xb_check_square_gmm <- function(result, ctrl, info) {
+  fit <- result$gmm_fit
+  handling <- fit$covariance_handling
+  spectrum <- handling$conditioning
+  eig <- spectrum$eigenvalues_B
+  roundoff <- spectrum$b_roundoff_bound + spectrum$r_eigen_residual
+  expect_identical(fit$overid_df, 0L, info = info)
+  expect_identical(handling$handler_used, "tikhonov", info = info)
+  expect_true(isTRUE(handling$handler_invoked) && isTRUE(spectrum$gram_provenance_certified), info = info)
+  expect_identical(handling$covariance_rank, length(eig) - 1L, info = info)
+  expect_identical(spectrum$d_min, min(eig), info = info)
+  expect_true(is.finite(roundoff) && abs(spectrum$d_min) <= roundoff, info = info)
+  negative <- spectrum$d_min < 0
+  expect_identical(spectrum$diagnosed_numerical_negative, negative, info = info)
+  expect_identical(spectrum$negative_eigenvalue_diagnosis,
+    if (negative) "consistent_with_roundoff" else "nonnegative_spectrum", info = info)
+  expect_identical(spectrum$nonpositive_eigenvalue_count, as.integer(sum(eig <= 0)), info = info)
+  expected_trigger <- if (negative) "roundoff_negative_psd" else if (spectrum$d_min == 0)
+    "exact_zero_eigenvalue" else "spectral_condition_below_trigger"
+  expect_identical(handling$trigger_reason, expected_trigger, info = info)
+
+  g <- fit$internal_gauge
+  W <- api$materialize_gmm_gauge_matrix(g$gauge, 10000)
+  expect_identical(nrow(W), ncol(W), info = info)
+  xb_expect_match(as.double(W %*% g$theta_gauge_coords),
+    as.double(result$covariance_stream$mhat), info = paste(info, "retained moments"))
+  expect_identical(dim(g$U_qr), dim(W), info = info)
+  p <- g$pivot
+  xb_expect_match(unname(tcrossprod(backsolve(g$U_qr, diag(ncol(W))))),
+    unname(g$param_cov_gauge[p, p, drop = FALSE]), info = paste(info, "implied covariance"))
+
+  y <- g$y_multiplier
+  kkt <- fit$numerical_guard$primal_kkt
+  expect_identical(kkt$residual_ratio_role, "diagnostic_only_under_D23", info = info)
+  expect_true(is.double(y) && length(y) == nrow(W) && all(is.finite(y)), info = info)
+  expected_r2 <- -drop(crossprod(W, y))
+  scale <- norm(W, "F") * sqrt(sum(y * y))
+  xb_expect_match(kkt$r2_est, expected_r2, info = info)
+  xb_expect_match(kkt$stat_rel_est,
+    if (scale == 0) 0 else sqrt(sum(expected_r2 * expected_r2)) / scale, info = info)
+  conditioning <- fit$numerical_guard$conditioning
+  accuracy <- ctrl$gmm_accuracy
+  expect_true(is.finite(conditioning$rcond_R_1norm) &&
+    conditioning$rcond_R_1norm >= min(accuracy$min_rcond_R, sqrt(handling$condition_trigger)) &&
+    is.finite(conditioning$rcond_U_1norm) &&
+    conditioning$rcond_U_1norm >= accuracy$min_rcond_U &&
+    is.finite(conditioning$sigma_rel_A_est_2norm) &&
+    conditioning$sigma_rel_A_est_2norm >= accuracy$min_sigma_rel_A, info = info)
+
+  gap <- max(abs(fit$sandwich_cov - fit$raw_Z1tZ1))
+  expect_true(isTRUE(fit$declared_scale_matches_inference), info = info)
+  expect_identical(fit$variance_gap, list(abs = gap, rel = gap / max(abs(fit$raw_Z1tZ1))), info = info)
+
+  fit$covariance_handling$trigger_reason <- NULL
+  fit$covariance_handling$conditioning[
+    c("diagnosed_numerical_negative", "negative_eigenvalue_diagnosis", "nonpositive_eigenvalue_count")
+  ] <- NULL
+  fit$internal_gauge[c("U_qr", "y_multiplier")] <- NULL
+  fit$numerical_guard$primal_kkt[c("r2_est", "stat_rel_est")] <- NULL
+  fit$numerical_guard$conditioning[c("rcond_R_1norm", "rcond_U_1norm", "sigma_rel_A_est_2norm")] <- NULL
+  fit$variance_gap <- NULL
+  fit
+}
+
 xb_reseal <- function(x, binding, edit) { x$ref <- NULL; x <- edit(x); api$ipw_owner_seal(x, binding) }
 xb_point_fields <- c("link_id", "estimate", "means", "coefficients", "loadings", "partials", "masses", "counts")
 xb_record <- function(pl) xb_strip_env(pl[intersect(xb_point_fields, names(pl))])
@@ -173,9 +242,11 @@ test_that("shared fixed-X p = 2 and p = 3: the batch route is selected and equal
     expect_identical(pb$point_fit$propensity_solver_calls, 0L)
     expect_false(isTRUE(pb$point_fit$preflight$propensity_refit_performed))
     expect_identical(pb$point_fit$preflight$p_covariates, as.double(p))
-    # Every structural, support, basis, GMM and design field agrees with the
-    # general route (doubles at 1e-12, everything else exactly).
-    for (f in xb_fields) xb_expect_match(xb_strip_env(res_b[[f]]), xb_strip_env(res_g[[f]]), info = paste(info, f))
+    for (f in xb_fields) {
+      a <- if (f == "gmm_fit" && p == 3L) xb_check_square_gmm(res_b, ctrl, info) else res_b[[f]]
+      b <- if (f == "gmm_fit" && p == 3L) xb_check_square_gmm(res_g, ctrl, info) else res_g[[f]]
+      xb_expect_match(xb_strip_env(a), xb_strip_env(b), info = paste(info, f))
+    }
     expect_identical(res_b$structural_certificate$retained_index, res_g$structural_certificate$retained_index)
     expect_identical(names(res_b$point_links_used), names(res_g$point_links_used))
     # Point records of the retained links: means, the one fitted propensity's

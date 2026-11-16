@@ -999,114 +999,154 @@ fit_custom_ipw_link_view <- function(
 
   # 2. Allocate single temporary observer buffer for this link
   obs_buf_env$active <- TRUE
-  obs_buf_env$risk_a_idx <- integer(n_obs)
-  obs_buf_env$risk_gi <- integer(n_obs)
-  obs_buf_env$risk_w <- numeric(n_obs)
-  obs_buf_env$y0 <- numeric(n_obs)
-  obs_buf_env$y1 <- numeric(n_obs)
-  obs_buf_env$Z_use <- matrix(
-    0.0,
-    nrow = n_obs,
-    ncol = p,
-    dimnames = list(NULL, colnames(frame_owner$Z_a))
-  )
-
-  # 3. Stream bounded link-view chunks in canonical increasing A-unit order
-  write_pos <- 0L
-  last_a_idx <- 0L
-  endpoints_read_total <- 0L
-  y_trace <- new.env(parent = emptyenv())
-
-  cur_s <- 1L
-  while (cur_s <= na) {
-    ipw_owner_check_interrupt()
-    cur_e <- as.integer(min(as.double(na), as.double(cur_s) + step - 1))
-
-    ch <- query_ipw_view_chunk(
-      view = link_view,
-      a_start = cur_s,
-      a_end = cur_e,
-      control = owner_ctrl,
-      read_outcomes = TRUE,
-      include_design = TRUE,
-      enclose_differences = FALSE,
-      trace_env = y_trace
-    )
-    k_ch <- as.integer(ch$counts$observed_risk_row_count)
-    ep_ch <- as.integer(ch$read_diagnostics$n_endpoints_read)
-    endpoints_read_total <- endpoints_read_total + ep_ch
-
-    if (!isTRUE(ch$read_diagnostics$risk_filtered_before_outcome_read) ||
-        isTRUE(ch$read_diagnostics$off_risk_endpoints_read) ||
-        isTRUE(ch$read_diagnostics$nonobserver_endpoints_read) ||
-        !ipw_point_view_identical(ep_ch, as.integer(2L * k_ch)) ||
-        !ipw_point_view_identical(length(y_trace$pos_s_index), k_ch) ||
-        !ipw_point_view_identical(length(y_trace$pos_t_index), k_ch)) {
-      cdid_custom_ipw_abort(
-        "Link view query violated risk-first endpoint read filtering.",
-        c("cdid_ipw_point_view_outcome_leak_error", "cdid_ipw_owner_integrity_error")
+  fast_col <- NULL
+  if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE) &&
+      is.null(cdid_interrupt_callback(ipw_owner_check_interrupt)) &&
+      cdid_is_default_fn(query_ipw_view_chunk, "query_ipw_view_chunk") &&
+      cdid_is_default_fn(ipw_owner_read_y_positions, "ipw_owner_read_y_positions") &&
+      cdid_is_default_fn(ipw_owner_query_pair_mask, "ipw_owner_query_pair_mask")) {
+    fk_col <- cdid_fast_kernel("C_cdid_custom_ipw_collect")
+    po_col <- get0("panel_owner", envir = link_view$panel_ref, inherits = FALSE)
+    ds_col <- link_view$pair$s_calendar_index
+    dt_col <- link_view$pair$t_calendar_index
+    if (!is.null(fk_col) && !is.null(po_col) && !is.na(ds_col) && !is.na(dt_col) &&
+        po_col$postings$date_count[ds_col] > 0L && po_col$postings$date_count[dt_col] > 0L) {
+      post_col <- po_col$postings
+      b4_col <- as.integer(c(post_col$date_start[ds_col], post_col$date_end[ds_col],
+                             post_col$date_start[dt_col], post_col$date_end[dt_col]))
+      c_own_col <- length(frame_owner$a_cohorts)
+      cmap_col <- integer(c_own_col)
+      if (length(link_view$cohorts$owner_cohort_index) > 0L) {
+        cmap_col[as.integer(link_view$cohorts$owner_cohort_index)] <- as.integer(link_view$cohorts$view_cohort_index)
+      }
+      fast_col <- fk_col(
+        post_col$post_a_index, post_col$post_obs_index, b4_col,
+        frame_owner$a_cohort_index, frame_owner$w_a, frame_owner$Z_a,
+        po_col$observations$y, cmap_col, as.integer(c(na, n_obs, step, m))
       )
     }
-    ipw_owner_reset_trace(y_trace)
+  }
 
-    if (k_ch > 0L) {
-      if (write_pos + k_ch > n_obs) {
-        cdid_custom_ipw_abort(
-          "Streamed risk-set observer count exceeds `link_view$support$n_observed_risk_units`.",
-          c("cdid_ipw_point_view_count_error", "cdid_ipw_owner_integrity_error")
-        )
-      }
-      a_ch <- as.integer(ch$observed_risk$a_index)
-      gi_ch <- as.integer(ch$observed_risk$cohort_index)
-      loc_ch <- as.integer(ch$observed_risk$local_pos)
-      w_ch <- as.double(ch$weight[loc_ch])
-      yl_ch <- as.double(ch$observed_risk$y_left_obs)
-      yr_ch <- as.double(ch$observed_risk$y_right_obs)
-      Z_ch <- ch$design$Z_obs
+  if (!is.null(fast_col)) {
+    obs_buf_env$risk_a_idx <- fast_col$risk_a_idx
+    obs_buf_env$risk_gi <- fast_col$risk_gi
+    obs_buf_env$risk_w <- fast_col$risk_w
+    obs_buf_env$y0 <- fast_col$y0
+    obs_buf_env$y1 <- fast_col$y1
+    obs_buf_env$Z_use <- fast_col$Z_use
+    rm(fast_col)
+    write_pos <- n_obs
+    endpoints_read_total <- as.integer(2L * n_obs)
+  } else {
+    obs_buf_env$risk_a_idx <- integer(n_obs)
+    obs_buf_env$risk_gi <- integer(n_obs)
+    obs_buf_env$risk_w <- numeric(n_obs)
+    obs_buf_env$y0 <- numeric(n_obs)
+    obs_buf_env$y1 <- numeric(n_obs)
+    obs_buf_env$Z_use <- matrix(
+      0.0,
+      nrow = n_obs,
+      ncol = p,
+      dimnames = list(NULL, colnames(frame_owner$Z_a))
+    )
 
-      if (length(a_ch) != k_ch || length(gi_ch) != k_ch || length(w_ch) != k_ch ||
-          length(yl_ch) != k_ch || length(yr_ch) != k_ch ||
-          !is.matrix(Z_ch) || nrow(Z_ch) != k_ch || ncol(Z_ch) != p) {
-        cdid_custom_ipw_abort(
-          "Malformed observed-risk slice in link view chunk.",
-          c("cdid_ipw_point_view_chunk_error", "cdid_ipw_owner_integrity_error")
-        )
-      }
-      if (a_ch[1L] <= last_a_idx || (k_ch > 1L && any(diff(a_ch) <= 0L)) ||
-          a_ch[1L] < cur_s || a_ch[k_ch] > cur_e) {
-        cdid_custom_ipw_abort(
-          "Streamed risk-set observer `a_index` is not strictly increasing in global A-unit order.",
-          c("cdid_ipw_point_view_order_error", "cdid_ipw_owner_order_mismatch_error")
-        )
-      }
-      if (anyNA(gi_ch) || any(gi_ch < 1L | gi_ch > m)) {
-        cdid_custom_ipw_abort(
-          "Streamed risk-set observer cohort index is out of `[1, m_cohorts]`.",
-          c("cdid_ipw_point_view_cohort_error", "cdid_ipw_owner_cohort_error")
-        )
-      }
-      dy_ch <- yr_ch - yl_ch
-      if (anyNA(yl_ch) || any(!is.finite(yl_ch)) || anyNA(yr_ch) || any(!is.finite(yr_ch)) ||
-          anyNA(dy_ch) || any(!is.finite(dy_ch))) {
-        rm(a_ch, gi_ch, loc_ch, w_ch, yl_ch, yr_ch, dy_ch, Z_ch)
-        ch <- NULL
-        cleanup_temporary_buffers()
-        cdid_abort("Pair difference overflow.", c("cdid_ipw_outcome_error", "cdid_pairs_outcome_error"))
-      }
+    # 3. Stream bounded link-view chunks in canonical increasing A-unit order
+    write_pos <- 0L
+    last_a_idx <- 0L
+    endpoints_read_total <- 0L
+    y_trace <- new.env(parent = emptyenv())
 
-      dst <- seq.int(write_pos + 1L, write_pos + k_ch)
-      obs_buf_env$risk_a_idx[dst] <- a_ch
-      obs_buf_env$risk_gi[dst] <- gi_ch
-      obs_buf_env$risk_w[dst] <- w_ch
-      obs_buf_env$y0[dst] <- yl_ch
-      obs_buf_env$y1[dst] <- yr_ch
-      obs_buf_env$Z_use[dst, ] <- Z_ch
-      write_pos <- write_pos + k_ch
-      last_a_idx <- a_ch[k_ch]
-      rm(a_ch, gi_ch, loc_ch, w_ch, yl_ch, yr_ch, dy_ch, Z_ch, dst)
+    cur_s <- 1L
+    while (cur_s <= na) {
+      ipw_owner_check_interrupt()
+      cur_e <- as.integer(min(as.double(na), as.double(cur_s) + step - 1))
+
+      ch <- query_ipw_view_chunk(
+        view = link_view,
+        a_start = cur_s,
+        a_end = cur_e,
+        control = owner_ctrl,
+        read_outcomes = TRUE,
+        include_design = TRUE,
+        enclose_differences = FALSE,
+        trace_env = y_trace
+      )
+      k_ch <- as.integer(ch$counts$observed_risk_row_count)
+      ep_ch <- as.integer(ch$read_diagnostics$n_endpoints_read)
+      endpoints_read_total <- endpoints_read_total + ep_ch
+
+      if (!isTRUE(ch$read_diagnostics$risk_filtered_before_outcome_read) ||
+          isTRUE(ch$read_diagnostics$off_risk_endpoints_read) ||
+          isTRUE(ch$read_diagnostics$nonobserver_endpoints_read) ||
+          !ipw_point_view_identical(ep_ch, as.integer(2L * k_ch)) ||
+          !ipw_point_view_identical(length(y_trace$pos_s_index), k_ch) ||
+          !ipw_point_view_identical(length(y_trace$pos_t_index), k_ch)) {
+        cdid_custom_ipw_abort(
+          "Link view query violated risk-first endpoint read filtering.",
+          c("cdid_ipw_point_view_outcome_leak_error", "cdid_ipw_owner_integrity_error")
+        )
+      }
+      ipw_owner_reset_trace(y_trace)
+
+      if (k_ch > 0L) {
+        if (write_pos + k_ch > n_obs) {
+          cdid_custom_ipw_abort(
+            "Streamed risk-set observer count exceeds `link_view$support$n_observed_risk_units`.",
+            c("cdid_ipw_point_view_count_error", "cdid_ipw_owner_integrity_error")
+          )
+        }
+        a_ch <- as.integer(ch$observed_risk$a_index)
+        gi_ch <- as.integer(ch$observed_risk$cohort_index)
+        loc_ch <- as.integer(ch$observed_risk$local_pos)
+        w_ch <- as.double(ch$weight[loc_ch])
+        yl_ch <- as.double(ch$observed_risk$y_left_obs)
+        yr_ch <- as.double(ch$observed_risk$y_right_obs)
+        Z_ch <- ch$design$Z_obs
+
+        if (length(a_ch) != k_ch || length(gi_ch) != k_ch || length(w_ch) != k_ch ||
+            length(yl_ch) != k_ch || length(yr_ch) != k_ch ||
+            !is.matrix(Z_ch) || nrow(Z_ch) != k_ch || ncol(Z_ch) != p) {
+          cdid_custom_ipw_abort(
+            "Malformed observed-risk slice in link view chunk.",
+            c("cdid_ipw_point_view_chunk_error", "cdid_ipw_owner_integrity_error")
+          )
+        }
+        if (a_ch[1L] <= last_a_idx || (k_ch > 1L && any(diff(a_ch) <= 0L)) ||
+            a_ch[1L] < cur_s || a_ch[k_ch] > cur_e) {
+          cdid_custom_ipw_abort(
+            "Streamed risk-set observer `a_index` is not strictly increasing in global A-unit order.",
+            c("cdid_ipw_point_view_order_error", "cdid_ipw_owner_order_mismatch_error")
+          )
+        }
+        if (anyNA(gi_ch) || any(gi_ch < 1L | gi_ch > m)) {
+          cdid_custom_ipw_abort(
+            "Streamed risk-set observer cohort index is out of `[1, m_cohorts]`.",
+            c("cdid_ipw_point_view_cohort_error", "cdid_ipw_owner_cohort_error")
+          )
+        }
+        dy_ch <- yr_ch - yl_ch
+        if (anyNA(yl_ch) || any(!is.finite(yl_ch)) || anyNA(yr_ch) || any(!is.finite(yr_ch)) ||
+            anyNA(dy_ch) || any(!is.finite(dy_ch))) {
+          rm(a_ch, gi_ch, loc_ch, w_ch, yl_ch, yr_ch, dy_ch, Z_ch)
+          ch <- NULL
+          cleanup_temporary_buffers()
+          cdid_abort("Pair difference overflow.", c("cdid_ipw_outcome_error", "cdid_pairs_outcome_error"))
+        }
+
+        dst <- seq.int(write_pos + 1L, write_pos + k_ch)
+        obs_buf_env$risk_a_idx[dst] <- a_ch
+        obs_buf_env$risk_gi[dst] <- gi_ch
+        obs_buf_env$risk_w[dst] <- w_ch
+        obs_buf_env$y0[dst] <- yl_ch
+        obs_buf_env$y1[dst] <- yr_ch
+        obs_buf_env$Z_use[dst, ] <- Z_ch
+        write_pos <- write_pos + k_ch
+        last_a_idx <- a_ch[k_ch]
+        rm(a_ch, gi_ch, loc_ch, w_ch, yl_ch, yr_ch, dy_ch, Z_ch, dst)
+      }
+      ch <- NULL
+      cur_s <- as.double(cur_e) + 1
     }
-    ch <- NULL
-    cur_s <- as.double(cur_e) + 1
   }
 
   if (write_pos != n_obs || !ipw_point_view_identical(endpoints_read_total, as.integer(2L * n_obs))) {
@@ -1310,41 +1350,69 @@ build_custom_ipw_catalog_links <- function(
   total_work <- 0.0
   max_link_workspace <- 0.0
   nuisance_views <- list()
+  nv_fps <- list()
   link_to_nuisance_idx <- integer(M)
+  ctx <- ipw_owner_construction_context(f_owner)
+  ipw_owner_context_check_frame(ctx, f_owner)
+  p_owner_cat <- get0("panel_owner", envir = f_owner$panel_ref, inherits = FALSE)
+  can_fp_screen <- !is.null(p_owner_cat) && exists("ipw_raw_scan_pair_summary", mode = "function", inherits = TRUE)
+  pair_sum_cache <- if (can_fp_screen) new.env(hash = TRUE, parent = emptyenv()) else NULL
+  date_memo_cat <- if (can_fp_screen) new.env(parent = emptyenv()) else NULL
+  step_cat <- as.integer(min(as.double(f_owner$n_a_units), as.double(own_ctrl$max_chunk_rows)))
+
+  spec_mask_fp <- function(sp) {
+    if (!can_fp_screen) return(NULL)
+    pd <- ipw_owner_make_pair_descriptor(p_owner_cat, sp$s, sp$t)
+    cd <- ipw_owner_make_cohort_descriptor(f_owner, sp$g, sp$K, require_support = TRUE)
+    pkey <- paste(pd$s_calendar_index, pd$t_calendar_index, sep = ":")
+    ps <- get0(pkey, envir = pair_sum_cache, inherits = FALSE)
+    if (is.null(ps)) {
+      ps <- ipw_raw_scan_pair_summary(f_owner, p_owner_cat, pd, step_cat, date_memo_cat)
+      assign(pkey, ps, envir = pair_sum_cache)
+    }
+    ipw_raw_pair_support_for_cohorts(f_owner, ps, cd, require_support = TRUE)$fingerprint
+  }
 
   for (m in seq_len(M)) {
     pipeline_metadata_row_spec_preflight(metadata_obj, m, own_ctrl)
     spec <- extract_pipeline_catalog_row_spec(metadata_obj, m)
+    fp_m <- spec_mask_fp(spec)
     nv_idx <- NA_integer_
+    lv <- NULL
     for (k in seq_along(nuisance_views)) {
       nv <- nuisance_views[[k]]
       if (!identical(nv$cohorts$g, spec$g) || !identical(nv$cohorts$K, spec$K)) next
+      if (!is.null(fp_m) && !is.null(nv_fps[[k]]) && !identical(nv_fps[[k]], fp_m)) next
       trial <- tryCatch(construct_ipw_link_view(
         f_owner, spec$s, spec$t, spec$g, spec$K, nuisance_view = nv,
         control = own_ctrl, link_id = paste0("link:r", spec$row_id),
         functional_key = spec$functional_key, require_support = TRUE,
-        verify_nuisance_mask = TRUE), cdid_ipw_shared_mask_error = identity)
-      if (!inherits(trial, "error")) { nv_idx <- k; break }
+        verify_nuisance_mask = TRUE, construction_context = ctx),
+        cdid_ipw_shared_mask_error = identity)
+      if (!inherits(trial, "error")) { nv_idx <- k; lv <- trial; break }
     }
     if (is.na(nv_idx)) {
       nv_idx <- length(nuisance_views) + 1L
       nuisance_views[[nv_idx]] <- construct_ipw_nuisance_view(
         f_owner, spec$g, spec$K, spec$s, spec$t, own_ctrl,
-        nuisance_id = paste0("custom_ipw:mask", nv_idx))
+        nuisance_id = paste0("custom_ipw:mask", nv_idx),
+        construction_context = ctx)
+      nv_fps[[nv_idx]] <- fp_m
+      lv <- construct_ipw_link_view(
+        frame_owner = f_owner,
+        s = spec$s,
+        t = spec$t,
+        g = spec$g,
+        K = spec$K,
+        nuisance_view = nuisance_views[[nv_idx]],
+        control = own_ctrl,
+        link_id = paste0("link:r", spec$row_id),
+        functional_key = spec$functional_key,
+        require_support = TRUE,
+        verify_nuisance_mask = TRUE,
+        construction_context = ctx
+      )
     }
-    lv <- construct_ipw_link_view(
-      frame_owner = f_owner,
-      s = spec$s,
-      t = spec$t,
-      g = spec$g,
-      K = spec$K,
-      nuisance_view = nuisance_views[[nv_idx]],
-      control = own_ctrl,
-      link_id = paste0("link:r", spec$row_id),
-      functional_key = spec$functional_key,
-      require_support = TRUE,
-      verify_nuisance_mask = TRUE
-    )
     pre_m <- preflight_custom_ipw_link_view(
       frame_owner = f_owner,
       link_view = lv,
@@ -1554,6 +1622,55 @@ preflight_custom_ipw_if_view <- function(point_links, control, chunk_rows = NULL
   pre
 }
 
+cdid_fast_custom_if_pack <- function(norm) {
+  if (!exists("cdid_fast_kernel_cache", inherits = TRUE)) return(NULL)
+  fo <- norm$frame_owner
+  L <- as.integer(norm$n_links)
+  cached <- cdid_fast_kernel_cache$last_custom_if_pack
+  if (!is.null(cached) &&
+      identical(cached$frame_ref, fo$ref) &&
+      gmm_sexp_aliases(cached$norm_links, norm$links) &&
+      (if (is.null(norm$frozen)) is.null(cached$norm_frozen) else
+        (!is.null(cached$norm_frozen) && gmm_sexp_aliases(cached$norm_frozen, norm$frozen)))) {
+    return(cached)
+  }
+  c_own <- length(fo$a_cohorts)
+  if (c_own < 1L || L < 1L) return(NULL)
+  n_a_num <- as.double(fo$n_a_units)
+  cmap_mat <- matrix(0L, nrow = c_own, ncol = L)
+  obs_idx_list <- vector("list", L)
+  psi_list <- vector("list", L)
+  rate_par_list <- vector("list", L)
+  link_scales <- numeric(L)
+  for (ell in seq_len(L)) {
+    lnk <- norm$links[[ell]]
+    oi <- as.integer(lnk$cohorts$owner_cohort_index)
+    if (length(oi) > 0L) {
+      cmap_mat[oi, ell] <- as.integer(lnk$cohorts$view_cohort_index)
+    }
+    obs_idx_list[[ell]] <- lnk$obs_a_idx
+    psi_list[[ell]] <- lnk$psi_obs
+    frozen <- if (is.null(norm$frozen)) NULL else norm$frozen[[ell]]
+    b_r <- if (is.null(frozen)) as.double(lnk$b_rate) else frozen$b_rate
+    q_v <- if (is.null(frozen)) as.double(lnk$masses$q) else frozen$q
+    rt_v <- if (is.null(frozen)) as.double(lnk$masses$rates) else frozen$rates
+    rate_par_list[[ell]] <- c(b_r, q_v, rt_v)
+    link_scales[ell] <- n_a_num / as.double(lnk$counts$n_observed_risk_units)
+  }
+  pack <- list(
+    frame_ref = fo$ref,
+    norm_links = norm$links,
+    norm_frozen = norm$frozen,
+    cmap_mat = cmap_mat,
+    obs_idx_list = obs_idx_list,
+    psi_list = psi_list,
+    rate_par_list = rate_par_list,
+    link_scales = link_scales
+  )
+  cdid_fast_kernel_cache$last_custom_if_pack <- pack
+  pack
+}
+
 custom_ipw_if_eval_chunk_internal <- function(
   norm,
   a_start,
@@ -1574,34 +1691,58 @@ custom_ipw_if_eval_chunk_internal <- function(
   link_ids <- norm$link_ids
 
   a_seq <- seq.int(a_s, a_e)
-  u_idx <- panel_owner$a_to_unit[a_seq]
   u_id <- panel_owner$a_id[a_seq]
-  u_g <- panel_owner$a_g[a_seq]
   u_w <- as.double(frame_owner$w_a[a_seq])
   c_chunk <- as.integer(frame_owner$a_cohort_index[a_seq])
   n_a_num <- as.double(na)
 
-  phi_mat <- matrix(0.0, nrow = b_len, ncol = L, dimnames = list(NULL, link_ids))
+  phi_mat <- NULL
+  if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+    fk_if <- cdid_fast_kernel("C_cdid_custom_ipw_if_chunk")
+    if (!is.null(fk_if)) {
+      pack <- cdid_fast_custom_if_pack(norm)
+      if (!is.null(pack)) {
+        phi_fast <- fk_if(
+          c(as.integer(a_s), as.integer(a_e)),
+          u_w,
+          c_chunk,
+          pack$cmap_mat,
+          pack$obs_idx_list,
+          pack$psi_list,
+          pack$rate_par_list,
+          pack$link_scales
+        )
+        if (!is.null(phi_fast)) {
+          dimnames(phi_fast) <- list(NULL, link_ids)
+          phi_mat <- phi_fast
+        }
+      }
+    }
+  }
 
-  for (ell in seq_len(L)) {
-    lnk <- norm$links[[ell]]
-    frozen <- if (is.null(norm$frozen)) NULL else norm$frozen[[ell]]
-    gi_chunk <- ipw_owner_view_cohort_index(lnk$cohorts, c_chunk)
-    ev <- custom_ipw_eval_link_chunk(
-      a_s = a_s,
-      a_e = a_e,
-      u_w = u_w,
-      gi_chunk = gi_chunk,
-      obs_a_idx = lnk$obs_a_idx,
-      psi_obs = lnk$psi_obs,
-      b_rate = if (is.null(frozen)) as.double(lnk$b_rate) else frozen$b_rate,
-      q_vec = if (is.null(frozen)) as.double(lnk$masses$q) else frozen$q,
-      rates_vec = if (is.null(frozen)) as.double(lnk$masses$rates) else frozen$rates,
-      n_a_num = n_a_num,
-      m_obs_num = as.double(lnk$counts$n_observed_risk_units),
-      include_components = FALSE
-    )
-    phi_mat[, ell] <- ev$phi
+  if (is.null(phi_mat)) {
+    phi_mat <- matrix(0.0, nrow = b_len, ncol = L, dimnames = list(NULL, link_ids))
+
+    for (ell in seq_len(L)) {
+      lnk <- norm$links[[ell]]
+      frozen <- if (is.null(norm$frozen)) NULL else norm$frozen[[ell]]
+      gi_chunk <- ipw_owner_view_cohort_index(lnk$cohorts, c_chunk)
+      ev <- custom_ipw_eval_link_chunk(
+        a_s = a_s,
+        a_e = a_e,
+        u_w = u_w,
+        gi_chunk = gi_chunk,
+        obs_a_idx = lnk$obs_a_idx,
+        psi_obs = lnk$psi_obs,
+        b_rate = if (is.null(frozen)) as.double(lnk$b_rate) else frozen$b_rate,
+        q_vec = if (is.null(frozen)) as.double(lnk$masses$q) else frozen$q,
+        rates_vec = if (is.null(frozen)) as.double(lnk$masses$rates) else frozen$rates,
+        n_a_num = n_a_num,
+        m_obs_num = as.double(lnk$counts$n_observed_risk_units),
+        include_components = FALSE
+      )
+      phi_mat[, ell] <- ev$phi
+    }
   }
 
   if (isTRUE(callback_schema)) {
@@ -1612,6 +1753,9 @@ custom_ipw_if_eval_chunk_internal <- function(
       a_index = a_seq
     ))
   }
+
+  u_idx <- panel_owner$a_to_unit[a_seq]
+  u_g <- panel_owner$a_g[a_seq]
 
   structure(
     list(
@@ -1763,15 +1907,26 @@ stream_custom_ipw_covariance_view <- function(
     callback_schema = TRUE,
     trace_env = trace_env,
     callback = function(batch) {
-      centered <- sweep(batch$phi, 2L, mean_phi, FUN = "-")
-      if (any(!is.finite(centered))) {
-        cdid_abort("Nonfinite centered IF during custom-IPW covariance replay.", "cdid_ipw_numeric_error")
+      fk_gram <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+        cdid_fast_kernel("C_cdid_center_gram")
+      } else NULL
+      g_chunk <- if (!is.null(fk_gram)) fk_gram(batch$phi, mean_phi, NULL, NULL, TRUE, 1.0) else NULL
+      if (!is.null(g_chunk) && all(is.finite(g_chunk))) {
+        cov_mat <<- cov_mat + g_chunk
+        if (any(!is.finite(cov_mat))) {
+          cdid_abort("Nonfinite IF crossproduct or sum during custom-IPW covariance replay.", "cdid_ipw_numeric_error")
+        }
+      } else {
+        centered <- sweep(batch$phi, 2L, mean_phi, FUN = "-")
+        if (any(!is.finite(centered))) {
+          cdid_abort("Nonfinite centered IF during custom-IPW covariance replay.", "cdid_ipw_numeric_error")
+        }
+        cov_mat <<- cov_mat + crossprod(centered)
+        if (any(!is.finite(cov_mat))) {
+          cdid_abort("Nonfinite IF crossproduct or sum during custom-IPW covariance replay.", "cdid_ipw_numeric_error")
+        }
+        rm(centered)
       }
-      cov_mat <<- cov_mat + crossprod(centered)
-      if (any(!is.finite(cov_mat))) {
-        cdid_abort("Nonfinite IF crossproduct or sum during custom-IPW covariance replay.", "cdid_ipw_numeric_error")
-      }
-      rm(centered)
     }
   )
   cov_mat <- cov_mat / n_a
@@ -1919,6 +2074,13 @@ custom_ipw_if_plan <- function(point_links, control) {
 }
 
 custom_ipw_if_plan_verify <- function(plan, control) {
+  if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns("ipw_owner_seal_ok")) {
+    fk_vf <- cdid_fast_kernel("C_cdid_verify_fast")
+    if (!is.null(fk_vf) && isTRUE(fk_vf(1L, plan, control, NULL, NULL))) {
+      return(invisible(TRUE))
+    }
+  }
   if (!is.list(plan) || !identical(plan$kind, "cdid_custom_ipw_if_plan") ||
       !ipw_owner_seal_ok(plan, "custom_ipw_if_plan")) {
     cdid_custom_ipw_abort(
@@ -2156,27 +2318,47 @@ stream_custom_ipw_covariance_plan <- function(
   mean_phi <- sum_phi / n_a
   names(mean_phi) <- link_ids
 
-  cov_mat <- matrix(0.0, nrow = L, ncol = L, dimnames = list(link_ids, link_ids))
-  gram_callback <- function(batch) {
-    centered <- sweep(batch$phi, 2L, mean_phi, FUN = "-")
-    if (any(!is.finite(centered))) {
-      cdid_abort("Nonfinite centered IF during custom-IPW covariance replay.", "cdid_ipw_numeric_error")
+  fast_cov <- if (!is.null(carrier) && is.null(trace_env) &&
+      exists("cdid_fast_retained_point_cov", mode = "function", inherits = TRUE)) {
+    cdid_fast_retained_point_cov(carrier, plan, control, mean_phi, n_a, link_ids)
+  } else NULL
+  if (!is.null(fast_cov)) {
+    cov_mat <- fast_cov$cov_mat
+    replay_info <- fast_cov$replay_info
+  } else {
+    cov_mat <- matrix(0.0, nrow = L, ncol = L, dimnames = list(link_ids, link_ids))
+    gram_callback <- function(batch) {
+      fk_gram <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+        cdid_fast_kernel("C_cdid_center_gram")
+      } else NULL
+      g_chunk <- if (!is.null(fk_gram)) fk_gram(batch$phi, mean_phi, NULL, NULL, TRUE, 1.0) else NULL
+      if (!is.null(g_chunk) && all(is.finite(g_chunk))) {
+        cov_mat <<- cov_mat + g_chunk
+        if (any(!is.finite(cov_mat))) {
+          cdid_abort("Nonfinite IF crossproduct or sum during custom-IPW covariance replay.", "cdid_ipw_numeric_error")
+        }
+      } else {
+        centered <- sweep(batch$phi, 2L, mean_phi, FUN = "-")
+        if (any(!is.finite(centered))) {
+          cdid_abort("Nonfinite centered IF during custom-IPW covariance replay.", "cdid_ipw_numeric_error")
+        }
+        cov_mat <<- cov_mat + crossprod(centered)
+        if (any(!is.finite(cov_mat))) {
+          cdid_abort("Nonfinite IF crossproduct or sum during custom-IPW covariance replay.", "cdid_ipw_numeric_error")
+        }
+        rm(centered)
+      }
     }
-    cov_mat <<- cov_mat + crossprod(centered)
-    if (any(!is.finite(cov_mat))) {
-      cdid_abort("Nonfinite IF crossproduct or sum during custom-IPW covariance replay.", "cdid_ipw_numeric_error")
-    }
-    rm(centered)
+    replay_info <- replay_custom_ipw_if_plan(
+      plan = plan,
+      control = control,
+      callback_schema = TRUE,
+      trace_env = trace_env,
+      carrier = carrier,
+      callback = gram_callback
+    )
+    cov_mat <- cov_mat / n_a
   }
-  replay_info <- replay_custom_ipw_if_plan(
-    plan = plan,
-    control = control,
-    callback_schema = TRUE,
-    trace_env = trace_env,
-    carrier = carrier,
-    callback = gram_callback
-  )
-  cov_mat <- cov_mat / n_a
 
   list(
     covariance = cov_mat,

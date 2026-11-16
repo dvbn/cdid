@@ -67,7 +67,7 @@ The [roadmap](../../README.md#roadmap) states the planned efficiency direction.
 
 ---
 
-**Reading path, step 5 of 20** · Previous: [Identify effects when the observed units change composition](identification.md) · Next: [Prepare your panel and unit table](../help/prepare-data.md)
+**Reading path, step 5 of 22** · Previous: [Identify effects when the observed units change composition](identification.md) · Next: [Prepare your panel and unit table](../help/prepare-data.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -94,6 +94,8 @@ The [roadmap](../../README.md#roadmap) states the planned efficiency direction.
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

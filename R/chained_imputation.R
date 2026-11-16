@@ -138,30 +138,37 @@ construct_imputation_design_owner <- function(frame_owner, reader, id, X,
   scratch <- 8 * min(N, ctrl$max_chunk_rows) * (d + 1) + 256
   cp04_budget(ctrl, c(borrowed, bound), scratch, 64 * N * (d + 1), bound, "full-F imputation design owner")
 
-  for (start in seq.int(1L, N, by = min(N, ctrl$max_chunk_rows))) {
-    rr <- seq.int(start, min(N, start + ctrl$max_chunk_rows - 1L))
-    cp04_finite(X[rr, , drop = FALSE], "full-F imputation design")
-  }
-
   # Verify exact agreement with frame_owner$Z_a on all A rows for shared columns
-  a_pos <- which(st$a_index > 0L)
-  a_idx <- st$a_index[a_pos]
   z_cols <- colnames(frame_owner$Z_a)
   if (!is.character(z_cols) || !all(z_cols %in% cnames)) {
     imputation_abort("Full-F design `X` must include all columns of `frame_owner$Z_a`.", "design")
   }
   x_match <- match(z_cols, cnames)
-  if (length(a_pos) > 0L &&
-      !identical(unname(storage.mode(X)), "double")) {
+  if (!identical(unname(storage.mode(X)), "double") && all(is.finite(X))) {
     storage.mode(X) <- "double"
   }
-  if (length(a_pos) > 0L) for (start in seq.int(1L, length(a_pos), by = ctrl$max_chunk_rows)) {
-    ix <- seq.int(start, min(length(a_pos), start + ctrl$max_chunk_rows - 1L))
-    if (max(abs(X[a_pos[ix], x_match, drop = FALSE] - frame_owner$Z_a[a_idx[ix], , drop = FALSE])) > 0) {
-      imputation_abort(
-        "Full-F design `X` disagrees with `frame_owner$Z_a` on repeat-observed A units.",
-        "identity"
-      )
+  fast_des_ok <- identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+    cdid_are_default_fns("cp04_finite") &&
+    cdid_ia_fast_check_design(X, frame_owner$Z_a, st$a_index, x_match)
+  if (!fast_des_ok) {
+    for (start in seq.int(1L, N, by = min(N, ctrl$max_chunk_rows))) {
+      rr <- seq.int(start, min(N, start + ctrl$max_chunk_rows - 1L))
+      cp04_finite(X[rr, , drop = FALSE], "full-F imputation design")
+    }
+    a_pos <- which(st$a_index > 0L)
+    a_idx <- st$a_index[a_pos]
+    if (length(a_pos) > 0L &&
+        !identical(unname(storage.mode(X)), "double")) {
+      storage.mode(X) <- "double"
+    }
+    if (length(a_pos) > 0L) for (start in seq.int(1L, length(a_pos), by = ctrl$max_chunk_rows)) {
+      ix <- seq.int(start, min(length(a_pos), start + ctrl$max_chunk_rows - 1L))
+      if (max(abs(X[a_pos[ix], x_match, drop = FALSE] - frame_owner$Z_a[a_idx[ix], , drop = FALSE])) > 0) {
+        imputation_abort(
+          "Full-F design `X` disagrees with `frame_owner$Z_a` on repeat-observed A units.",
+          "identity"
+        )
+      }
     }
   }
 
@@ -190,7 +197,7 @@ construct_imputation_design_owner <- function(frame_owner, reader, id, X,
   if (actual > bound) imputation_abort("Imputation design owner bound underestimated.", "bound")
   cp04_budget(ctrl, c(borrowed, actual), scratch, 0, actual, "retained imputation design owner")
   obj$accounting$owned_entries <- actual
-  ipw_owner_seal(obj, "imputation_design_owner")
+  cdid_fast_seal(obj, "imputation_design_owner")
 }
 
 validate_imputation_design_owner <- function(design_owner, reader = NULL, frame_owner = NULL) {
@@ -243,6 +250,7 @@ imputation_resolve_full_design <- function(reader, frame_owner,
       columns = d_owner$columns,
       source = "X_frame",
       design_ref = d_owner$ref,
+      d_owner = d_owner,
       owned_entries = d_owner$accounting$owned_entries,
       borrowed_entries = 0,
       work_ops = d_owner$accounting$work_ops_bound
@@ -268,24 +276,29 @@ imputation_resolve_full_design <- function(reader, frame_owner,
   scan_scratch <- 16 * st$N + 16 * min(st$N, control$max_chunk_rows) * (ncol(Z_f) + 1) + 4096
   cp04_budget(control, scan_retained, scan_scratch, 64 * st$N * (ncol(Z_f) + 1), 4096,
     "full-F imputation design identity scan")
-  a_pos <- which(st$a_index > 0L)
-  a_idx <- st$a_index[a_pos]
   m_cols <- match(z_cols, f_cols)
-  if (length(a_pos) > 0L) for (start in seq.int(1L, length(a_pos), by = control$max_chunk_rows)) {
-    ix <- seq.int(start, min(length(a_pos), start + control$max_chunk_rows - 1L))
-    if (max(abs(Z_f[a_pos[ix], m_cols, drop = FALSE] - frame_owner$Z_a[a_idx[ix], , drop = FALSE])) > 0) {
-      imputation_abort(
-        paste0(
-          "`reader$state$Z` disagrees with `frame_owner$Z_a` on repeat-observed A units (do not confuse a selection-probability matrix with full-F outcome/treatment covariates). ",
-          "Supply full-F outcome/treatment covariates via `design_owner` / `X_frame`."
-        ),
-        "design"
-      )
+  fast_zf_ok <- identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+    cdid_are_default_fns("cp04_finite") &&
+    cdid_ia_fast_check_design(Z_f, frame_owner$Z_a, st$a_index, m_cols)
+  if (!fast_zf_ok) {
+    a_pos <- which(st$a_index > 0L)
+    a_idx <- st$a_index[a_pos]
+    if (length(a_pos) > 0L) for (start in seq.int(1L, length(a_pos), by = control$max_chunk_rows)) {
+      ix <- seq.int(start, min(length(a_pos), start + control$max_chunk_rows - 1L))
+      if (max(abs(Z_f[a_pos[ix], m_cols, drop = FALSE] - frame_owner$Z_a[a_idx[ix], , drop = FALSE])) > 0) {
+        imputation_abort(
+          paste0(
+            "`reader$state$Z` disagrees with `frame_owner$Z_a` on repeat-observed A units (do not confuse a selection-probability matrix with full-F outcome/treatment covariates). ",
+            "Supply full-F outcome/treatment covariates via `design_owner` / `X_frame`."
+          ),
+          "design"
+        )
+      }
     }
-  }
-  for (start in seq.int(1L, st$N, by = min(st$N, control$max_chunk_rows))) {
-    rr <- seq.int(start, min(st$N, start + control$max_chunk_rows - 1L))
-    cp04_finite(Z_f[rr, , drop = FALSE], "full-F outcome/treatment design on reader")
+    for (start in seq.int(1L, st$N, by = min(st$N, control$max_chunk_rows))) {
+      rr <- seq.int(start, min(st$N, start + control$max_chunk_rows - 1L))
+      cp04_finite(Z_f[rr, , drop = FALSE], "full-F outcome/treatment design on reader")
+    }
   }
   list(
     X = Z_f,
@@ -582,80 +595,99 @@ imputation_build_catalog <- function(records, cohorts, est_method, imputation_po
 imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_index,
                                 trt_recipe, est_method, imputation_pooling,
                                 glm_control, rank_tol, ctrl, outcome_pooling = "pooled",
-                                stage1_only = FALSE) {
+                                stage1_only = FALSE, panel = NULL, skip_links = FALSE) {
   separate_or <- est_method %in% c("reg", "dr") && identical(outcome_pooling, "separate")
   N <- st$N
   G <- length(st$cohorts)
   B_chunk <- min(N, ctrl$max_chunk_rows)
   p_or_raw <- recipe$p
   slope_cols_F <- if (p_or_raw > 0L) or_frame_index[recipe$slope_index] else integer(0L)
+  n_cells <- length(cat$cell_specs)
+  can_fast_imp <- identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+    cdid_are_default_fns(c(
+      "cp04_pair_rows", "or_pooled_support_start", "or_pooled_support_add",
+      "or_pooled_fit_blocks", "or_outcome_fit_blocks",
+      "or_pooled_wls_gram_solve", "or_wls_gram_solve",
+      "ipw_logit_values", "reconstruction_zero_template",
+      "reconstruction_zero_template_run", "reconstruction_pack_plain_adjoint",
+      "reconstruction_pack_adjoint", "cp04_finite"
+    ))
 
-  # 0. Verify positive roster mass and repeat-observation rate a_k > 0 on every active cohort
-  for (ci in cat$active_cohorts) {
-    if (!is.finite(st$mass_F[ci]) || st$mass_F[ci] <= 0 ||
-        !is.finite(st$a[ci]) || st$a[ci] <= 0) {
-      imputation_abort(
-        paste0(
-          "Cohort ", imputation_cohort_label(st$cohorts[ci]),
-          " has zero full-roster or repeat-observation mass on F (a_k <= 0); synthetic imputation weights require positive repeat mass."
-        ),
-        "support"
-      )
-    }
-  }
+  s1_fast <- if (can_fast_imp && !is.null(panel)) {
+    cdid_ia_fast_imp_stage1(st, panel, X_F, cat, recipe, or_frame_index, B_chunk)
+  } else NULL
 
-  # Precompute full-F cohort colmax for alias verification
-  cohort_colmax_F <- vector("list", G)
-  for (ci in cat$active_cohorts) {
-    first <- st$cohort_start[ci]
-    last <- st$cohort_end[ci]
-    cmax <- numeric(p_or_raw)
-    if (p_or_raw > 0L) {
-      for (start in seq.int(first, last, by = B_chunk)) {
-        rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
-        Z_sl <- abs(X_F[rows, slope_cols_F, drop = FALSE])
-        if (nrow(Z_sl) > 0L) cmax <- pmax(cmax, apply(Z_sl, 2L, max))
+  if (!is.null(s1_fast)) {
+    cohort_colmax_F <- s1_fast$cohort_colmax_F
+    cell_supports <- s1_fast$cell_supports
+  } else {
+    # 0. Verify positive roster mass and repeat-observation rate a_k > 0 on every active cohort
+    for (ci in cat$active_cohorts) {
+      if (!is.finite(st$mass_F[ci]) || st$mass_F[ci] <= 0 ||
+          !is.finite(st$a[ci]) || st$a[ci] <= 0) {
+        imputation_abort(
+          paste0(
+            "Cohort ", imputation_cohort_label(st$cohorts[ci]),
+            " has zero full-roster or repeat-observation mass on F (a_k <= 0); synthetic imputation weights require positive repeat mass."
+          ),
+          "support"
+        )
       }
     }
-    cohort_colmax_F[[ci]] <- cmax
-  }
 
-  # ----------------------------------------------------------------------------
-  # Stage 1: Actual-change imputation WLS on observed pairs with FIXED unit weights w_i
-  # ----------------------------------------------------------------------------
-  n_cells <- length(cat$cell_specs)
-  cell_supports <- vector("list", n_cells)
-  for (cid in seq_len(n_cells)) {
-    cs <- cat$cell_specs[[cid]]
-    ci <- cs$cohort_index
-    first <- st$cohort_start[ci]
-    last <- st$cohort_end[ci]
-    acc <- or_pooled_support_start(recipe, cs$L)
-    for (start in seq.int(first, last, by = B_chunk)) {
-      rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
-      hit <- pair_reader(rows, cs$pair, TRUE)
-      obs <- which(hit$S == 1)
-      if (!length(obs)) next
-      r_obs <- rows[obs]
-      w_obs <- st$w[r_obs]
-      dy_obs <- hit$dy[obs]
-      Z_obs <- X_F[r_obs, or_frame_index, drop = FALSE]
-      acc <- or_pooled_support_add(acc, recipe, Z_obs, dy_obs, w_obs, "imputation")
+    # Precompute full-F cohort colmax for alias verification
+    cohort_colmax_F <- vector("list", G)
+    for (ci in cat$active_cohorts) {
+      first <- st$cohort_start[ci]
+      last <- st$cohort_end[ci]
+      cmax <- numeric(p_or_raw)
+      if (p_or_raw > 0L) {
+        for (start in seq.int(first, last, by = B_chunk)) {
+          rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
+          Z_sl <- abs(X_F[rows, slope_cols_F, drop = FALSE])
+          if (nrow(Z_sl) > 0L) cmax <- pmax(cmax, apply(Z_sl, 2L, max))
+        }
+      }
+      cohort_colmax_F[[ci]] <- cmax
     }
-    if (acc$n < 1L || !is.finite(acc$weight_mass) || acc$weight_mass <= 0 ||
-        acc$weight_mass / N <= 0) {
-      imputation_abort(
-        paste0("Actual-change imputation cell `", cs$name, "` has zero observed-pair support."),
-        "support"
-      )
+
+    # ----------------------------------------------------------------------------
+    # Stage 1: Actual-change imputation WLS on observed pairs with FIXED unit weights w_i
+    # ----------------------------------------------------------------------------
+    cell_supports <- vector("list", n_cells)
+    for (cid in seq_len(n_cells)) {
+      cs <- cat$cell_specs[[cid]]
+      ci <- cs$cohort_index
+      first <- st$cohort_start[ci]
+      last <- st$cohort_end[ci]
+      acc <- or_pooled_support_start(recipe, cs$L)
+      for (start in seq.int(first, last, by = B_chunk)) {
+        rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
+        hit <- pair_reader(rows, cs$pair, TRUE)
+        obs <- which(hit$S == 1)
+        if (!length(obs)) next
+        r_obs <- rows[obs]
+        w_obs <- st$w[r_obs]
+        dy_obs <- hit$dy[obs]
+        Z_obs <- X_F[r_obs, or_frame_index, drop = FALSE]
+        acc <- or_pooled_support_add(acc, recipe, Z_obs, dy_obs, w_obs, "imputation")
+      }
+      if (acc$n < 1L || !is.finite(acc$weight_mass) || acc$weight_mass <= 0 ||
+          acc$weight_mass / N <= 0) {
+        imputation_abort(
+          paste0("Actual-change imputation cell `", cs$name, "` has zero observed-pair support."),
+          "support"
+        )
+      }
+      cell_supports[[cid]] <- acc
     }
-    cell_supports[[cid]] <- acc
   }
 
   # Fit each pooling group r in R_imp with full-F prediction alias verification
   n_groups <- length(cat$group_specs)
   group_fits <- vector("list", n_groups)
   cells_fitted <- vector("list", n_cells)
+  fk_comp_imp <- if (can_fast_imp) cdid_fast_kernel("C_cdid_wls_compress") else NULL
 
   for (gid in seq_len(n_groups)) {
     gs <- cat$group_specs[[gid]]
@@ -720,20 +752,25 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
       invisible(NULL)
     }
 
-    fit_r <- tryCatch(or_pooled_fit_blocks(
-      recipe = recipe,
-      supports = supports_r,
-      blocks = blocks_r,
-      links = links_r,
-      rank_tol = rank_tol,
-      N = N,
-      visit_rows = visit_group_rows,
-      route = "imputation"
-    ), cdid_or_wls_rank_error = function(e) {
-      e$message <- paste0(conditionMessage(e), " This computation failure does not establish population ATT nonidentification.")
-      e$is_identifiability_claim <- FALSE
-      stop(e)
-    })
+    fit_r <- if (can_fast_imp) {
+      cdid_ia_fast_or_pooled_fit(recipe, supports_r[seq_len(B_r)], blocks_r, rank_tol, N, fk_comp = fk_comp_imp)
+    } else NULL
+    if (is.null(fit_r)) {
+      fit_r <- tryCatch(or_pooled_fit_blocks(
+        recipe = recipe,
+        supports = supports_r,
+        blocks = blocks_r,
+        links = links_r,
+        rank_tol = rank_tol,
+        N = N,
+        visit_rows = visit_group_rows,
+        route = "imputation"
+      ), cdid_or_wls_rank_error = function(e) {
+        e$message <- paste0(conditionMessage(e), " This computation failure does not establish population ATT nonidentification.")
+        e$is_identifiability_claim <- FALSE
+        stop(e)
+      })
+    }
     keep_r <- fit_r$keep
     p_r <- length(keep_r)
     kept_cols_F <- if (p_r > 0L) slope_cols_F[keep_r] else integer(0L)
@@ -760,40 +797,46 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
       }
       names(mean_d_c) <- kept_names
       mean_y_c <- acc_c$sumY / w_sum_c
-
-      # Compute full-roster F cell moments M_{k,e}(1), Y_{k,e}(1), M_{k,e}(z), Y_{k,e}(z)
       ci <- cs$cohort_index
       a_k <- st$a[ci]
-      first <- st$cohort_start[ci]
-      last <- st$cohort_end[ci]
-      M_one <- 0.0
-      Y_one <- 0.0
-      M_z <- numeric(p_or_raw)
-      Y_z <- numeric(p_or_raw)
-      for (start in seq.int(first, last, by = B_chunk)) {
-        rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
-        w_syn <- st$w[rows] * a_k
-        Z_r <- if (p_r > 0L) X_F[rows, kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
-        jhat_rows <- if (p_r > 0L) {
-          alpha_c + as.vector((cs$L * Z_r) %*% beta_r)
-        } else {
-          rep(alpha_c, length(rows))
+
+      if (!can_fast_imp) {
+        # Compute full-roster F cell moments M_{k,e}(1), Y_{k,e}(1), M_{k,e}(z), Y_{k,e}(z)
+        first <- st$cohort_start[ci]
+        last <- st$cohort_end[ci]
+        M_one <- 0.0
+        Y_one <- 0.0
+        M_z <- numeric(p_or_raw)
+        Y_z <- numeric(p_or_raw)
+        for (start in seq.int(first, last, by = B_chunk)) {
+          rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
+          w_syn <- st$w[rows] * a_k
+          Z_r <- if (p_r > 0L) X_F[rows, kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
+          jhat_rows <- if (p_r > 0L) {
+            alpha_c + as.vector((cs$L * Z_r) %*% beta_r)
+          } else {
+            rep(alpha_c, length(rows))
+          }
+          M_one <- M_one + sum(w_syn)
+          Y_one <- Y_one + sum(w_syn * jhat_rows)
+          if (p_or_raw > 0L) {
+            Z_all_rows <- X_F[rows, slope_cols_F, drop = FALSE]
+            M_z <- M_z + as.vector(crossprod(w_syn, Z_all_rows))
+            Y_z <- Y_z + as.vector(crossprod(w_syn * jhat_rows, Z_all_rows))
+          }
         }
-        M_one <- M_one + sum(w_syn)
-        Y_one <- Y_one + sum(w_syn * jhat_rows)
-        if (p_or_raw > 0L) {
-          Z_all_rows <- X_F[rows, slope_cols_F, drop = FALSE]
-          M_z <- M_z + as.vector(crossprod(w_syn, Z_all_rows))
-          Y_z <- Y_z + as.vector(crossprod(w_syn * jhat_rows, Z_all_rows))
-        }
+        M_one <- M_one / N
+        Y_one <- Y_one / N
+        M_z <- M_z / N
+        Y_z <- Y_z / N
+        names(M_z) <- names(Y_z) <- recipe$slope_columns
+        M_d_kept <- if (p_r > 0L) cs$L * M_z[keep_r] else numeric(0L)
+        cp04_finite(c(M_one, Y_one, M_z, Y_z), "imputation full-F cell moments")
+      } else {
+        M_one <- Y_one <- 0.0
+        M_z <- Y_z <- numeric(0L)
+        M_d_kept <- numeric(0L)
       }
-      M_one <- M_one / N
-      Y_one <- Y_one / N
-      M_z <- M_z / N
-      Y_z <- Y_z / N
-      names(M_z) <- names(Y_z) <- recipe$slope_columns
-      M_d_kept <- if (p_r > 0L) cs$L * M_z[keep_r] else numeric(0L)
-      cp04_finite(c(M_one, Y_one, M_z, Y_z), "imputation full-F cell moments")
 
       cells_fitted[[cid]] <- c(
         cs,
@@ -835,6 +878,61 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
     )
   }
 
+  used_ctrl_cells <- if (!isTRUE(stage1_only) && est_method %in% c("reg", "dr")) {
+    sort(unique(unlist(lapply(cat$or_blocks, `[[`, "control_cell_ids"))))
+  } else NULL
+
+  s2_cells_fast <- if (can_fast_imp) {
+    cell_meta_imp <- lapply(cells_fitted, function(cf) {
+      gf <- group_fits[[cf$group_id]]
+      list(alpha = cf$alpha, kept_cols_F = gf$kept_cols_F, beta = gf$beta, keep = gf$keep)
+    })
+    cdid_ia_fast_imp_stage2_cells(st, X_F, cat, recipe, or_frame_index, B_chunk, cell_meta_imp, used_ctrl_cells)
+  } else NULL
+
+  if (can_fast_imp) {
+    if (!is.null(s2_cells_fast)) {
+      for (cid in seq_len(n_cells)) {
+        mom <- s2_cells_fast$moments[[cid]]
+        cells_fitted[[cid]]$M_one <- mom$M_one
+        cells_fitted[[cid]]$Y_one <- mom$Y_one
+        cells_fitted[[cid]]$M_z <- mom$M_z
+        cells_fitted[[cid]]$Y_z <- mom$Y_z
+        cells_fitted[[cid]]$M_d_kept <- mom$M_d_kept
+      }
+    } else {
+      for (cid in seq_len(n_cells)) {
+        cf <- cells_fitted[[cid]]
+        gf <- group_fits[[cf$group_id]]
+        ci <- cf$cohort_index
+        a_k <- cf$a_k
+        first <- st$cohort_start[ci]
+        last <- st$cohort_end[ci]
+        M_one <- 0.0; Y_one <- 0.0
+        M_z <- numeric(p_or_raw); Y_z <- numeric(p_or_raw)
+        for (start in seq.int(first, last, by = B_chunk)) {
+          rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
+          w_syn <- st$w[rows] * a_k
+          Z_r <- if (gf$p > 0L) X_F[rows, gf$kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
+          jhat_rows <- if (gf$p > 0L) cf$alpha + as.vector((cf$L * Z_r) %*% gf$beta) else rep(cf$alpha, length(rows))
+          M_one <- M_one + sum(w_syn); Y_one <- Y_one + sum(w_syn * jhat_rows)
+          if (p_or_raw > 0L) {
+            Z_all_rows <- X_F[rows, slope_cols_F, drop = FALSE]
+            M_z <- M_z + as.vector(crossprod(w_syn, Z_all_rows))
+            Y_z <- Y_z + as.vector(crossprod(w_syn * jhat_rows, Z_all_rows))
+          }
+        }
+        M_one <- M_one / N; Y_one <- Y_one / N; M_z <- M_z / N; Y_z <- Y_z / N
+        names(M_z) <- names(Y_z) <- recipe$slope_columns
+        M_d_kept <- if (gf$p > 0L) cf$L * M_z[gf$keep] else numeric(0L)
+        cp04_finite(c(M_one, Y_one, M_z, Y_z), "imputation full-F cell moments")
+        cells_fitted[[cid]]$M_one <- M_one; cells_fitted[[cid]]$Y_one <- Y_one
+        cells_fitted[[cid]]$M_z <- M_z; cells_fitted[[cid]]$Y_z <- Y_z
+        cells_fitted[[cid]]$M_d_kept <- M_d_kept
+      }
+    }
+  }
+
   if (isTRUE(stage1_only)) {
     return(list(
       cells = cells_fitted,
@@ -849,33 +947,37 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
   # Stage 2: Shared counterfactual control OR across B (ONLY when est_method %in% c("reg", "dr"))
   # ----------------------------------------------------------------------------
   shared_or <- NULL
+  block_specs_or_fast <- NULL
   if (est_method %in% c("reg", "dr")) {
     n_blocks <- length(cat$or_blocks)
     # Build per-cell full-F synthetic-weight OR support summaries for all control cells in B
-    used_ctrl_cells <- sort(unique(unlist(lapply(cat$or_blocks, `[[`, "control_cell_ids"))))
-    ctrl_cell_or_acc <- vector("list", n_cells)
-    for (cid in used_ctrl_cells) {
-      cf <- cells_fitted[[cid]]
-      gf <- group_fits[[cf$group_id]]
-      ci <- cf$cohort_index
-      a_k <- st$a[ci]
-      first <- st$cohort_start[ci]
-      last <- st$cohort_end[ci]
-      acc_or <- or_pooled_support_start(recipe, cf$L)
-      for (start in seq.int(first, last, by = B_chunk)) {
-        rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
-        w_syn <- st$w[rows] * a_k
-        Z_r <- if (gf$p > 0L) X_F[rows, gf$kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
-        jhat_rows <- if (gf$p > 0L) {
-          cf$alpha + as.vector((cf$L * Z_r) %*% gf$beta)
-        } else {
-          rep(cf$alpha, length(rows))
+    if (!is.null(s2_cells_fast)) {
+      ctrl_cell_or_acc <- s2_cells_fast$ctrl_cell_or_acc
+    } else {
+      ctrl_cell_or_acc <- vector("list", n_cells)
+      for (cid in used_ctrl_cells) {
+        cf <- cells_fitted[[cid]]
+        gf <- group_fits[[cf$group_id]]
+        ci <- cf$cohort_index
+        a_k <- st$a[ci]
+        first <- st$cohort_start[ci]
+        last <- st$cohort_end[ci]
+        acc_or <- or_pooled_support_start(recipe, cf$L)
+        for (start in seq.int(first, last, by = B_chunk)) {
+          rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
+          w_syn <- st$w[rows] * a_k
+          Z_r <- if (gf$p > 0L) X_F[rows, gf$kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
+          jhat_rows <- if (gf$p > 0L) {
+            cf$alpha + as.vector((cf$L * Z_r) %*% gf$beta)
+          } else {
+            rep(cf$alpha, length(rows))
+          }
+          acc_or <- or_pooled_support_add(
+            acc_or, recipe, X_F[rows, or_frame_index, drop = FALSE], jhat_rows, w_syn, "imputation_or"
+          )
         }
-        acc_or <- or_pooled_support_add(
-          acc_or, recipe, X_F[rows, or_frame_index, drop = FALSE], jhat_rows, w_syn, "imputation_or"
-        )
+        ctrl_cell_or_acc[[cid]] <- acc_or
       }
-      ctrl_cell_or_acc[[cid]] <- acc_or
     }
 
     # Map supports for or_pooled_fit_blocks: one support per active cell cid in C_imp
@@ -913,21 +1015,39 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
       invisible(NULL)
     }
 
-    fit_or_fun <- if (separate_or) function(...) or_outcome_fit_blocks(..., mode = "separate") else or_pooled_fit_blocks
-    fit_or <- tryCatch(fit_or_fun(
-      recipe = recipe,
-      supports = supports_or,
-      blocks = blocks_or_spec,
-      links = links_or_spec,
-      rank_tol = rank_tol,
-      N = N,
-      visit_rows = visit_or_rows,
-      route = "imputation_or"
-    ), cdid_or_wls_rank_error = function(e) {
-      e$message <- paste0(conditionMessage(e), " This computation failure does not establish population ATT nonidentification.")
-      e$is_identifiability_claim <- FALSE
-      stop(e)
-    })
+    fit_or <- if (can_fast_imp) {
+      if (separate_or) {
+        cdid_ia_fast_or_outcome_fit_blocks(
+          recipe = recipe,
+          supports = supports_or,
+          blocks = blocks_or_spec,
+          links = links_or_spec,
+          rank_tol = rank_tol,
+          N = N,
+          mode = "separate",
+          route = "imputation_or"
+        )
+      } else {
+        cdid_ia_fast_or_pooled_fit(recipe, supports_or, blocks_or_spec, rank_tol, N)
+      }
+    } else NULL
+    if (is.null(fit_or)) {
+      fit_or_fun <- if (separate_or) function(...) or_outcome_fit_blocks(..., mode = "separate") else or_pooled_fit_blocks
+      fit_or <- tryCatch(fit_or_fun(
+        recipe = recipe,
+        supports = supports_or,
+        blocks = blocks_or_spec,
+        links = links_or_spec,
+        rank_tol = rank_tol,
+        N = N,
+        visit_rows = visit_or_rows,
+        route = "imputation_or"
+      ), cdid_or_wls_rank_error = function(e) {
+        e$message <- paste0(conditionMessage(e), " This computation failure does not establish population ATT nonidentification.")
+        e$is_identifiability_claim <- FALSE
+        stop(e)
+      })
+    }
     if (!separate_or) {
     keep_or <- fit_or$keep
     p_or <- length(keep_or)
@@ -946,6 +1066,7 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
 
     # Precompute per-block masses, mean_d, and upstream forcing from a_k and j_hat_{k,e_b}
     or_block_fits <- vector("list", n_blocks)
+    block_specs_or_fast <- vector("list", n_blocks)
     for (bid in seq_len(n_blocks)) {
       b_spec <- cat$or_blocks[[bid]]
       if (separate_or) {
@@ -965,72 +1086,114 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
       mean_d_b <- if (recipe$intercept && p_or > 0L) as.double(reg_b$mean_d) else numeric(p_or)
       names(mean_d_b) <- kept_or_names
       alpha_b <- if (recipe$intercept) as.double(reg_b$alpha) else 0.0
+      block_specs_or_fast[[bid]] <- list(
+        kept_or_cols_F = as.integer(kept_or_cols_F),
+        kept_or_names = kept_or_names,
+        beta_or = as.double(beta_or),
+        alpha_b = alpha_b,
+        mean_d_b = mean_d_b,
+        mass_b = mass_b,
+        w_sum_b = w_sum_b
+      )
+    }
 
-      # Precompute forcing for each control cohort k in K_b (corresponding to cell cid in cids_b)
-      n_kb <- length(cids_b)
-      a_force_alpha <- numeric(n_kb)
-      a_force_beta <- matrix(0.0, p_or, n_kb)
-      j_force_alpha_alpha <- numeric(n_kb)
-      j_force_alpha_beta <- vector("list", n_kb)
-      j_force_beta_alpha <- matrix(0.0, p_or, n_kb)
-      j_force_beta_beta <- vector("list", n_kb)
+    s2_bf_fast <- if (can_fast_imp) {
+      res <- cdid_ia_fast_imp_stage24_forcing_links(
+        st, X_F, cat, recipe, trt_recipe, B_chunk, cells_fitted, group_fits,
+        block_specs = block_specs_or_fast, trt_fits = NULL, do_block_forcing = TRUE
+      )
+      if (!is.null(res)) res$block_forcing else NULL
+    } else NULL
 
-      for (idx_k in seq_len(n_kb)) {
-        cid <- cids_b[idx_k]
-        cf <- cells_fitted[[cid]]
-        gf <- group_fits[[cf$group_id]]
-        ci <- cf$cohort_index
-        a_k <- st$a[ci]
-        L_b <- b_spec$L
-        first <- st$cohort_start[ci]
-        last <- st$cohort_end[ci]
+    for (bid in seq_len(n_blocks)) {
+      b_spec <- cat$or_blocks[[bid]]
+      bs_f <- block_specs_or_fast[[bid]]
+      alpha_b <- bs_f$alpha_b
+      mass_b <- bs_f$mass_b
+      w_sum_b <- bs_f$w_sum_b
+      mean_d_b <- bs_f$mean_d_b
+      kept_or_cols_F <- bs_f$kept_or_cols_F
+      kept_or_names <- bs_f$kept_or_names
+      beta_or <- bs_f$beta_or
+      names(beta_or) <- kept_or_names
+      p_or <- length(beta_or)
+      cids_b <- b_spec$control_cell_ids
 
-        sum_w_r <- 0.0
-        sum_w_r_dtilde <- numeric(p_or)
-        sum_wsyn_dtilde <- numeric(p_or)
-        sum_wsyn_dtilde_dimp <- matrix(0.0, p_or, gf$p)
+      if (!is.null(s2_bf_fast)) {
+        bf_c <- s2_bf_fast[[bid]]
+        a_force_alpha <- bf_c$a_force_alpha
+        a_force_beta <- bf_c$a_force_beta
+        j_force_alpha_alpha <- bf_c$j_force_alpha_alpha
+        j_force_alpha_beta <- bf_c$j_force_alpha_beta
+        j_force_beta_alpha <- bf_c$j_force_beta_alpha
+        j_force_beta_beta <- bf_c$j_force_beta_beta
+      } else {
+        # Precompute forcing for each control cohort k in K_b (corresponding to cell cid in cids_b)
+        n_kb <- length(cids_b)
+        a_force_alpha <- numeric(n_kb)
+        a_force_beta <- matrix(0.0, p_or, n_kb)
+        j_force_alpha_alpha <- numeric(n_kb)
+        j_force_alpha_beta <- vector("list", n_kb)
+        j_force_beta_alpha <- matrix(0.0, p_or, n_kb)
+        j_force_beta_beta <- vector("list", n_kb)
 
-        for (start in seq.int(first, last, by = B_chunk)) {
-          rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
-          w_raw <- st$w[rows]
-          w_syn <- w_raw * a_k
-          Z_imp <- if (gf$p > 0L) X_F[rows, gf$kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
-          d_imp <- L_b * Z_imp
-          jhat_rows <- if (gf$p > 0L) {
-            cf$alpha + as.vector(d_imp %*% gf$beta)
-          } else {
-            rep(cf$alpha, length(rows))
-          }
+        for (idx_k in seq_len(n_kb)) {
+          cid <- cids_b[idx_k]
+          cf <- cells_fitted[[cid]]
+          gf <- group_fits[[cf$group_id]]
+          ci <- cf$cohort_index
+          a_k <- st$a[ci]
+          L_b <- b_spec$L
+          first <- st$cohort_start[ci]
+          last <- st$cohort_end[ci]
 
-          Z_or <- if (p_or > 0L) X_F[rows, kept_or_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
-          d_or <- L_b * Z_or
-          mhat_rows <- if (p_or > 0L) {
-            alpha_b + as.vector(d_or %*% beta_or)
-          } else {
-            rep(alpha_b, length(rows))
-          }
-          r_or <- jhat_rows - mhat_rows
+          sum_w_r <- 0.0
+          sum_w_r_dtilde <- numeric(p_or)
+          sum_wsyn_dtilde <- numeric(p_or)
+          sum_wsyn_dtilde_dimp <- matrix(0.0, p_or, gf$p)
 
-          sum_w_r <- sum_w_r + sum(w_raw * r_or)
-          if (p_or > 0L) {
-            d_tilde <- if (recipe$intercept) {
-               sweep(d_or, 2L, mean_d_b, FUN = "-")
+          for (start in seq.int(first, last, by = B_chunk)) {
+            rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
+            w_raw <- st$w[rows]
+            w_syn <- w_raw * a_k
+            Z_imp <- if (gf$p > 0L) X_F[rows, gf$kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
+            d_imp <- L_b * Z_imp
+            jhat_rows <- if (gf$p > 0L) {
+              cf$alpha + as.vector(d_imp %*% gf$beta)
             } else {
-              d_or
+              rep(cf$alpha, length(rows))
             }
-            sum_w_r_dtilde <- sum_w_r_dtilde + as.vector(crossprod(w_raw * r_or, d_tilde))
-            sum_wsyn_dtilde <- sum_wsyn_dtilde + as.vector(crossprod(w_syn, d_tilde))
-            if (gf$p > 0L) {
-              sum_wsyn_dtilde_dimp <- sum_wsyn_dtilde_dimp + crossprod(w_syn * d_tilde, d_imp)
+
+            Z_or <- if (p_or > 0L) X_F[rows, kept_or_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
+            d_or <- L_b * Z_or
+            mhat_rows <- if (p_or > 0L) {
+              alpha_b + as.vector(d_or %*% beta_or)
+            } else {
+              rep(alpha_b, length(rows))
+            }
+            r_or <- jhat_rows - mhat_rows
+
+            sum_w_r <- sum_w_r + sum(w_raw * r_or)
+            if (p_or > 0L) {
+              d_tilde <- if (recipe$intercept) {
+                 sweep(d_or, 2L, mean_d_b, FUN = "-")
+              } else {
+                d_or
+              }
+              sum_w_r_dtilde <- sum_w_r_dtilde + as.vector(crossprod(w_raw * r_or, d_tilde))
+              sum_wsyn_dtilde <- sum_wsyn_dtilde + as.vector(crossprod(w_syn, d_tilde))
+              if (gf$p > 0L) {
+                sum_wsyn_dtilde_dimp <- sum_wsyn_dtilde_dimp + crossprod(w_syn * d_tilde, d_imp)
+              }
             }
           }
+          a_force_alpha[idx_k] <- sum_w_r / N
+          a_force_beta[, idx_k] <- sum_w_r_dtilde / N
+          j_force_alpha_alpha[idx_k] <- if (recipe$intercept) cf$M_one else 0.0
+          j_force_alpha_beta[[idx_k]] <- as.double(cf$M_d_kept)
+          j_force_beta_alpha[, idx_k] <- if (recipe$intercept) (sum_wsyn_dtilde / N) else numeric(p_or)
+          j_force_beta_beta[[idx_k]] <- sum_wsyn_dtilde_dimp / N
         }
-        a_force_alpha[idx_k] <- sum_w_r / N
-        a_force_beta[, idx_k] <- sum_w_r_dtilde / N
-        j_force_alpha_alpha[idx_k] <- if (recipe$intercept) cf$M_one else 0.0
-        j_force_alpha_beta[[idx_k]] <- as.double(cf$M_d_kept)
-        j_force_beta_alpha[, idx_k] <- if (recipe$intercept) (sum_wsyn_dtilde / N) else numeric(p_or)
-        j_force_beta_beta[[idx_k]] <- sum_wsyn_dtilde_dimp / N
       }
 
       or_block_fits[[bid]] <- c(
@@ -1158,11 +1321,29 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
     }
   }
 
+  if (can_fast_imp && isTRUE(skip_links)) {
+    return(list(
+      cells = cells_fitted,
+      groups = group_fits,
+      shared_or = shared_or,
+      treatments = trt_fits,
+      links = NULL
+    ))
+  }
+
   # ----------------------------------------------------------------------------
   # Stage 4: Link Point Estimates, Partial Derivatives, and Sparse Adjoint Weights
   # ----------------------------------------------------------------------------
   L_links <- length(cat$links)
   links_fitted <- vector("list", L_links)
+
+  s4_lc_fast <- if (can_fast_imp && !is.null(trt_fits)) {
+    res <- cdid_ia_fast_imp_stage24_forcing_links(
+      st, X_F, cat, recipe, trt_recipe, B_chunk, cells_fitted, group_fits,
+      block_specs = block_specs_or_fast, trt_fits = trt_fits, do_block_forcing = FALSE
+    )
+    if (!is.null(res)) res$link_ctrl else NULL
+  } else NULL
 
   # Precompute OR sensitivity vectors to imputation cells (for OR_j channel)
   # When shared_or is present, let's collect the total RHS forcing matrix from
@@ -1232,80 +1413,95 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
       p_trt <- trt_recipe$p
       trt_cols_F <- trt_recipe$index
       n_ctrl_coh <- length(lk$control_cohort_indices)
-
-      sum_wm <- 0.0
-      sum_wm_j <- 0.0
-      sum_wm_m <- 0.0
-      sum_wm_dor <- if (!is.null(shared_or)) numeric(sh_link$p) else numeric(0L)
-      sum_wm_by_k <- numeric(n_ctrl_coh)
-      sum_wm_dimp_by_k <- vector("list", n_ctrl_coh)
-      sum_w_odds_j_by_k <- numeric(n_ctrl_coh)
-      sum_w_odds_by_k <- numeric(n_ctrl_coh)
-      sum_w_odds_m_by_k <- numeric(n_ctrl_coh)
-      sum_wdot_j_X <- numeric(p_trt)
-      sum_wdot_X <- numeric(p_trt)
-      sum_wdot_m_X <- numeric(p_trt)
-
       b_fit <- if (!is.null(shared_or)) shared_or$blocks[[lk$or_block_id]] else NULL
       p_or <- if (!is.null(shared_or)) sh_link$p else 0L
 
-      for (idx_k in seq_len(n_ctrl_coh)) {
-        ci_k <- lk$control_cohort_indices[idx_k]
-        cid_k <- lk$control_cell_ids[idx_k]
-        cf_k <- cells_fitted[[cid_k]]
-        gf_k <- group_fits[[cf_k$group_id]]
-        a_k <- st$a[ci_k]
-        first <- st$cohort_start[ci_k]
-        last <- st$cohort_end[ci_k]
-        sum_dimp_k <- numeric(gf_k$p)
+      if (!is.null(s4_lc_fast)) {
+        lc_c <- s4_lc_fast[[ell]]
+        sum_wm <- lc_c$sum_wm
+        sum_wm_j <- lc_c$sum_wm_j
+        sum_wm_m <- lc_c$sum_wm_m
+        sum_wm_dor <- lc_c$sum_wm_dor
+        sum_wm_by_k <- lc_c$sum_wm_by_k
+        sum_wm_dimp_by_k <- lc_c$sum_wm_dimp_by_k
+        sum_w_odds_j_by_k <- lc_c$sum_w_odds_j_by_k
+        sum_w_odds_by_k <- lc_c$sum_w_odds_by_k
+        sum_w_odds_m_by_k <- lc_c$sum_w_odds_m_by_k
+        sum_wdot_j_X <- lc_c$sum_wdot_j_X
+        sum_wdot_X <- lc_c$sum_wdot_X
+        sum_wdot_m_X <- lc_c$sum_wdot_m_X
+      } else {
+        sum_wm <- 0.0
+        sum_wm_j <- 0.0
+        sum_wm_m <- 0.0
+        sum_wm_dor <- if (!is.null(shared_or)) numeric(sh_link$p) else numeric(0L)
+        sum_wm_by_k <- numeric(n_ctrl_coh)
+        sum_wm_dimp_by_k <- vector("list", n_ctrl_coh)
+        sum_w_odds_j_by_k <- numeric(n_ctrl_coh)
+        sum_w_odds_by_k <- numeric(n_ctrl_coh)
+        sum_w_odds_m_by_k <- numeric(n_ctrl_coh)
+        sum_wdot_j_X <- numeric(p_trt)
+        sum_wdot_X <- numeric(p_trt)
+        sum_wdot_m_X <- numeric(p_trt)
 
-        for (start in seq.int(first, last, by = B_chunk)) {
-          rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
-          w_raw <- st$w[rows]
-          w_syn <- w_raw * a_k
-          X_trt_rows <- X_F[rows, trt_cols_F, drop = FALSE]
-          lv <- ipw_logit_values(X_trt_rows, tfit$coefficients)
-          odds <- lv$odds
-          wm <- w_syn * odds
-          # d wm / d eta = wm on active rows; zero where the odds cap binds.
-          wdot <- wm * lv$active
+        for (idx_k in seq_len(n_ctrl_coh)) {
+          ci_k <- lk$control_cohort_indices[idx_k]
+          cid_k <- lk$control_cell_ids[idx_k]
+          cf_k <- cells_fitted[[cid_k]]
+          gf_k <- group_fits[[cf_k$group_id]]
+          a_k <- st$a[ci_k]
+          first <- st$cohort_start[ci_k]
+          last <- st$cohort_end[ci_k]
+          sum_dimp_k <- numeric(gf_k$p)
 
-          Z_imp <- if (gf_k$p > 0L) X_F[rows, gf_k$kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
-          d_imp <- lk$L * Z_imp
-          jhat_rows <- if (gf_k$p > 0L) {
-            cf_k$alpha + as.vector(d_imp %*% gf_k$beta)
-          } else {
-            rep(cf_k$alpha, length(rows))
-          }
+          for (start in seq.int(first, last, by = B_chunk)) {
+            rows <- st$cohort_order[seq.int(start, min(last, start + B_chunk - 1L))]
+            w_raw <- st$w[rows]
+            w_syn <- w_raw * a_k
+            X_trt_rows <- X_F[rows, trt_cols_F, drop = FALSE]
+            lv <- ipw_logit_values(X_trt_rows, tfit$coefficients)
+            odds <- lv$odds
+            wm <- w_syn * odds
+            # d wm / d eta = wm on active rows; zero where the odds cap binds.
+            wdot <- wm * lv$active
 
-          sum_wm <- sum_wm + sum(wm)
-          sum_wm_j <- sum_wm_j + sum(wm * jhat_rows)
-          sum_wm_by_k[idx_k] <- sum_wm_by_k[idx_k] + sum(wm)
-          if (gf_k$p > 0L) {
-            sum_dimp_k <- sum_dimp_k + as.vector(crossprod(wm, d_imp))
-          }
-          sum_w_odds_j_by_k[idx_k] <- sum_w_odds_j_by_k[idx_k] + sum(w_raw * odds * jhat_rows)
-          sum_w_odds_by_k[idx_k] <- sum_w_odds_by_k[idx_k] + sum(w_raw * odds)
-          sum_wdot_j_X <- sum_wdot_j_X + as.vector(crossprod(wdot * jhat_rows, X_trt_rows))
-          sum_wdot_X <- sum_wdot_X + as.vector(crossprod(wdot, X_trt_rows))
-
-          if (!is.null(shared_or)) {
-            Z_or <- if (p_or > 0L) X_F[rows, sh_link$kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
-            d_or <- lk$L * Z_or
-            mhat_rows <- if (p_or > 0L) {
-              (if (recipe$intercept) b_fit$alpha else 0.0) + as.vector(d_or %*% sh_link$beta)
+            Z_imp <- if (gf_k$p > 0L) X_F[rows, gf_k$kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
+            d_imp <- lk$L * Z_imp
+            jhat_rows <- if (gf_k$p > 0L) {
+              cf_k$alpha + as.vector(d_imp %*% gf_k$beta)
             } else {
-              rep(if (recipe$intercept) b_fit$alpha else 0.0, length(rows))
+              rep(cf_k$alpha, length(rows))
             }
-            sum_wm_m <- sum_wm_m + sum(wm * mhat_rows)
-            if (p_or > 0L) {
-              sum_wm_dor <- sum_wm_dor + as.vector(crossprod(wm, d_or))
+
+            sum_wm <- sum_wm + sum(wm)
+            sum_wm_j <- sum_wm_j + sum(wm * jhat_rows)
+            sum_wm_by_k[idx_k] <- sum_wm_by_k[idx_k] + sum(wm)
+            if (gf_k$p > 0L) {
+              sum_dimp_k <- sum_dimp_k + as.vector(crossprod(wm, d_imp))
             }
-            sum_w_odds_m_by_k[idx_k] <- sum_w_odds_m_by_k[idx_k] + sum(w_raw * odds * mhat_rows)
-            sum_wdot_m_X <- sum_wdot_m_X + as.vector(crossprod(wdot * mhat_rows, X_trt_rows))
+            sum_w_odds_j_by_k[idx_k] <- sum_w_odds_j_by_k[idx_k] + sum(w_raw * odds * jhat_rows)
+            sum_w_odds_by_k[idx_k] <- sum_w_odds_by_k[idx_k] + sum(w_raw * odds)
+            sum_wdot_j_X <- sum_wdot_j_X + as.vector(crossprod(wdot * jhat_rows, X_trt_rows))
+            sum_wdot_X <- sum_wdot_X + as.vector(crossprod(wdot, X_trt_rows))
+
+            if (!is.null(shared_or)) {
+              Z_or <- if (p_or > 0L) X_F[rows, sh_link$kept_cols_F, drop = FALSE] else matrix(0.0, length(rows), 0L)
+              d_or <- lk$L * Z_or
+              mhat_rows <- if (p_or > 0L) {
+                (if (recipe$intercept) b_fit$alpha else 0.0) + as.vector(d_or %*% sh_link$beta)
+              } else {
+                rep(if (recipe$intercept) b_fit$alpha else 0.0, length(rows))
+              }
+              sum_wm_m <- sum_wm_m + sum(wm * mhat_rows)
+              if (p_or > 0L) {
+                sum_wm_dor <- sum_wm_dor + as.vector(crossprod(wm, d_or))
+              }
+              sum_w_odds_m_by_k[idx_k] <- sum_w_odds_m_by_k[idx_k] + sum(w_raw * odds * mhat_rows)
+              sum_wdot_m_X <- sum_wdot_m_X + as.vector(crossprod(wdot * mhat_rows, X_trt_rows))
+            }
           }
+          sum_wm_dimp_by_k[[idx_k]] <- sum_dimp_k
         }
-        sum_wm_dimp_by_k[[idx_k]] <- sum_dimp_k
       }
 
       d_minus <- sum_wm / N
@@ -1392,6 +1588,7 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
   # where tilde_nu_r = (S_r^imp)^{-1} sum_{c in C_r} (nu_c - lambda_c * mean_d_c)
   # and tilde_lambda_c = lambda_c / mass_c (if intercept = TRUE, else 0).
   zero_adjoints <- vector("list", n_groups)
+  zero_tilde_nu_imp <- if (can_fast_imp) lapply(group_fits, function(gf) numeric(gf$p)) else NULL
   solve_imp_adjoint <- function(lambda_vec, nu_list, structural_cids) {
     active_groups <- unique(vapply(cells_fitted[structural_cids], `[[`, integer(1L), "group_id"))
     tilde_lambda <- numeric(n_cells)
@@ -1434,23 +1631,38 @@ imputation_fit_core <- function(st, X_F, pair_reader, cat, recipe, or_frame_inde
 
   for (ell in seq_len(L_links)) {
     lf <- links_fitted[[ell]]
-    # 1. Treated arm T_gl j_direct weights
-    lam_T <- numeric(n_cells)
-    nu_T <- lapply(cells_fitted, function(cf) numeric(group_fits[[cf$group_id]]$p))
-    if (recipe$intercept) lam_T[lf$target_cell_id] <- 1.0
-    nu_T[[lf$target_cell_id]] <- lf$d_bar_plus_j
-    links_fitted[[ell]]$adjoint_T <- solve_imp_adjoint(lam_T, nu_T, lf$target_cell_id)
-
-    # 2. Control IPW arm C_ol j_direct weights (if trt_fits present)
-    if (!is.null(trt_fits)) {
-      lam_C <- numeric(n_cells)
-      nu_C <- lapply(cells_fitted, function(cf) numeric(group_fits[[cf$group_id]]$p))
-      for (idx_k in seq_along(lf$control_cell_ids)) {
-        cid_k <- lf$control_cell_ids[idx_k]
-        if (recipe$intercept) lam_C[cid_k] <- lam_C[cid_k] + lf$m_minus_k[idx_k]
-        nu_C[[cid_k]] <- nu_C[[cid_k]] + lf$d_bar_minus_j_k[[idx_k]]
+    if (can_fast_imp) {
+      links_fitted[[ell]]$adjoint_T <- cdid_ia_solve_adjoint_fast(
+        group_fits, cells_fitted, n_cells, N, recipe$intercept,
+        zero_tilde_nu_imp, lf$target_cell_id,
+        if (recipe$intercept) 1.0 else 0.0, list(lf$d_bar_plus_j)
+      )
+      if (!is.null(trt_fits)) {
+        links_fitted[[ell]]$adjoint_C <- cdid_ia_solve_adjoint_fast(
+          group_fits, cells_fitted, n_cells, N, recipe$intercept,
+          zero_tilde_nu_imp, lf$control_cell_ids,
+          lf$m_minus_k, lf$d_bar_minus_j_k
+        )
       }
-      links_fitted[[ell]]$adjoint_C <- solve_imp_adjoint(lam_C, nu_C, lf$control_cell_ids)
+    } else {
+      # 1. Treated arm T_gl j_direct weights
+      lam_T <- numeric(n_cells)
+      nu_T <- lapply(cells_fitted, function(cf) numeric(group_fits[[cf$group_id]]$p))
+      if (recipe$intercept) lam_T[lf$target_cell_id] <- 1.0
+      nu_T[[lf$target_cell_id]] <- lf$d_bar_plus_j
+      links_fitted[[ell]]$adjoint_T <- solve_imp_adjoint(lam_T, nu_T, lf$target_cell_id)
+
+      # 2. Control IPW arm C_ol j_direct weights (if trt_fits present)
+      if (!is.null(trt_fits)) {
+        lam_C <- numeric(n_cells)
+        nu_C <- lapply(cells_fitted, function(cf) numeric(group_fits[[cf$group_id]]$p))
+        for (idx_k in seq_along(lf$control_cell_ids)) {
+          cid_k <- lf$control_cell_ids[idx_k]
+          if (recipe$intercept) lam_C[cid_k] <- lam_C[cid_k] + lf$m_minus_k[idx_k]
+          nu_C[[cid_k]] <- nu_C[[cid_k]] + lf$d_bar_minus_j_k[[idx_k]]
+        }
+        links_fitted[[ell]]$adjoint_C <- solve_imp_adjoint(lam_C, nu_C, lf$control_cell_ids)
+      }
     }
   }
 
@@ -2278,6 +2490,10 @@ imputation_evaluate_if_chunk_core <- function(st, X_F, pair_reader, core_fit, re
 # ------------------------------------------------------------------------------
 
 validate_imputation_backend <- function(backend) {
+  if (identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+      cdid_ia_check_validated_imp_backend(backend)) {
+    return(invisible(backend))
+  }
   if (!inherits(backend, "cdid_imputation_backend") ||
       !ipw_owner_seal_ok(backend, "imputation_backend")) {
     imputation_abort("Expected the immutable sealed pure-imputation backend (`cdid_imputation_backend`).", "integrity")
@@ -2307,7 +2523,14 @@ validate_imputation_backend <- function(backend) {
 # List/vector headers, attributes, names and string bytes follow cp04_payload;
 # matrix charges use dimensions only, without allocating p-by-p placeholders.
 imputation_retained_core_bounds <- function(cat, recipe, trt_recipe) {
-  E <- function(x) unname(cp04_payload(x)["entries"])
+  E <- if (identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+           cdid_are_default_fns(c("cp04_payload", "cp04_payload_native_kernel"))) {
+    pk <- cp04_payload_native_kernel()
+    e_env <- environment()
+    function(x) pk(x, TRUE, e_env)[[1L]]
+  } else {
+    function(x) unname(cp04_payload(x)["entries"])
+  }
   # A names attribute costs 9 + E(names). A matrix costs its entries + 8,
   # the one-slot attributes list (9), and its two-element dim vector (10).
   A <- function(n, nm = NULL) n + 8 + if (is.null(nm)) 0 else 9 + E(nm)
@@ -2328,95 +2551,115 @@ imputation_retained_core_bounds <- function(cat, recipe, trt_recipe) {
   has_or <- length(cat$or_blocks) > 0L
   has_trt <- length(cat$treatment_specs) > 0L
 
+  A1 <- A(1)
+  Ap <- A(p)
+  Apz <- A(p, z)
+  Aq <- A(q)
+  Aq_trt <- A(q, trt_recipe$columns)
+  Ez <- E(z)
+  M_pp_z <- M(p, p, z, z, TRUE)
+  wls_block <- R(c(r11 = A1, r1d = Apz, r1y = A1, n = A1,
+    weight_sum = A1, mean_d = Apz, mean_y = A1,
+    augmented_rows = A1, residual_rows = A1))
+  wls_acct <- R(c(n = A1, p = A1, n_blocks = A1, residual_dim = A(2),
+    max_augmented_rows = A1, max_residual_rows = A1,
+    max_chunk_merge_rows = A1, max_residual_merge_rows = A1, n_compressions = A1))
+  wls_simple_sum <- R(c(factor = M(p + 1, p + 1), n = A1, columns = Ez),
+    "cdid_or_wls_summary")
+  wls_simple_fit <- R(c(coefficients = Apz, rss = A1, R = M(p, p),
+    pivot = Ap, n = A1, rank = A1, rank_tol = A1, cutoff = A1), "cdid_or_wls_fit")
+  wls_prop_e <- E("R stats::lm.fit / dqrdc2 pivoted QR at rank_tol on the pooled (partialled) factor")
+  wls_rk_e <- E("unchanged relative-diagonal rule of the accepted kernel on the reduced factor")
+
   # A pooled summary and fit each own block records and accounting. The fit
   # additionally owns its slope_fit (including a second R and coefficients).
   wls <- function(bn) {
-    block <- R(c(r11 = A(1), r1d = A(p, z), r1y = A(1), n = A(1),
-      weight_sum = A(1), mean_d = A(p, z), mean_y = A(1),
-      augmented_rows = A(1), residual_rows = A(1)))
-    blocks <- R(rep(block, length(bn)), nm = bn)
-    accounting <- R(c(n = A(1), p = A(1), n_blocks = A(1), residual_dim = A(2),
-      max_augmented_rows = A(1), max_residual_rows = A(1),
-      max_chunk_merge_rows = A(1), max_residual_merge_rows = A(1), n_compressions = A(1)))
-    simple_summary <- R(c(factor = M(p + 1, p + 1), n = A(1), columns = E(z)),
-      "cdid_or_wls_summary")
-    simple_fit <- R(c(coefficients = A(p, z), rss = A(1), R = M(p, p),
-      pivot = A(p), n = A(1), rank = A(1), rank_tol = A(1), cutoff = A(1)), "cdid_or_wls_fit")
+    blocks <- R(rep(wls_block, length(bn)), nm = bn)
     if (recipe$intercept) {
-      summary <- R(c(residual = simple_summary, blocks = blocks, n = A(1), p = A(1),
-        columns = E(z), accounting = accounting), "cdid_or_pooled_wls_summary")
-      fit <- R(c(coefficients = A(p, z), intercepts = A(length(bn), bn), rss = A(1),
-        R = M(p, p), pivot = A(p), n = A(1), p = A(1), n_blocks = A(1),
-        rank = A(1), rank_tol = A(1), cutoff = A(1), blocks = blocks,
-        slope_fit = if (p > 0) simple_fit else 0, accounting = accounting), "cdid_or_pooled_wls_fit")
+      summary <- R(c(residual = wls_simple_sum, blocks = blocks, n = A1, p = A1,
+        columns = Ez, accounting = wls_acct), "cdid_or_pooled_wls_summary")
+      fit <- R(c(coefficients = Apz, intercepts = A(length(bn), bn), rss = A1,
+        R = M(p, p), pivot = Ap, n = A1, p = A1, n_blocks = A1,
+        rank = A1, rank_tol = A1, cutoff = A1, blocks = blocks,
+        slope_fit = if (p > 0) wls_simple_fit else 0, accounting = wls_acct), "cdid_or_pooled_wls_fit")
     } else {
-      summary <- simple_summary
-      fit <- simple_fit
+      summary <- wls_simple_sum
+      fit <- wls_simple_fit
     }
-    basis <- R(c(slope_columns = E(z), kept_columns = E(z), kept_index = A(p),
-      proposed_columns = E(z), aliased_columns = E(z), nontrivial_candidates_retained = E(z),
-      alias_map = M(p, p, z, z, TRUE), block_constants = M(length(bn), p, bn, z, TRUE),
-      reconstruction_control_scaled = A(p), reconstruction_treated_scaled = A(p),
-      reconstruction_roundoff_threshold = A(1), rows_checked = A(1),
-      proposal = E("R stats::lm.fit / dqrdc2 pivoted QR at rank_tol on the pooled (partialled) factor"),
-      rank_check = E("unchanged relative-diagonal rule of the accepted kernel on the reduced factor"),
-      frozen_during_differentiation = A(1), numerical_certificate = A(1)))
-    c(fit = fit, summary = summary, basis = basis, rss = A(1), objective = A(1))
+    basis <- R(c(slope_columns = Ez, kept_columns = Ez, kept_index = Ap,
+      proposed_columns = Ez, aliased_columns = Ez, nontrivial_candidates_retained = Ez,
+      alias_map = M_pp_z, block_constants = M(length(bn), p, bn, z, TRUE),
+      reconstruction_control_scaled = Ap, reconstruction_treated_scaled = Ap,
+      reconstruction_roundoff_threshold = A1, rows_checked = A1,
+      proposal = wls_prop_e,
+      rank_check = wls_rk_e,
+      frozen_during_differentiation = A1, numerical_certificate = A1))
+    c(fit = fit, summary = summary, basis = basis, rss = A1, objective = A1)
   }
 
-  cells <- V(vapply(cat$cell_specs, function(cs) E(cs) + R(c(
-    group_id = A(1), local_id = A(1), n_pair = A(1), weight_sum = A(1), mass = A(1),
-    alpha = A(1), mean_d = A(p, z), mean_y = A(1), a_k = A(1), M_one = A(1),
-    Y_one = A(1), M_z = A(p, z), Y_z = A(p, z), M_d_kept = A(p, z))), numeric(1)))
+  cell_fixed <- R(c(
+    group_id = A1, local_id = A1, n_pair = A1, weight_sum = A1, mass = A1,
+    alpha = A1, mean_d = Apz, mean_y = A1, a_k = A1, M_one = A1,
+    Y_one = A1, M_z = Apz, Y_z = Apz, M_d_kept = Apz))
+  cells <- V(vapply(cat$cell_specs, function(cs) E(cs) + cell_fixed, numeric(1)))
   groups <- V(vapply(cat$group_specs, function(gs) {
     bn <- vapply(cat$cell_specs[gs$cell_ids], `[[`, character(1), "name")
-    E(gs) + R(c(keep = A(p), p = A(1), kept_columns = E(z), kept_cols_F = A(p),
-      beta = A(p, z), alpha = A(length(bn), bn), wls(bn)))
+    E(gs) + R(c(keep = Ap, p = A1, kept_columns = Ez, kept_cols_F = Ap,
+      beta = Apz, alpha = A(length(bn), bn), wls(bn)))
   }, numeric(1)))
   shared <- if (has_or) {
     bn <- vapply(cat$or_blocks, `[[`, character(1), "name")
     blocks <- V(vapply(cat$or_blocks, function(b) {
       k <- length(b$control_cell_ids)
-      E(b) + R(c(alpha = A(1), mass = A(1), weight_sum = A(1), mean_d = A(p, z),
+      E(b) + R(c(alpha = A1, mass = A1, weight_sum = A1, mean_d = Apz,
         a_force_alpha = A(k), a_force_beta = M(p, k), j_force_alpha_alpha = A(k),
-        j_force_alpha_beta = k + 8 + k * A(p), j_force_beta_alpha = M(p, k),
-        j_force_beta_beta = k + 8 + k * M(p, p, z, z, TRUE)))
+        j_force_alpha_beta = k + 8 + k * Ap, j_force_beta_alpha = M(p, k),
+        j_force_beta_beta = k + 8 + k * M_pp_z))
     }, numeric(1)))
     nt <- length(bn) + p
-    R(c(keep = A(p), p = A(1), kept_columns = E(z), kept_cols_F = A(p),
-      intercept = A(1), n_blocks = A(1), alpha = A(length(bn), bn), beta = A(p, z),
+    R(c(keep = Ap, p = A1, kept_columns = Ez, kept_cols_F = Ap,
+      intercept = A1, n_blocks = A1, alpha = A(length(bn), bn), beta = Apz,
       theta = A(nt, paste0("OR.theta", seq_len(nt) - 1L)), blocks = blocks, wls(bn)))
   } else 0
-  treatments <- if (has_trt) V(vapply(cat$treatment_specs, function(ts) {
-    E(ts) + R(c(coefficients = A(q, paste0("gamma", seq_len(q) - 1L)),
-      column_names = E(trt_recipe$columns),
-      H_chol = M(q, q, trt_recipe$columns, trt_recipe$columns, TRUE),
-      # The current lfit$H partially matches H_chol and retains that alias too.
-      H = M(q, q, trt_recipe$columns, trt_recipe$columns, TRUE),
-      n_risk_F = A(1), a_forcing = M(q, length(ts$all_cohort_indices)),
-      clipping = E(ipw_clip_summary(prob = 0.5, controls = FALSE, weights = 1))))
-  }, numeric(1))) else 0
-  dense_adjoint <- R(c(tilde_lambda = A(nc), tilde_nu = ng + 8 + ng * A(p)))
+  treatments <- if (has_trt) {
+    trt_coef_a <- A(q, paste0("gamma", seq_len(q) - 1L))
+    trt_col_e <- E(trt_recipe$columns)
+    trt_H_m <- M(q, q, trt_recipe$columns, trt_recipe$columns, TRUE)
+    trt_clip_e <- E(ipw_clip_summary(prob = 0.5, controls = FALSE, weights = 1))
+    V(vapply(cat$treatment_specs, function(ts) {
+      E(ts) + R(c(coefficients = trt_coef_a,
+        column_names = trt_col_e,
+        H_chol = trt_H_m,
+        # The current lfit$H partially matches H_chol and retains that alias too.
+        H = trt_H_m,
+        n_risk_F = A1, a_forcing = M(q, length(ts$all_cohort_indices)),
+        clipping = trt_clip_e))
+    }, numeric(1)))
+  } else 0
+  dense_adjoint <- R(c(tilde_lambda = A(nc), tilde_nu = ng + 8 + ng * Ap))
+  kind_adj_e <- E("compact_reconstruction_adjoint")
   adjoint <- function(k) {
     g <- min(k, ng)
-    compact <- R(c(kind = E("compact_reconstruction_adjoint"), cell_ids = A(k),
-      tilde_lambda = A(k), group_ids = A(g), tilde_nu = g + 8 + g * A(p)))
+    compact <- R(c(kind = kind_adj_e, cell_ids = A(k),
+      tilde_lambda = A(k), group_ids = A(g), tilde_nu = g + 8 + g * Ap))
     min(dense_adjoint, compact)
   }
+  adj1 <- adjoint(1L)
   links <- vapply(cat$links, function(lk) {
     k <- length(lk$control_cell_ids)
-    compact_link <- E(lk) + R(c(mu = A(1), mu_ipw = A(1), mu_or = A(1), mu_reg = A(1), mu_dr = A(1),
-      d_plus = A(1), num_T = A(1), T_gl = A(1), num_Bg = A(1), B_gl = A(1),
-      d_minus = A(1), num_C = A(1), C_ol = A(1), num_Bo = A(1), B_ol = A(1),
-      d_bar_plus_j = A(p, z), d_bar_plus_or = A(p, z), d_bar_minus_or = A(p, z),
-      d_bar_diff_or = A(p, z), a_coeff_T_g = A(1), a_coeff_Bg_g = A(1),
+    adj_k <- if (has_trt) adjoint(k) else 0
+    compact_link <- E(lk) + R(c(mu = A1, mu_ipw = A1, mu_or = A1, mu_reg = A1, mu_dr = A1,
+      d_plus = A1, num_T = A1, T_gl = A1, num_Bg = A1, B_gl = A1,
+      d_minus = A1, num_C = A1, C_ol = A1, num_Bo = A1, B_ol = A1,
+      d_bar_plus_j = Apz, d_bar_plus_or = Apz, d_bar_minus_or = Apz,
+      d_bar_diff_or = Apz, a_coeff_T_g = A1, a_coeff_Bg_g = A1,
       a_coeff_C_k = A(k), a_coeff_Bo_k = A(k), m_minus_k = A(k),
-      d_bar_minus_j_k = k + 8 + k * A(p), denminus_gamma = A(q),
-      g_C_gamma = A(q, trt_recipe$columns), g_Bo_gamma = A(q, trt_recipe$columns),
-      g_dr_gamma = A(q, trt_recipe$columns), adjoint_T = adjoint(1L),
-      if (has_trt) c(adjoint_C = adjoint(k))))
-    c(compact = compact_link, dense = compact_link + dense_adjoint - adjoint(1L) +
-      if (has_trt) dense_adjoint - adjoint(k) else 0)
+      d_bar_minus_j_k = k + 8 + k * Ap, denminus_gamma = Aq,
+      g_C_gamma = Aq_trt, g_Bo_gamma = Aq_trt,
+      g_dr_gamma = Aq_trt, adjoint_T = adj1,
+      if (has_trt) c(adjoint_C = adj_k)))
+    c(compact = compact_link, dense = compact_link + dense_adjoint - adj1 +
+      if (has_trt) dense_adjoint - adj_k else 0)
   }, numeric(2))
   # Common metadata/factors are traversed once; only adjoint fields differ.
   common <- c(cells = cells, groups = groups, shared_or = shared,
@@ -2533,9 +2776,10 @@ fit_imputation_backend <- function(reader, link_views, control = ipw_owner_contr
   )
 
   records <- vector("list", L)
+  lv_ok <- cdid_fast_validate_link_views(link_views, frame)
   for (ell in seq_len(L)) {
     v <- link_views[[ell]]
-    validate_ipw_link_view(v, frame_owner = frame)
+    if (!lv_ok) validate_ipw_link_view(v, frame_owner = frame)
     source <- v$functional_key
     if (!gmm_scalar_character(source) || !startsWith(source, "cmpcat:")) {
       imputation_abort("Pure-imputation backend requires the supplied comparison-catalog functional key.")
@@ -2773,7 +3017,8 @@ fit_imputation_backend <- function(reader, link_views, control = ipw_owner_contr
     imputation_pooling = imputation_pooling,
     glm_control = gc,
     rank_tol = rank_tol,
-    ctrl = ctrl, outcome_pooling = outcome_pooling
+    ctrl = ctrl, outcome_pooling = outcome_pooling,
+    panel = if (is.null(lay) && is.null(pair_outcomes)) get("panel_owner", reader$panel_ref, inherits = FALSE) else NULL
   )
 
   # Fill only the preflighted compact fields; preserve NULL list slots.
@@ -2799,7 +3044,15 @@ fit_imputation_backend <- function(reader, link_views, control = ipw_owner_contr
   )
   obj$accounting$owned_entries <- actual
   obj$accounting$character_bytes <- unname(payload["char_bytes"])
-  ipw_owner_seal(obj, "imputation_backend")
+  sealed <- cdid_fast_seal(obj, "imputation_backend")
+  if (is.null(reference) && is.null(lay)) {
+    cdid_ia_record_validated_imp_backend(
+      sealed, reader, frame,
+      get("panel_owner", reader$panel_ref, inherits = FALSE),
+      if (!is.null(design_owner)) design_owner else des$d_owner
+    )
+  }
+  sealed
 }
 
 fit_chained_imputation <- fit_imputation_backend
@@ -2816,6 +3069,32 @@ imputation_backend_X_F <- function(backend, reader) {
 imputation_if_envelope <- function(backend, B, links = seq_along(backend$links), details = FALSE) {
   validate_imputation_backend(backend)
   if (reconstruction_separate(backend$shared_or)) return(reconstruction_if_envelope(backend, B, links, details))
+  can_cache <- !details && is.null(attributes(links)) && is.null(backend$layout) &&
+    is.null(backend$reference_ref) &&
+    identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+    cdid_are_default_fns(c(
+      "imputation_if_needed_sets", "reconstruction_score_cache_plan",
+      "reconstruction_ordinary_if_envelope", "reconstruction_ordinary_inventory"
+    ))
+  c_env <- if (can_cache) cdid_ia_get_env_cache(backend, augmented = FALSE) else NULL
+  env_key <- NULL
+  if (!is.null(c_env)) {
+    nl_req <- length(links)
+    if (nl_req == 1L && B == 1L) {
+      env_key <- paste0("ie1_", as.integer(links[1L]))
+    } else if (nl_req == length(backend$links) && identical(as.integer(links), seq_along(backend$links))) {
+      env_key <- paste0("iea_", as.integer(B))
+    }
+    if (!is.null(env_key)) {
+      hit <- get0(env_key, envir = c_env, inherits = FALSE)
+      if (!is.null(hit)) return(hit)
+    }
+  }
+  cache_tag <- if (B == 1L) "imp_env_1" else if (B == 2L) "imp_env_2" else "imp_env_B"
+  if (can_cache) {
+    meta <- cdid_get_if_chunk_meta(backend, B, links, cache_tag)
+    if (!is.null(meta)) return(meta$pre)
+  }
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- if (is.null(backend$layout)) reader$state else backend$layout$state
   # A recipe-cohort layout evaluates up to (layout rows / original rows) rows
@@ -2866,6 +3145,10 @@ imputation_if_envelope <- function(backend, B, links = seq_along(backend$links),
     funding_entries = 2016 * min(B, backend$control$max_chunk_rows) * nl)
   if (!details && is.null(backend$reference_ref) && is.null(backend$layout))
     pre <- reconstruction_ordinary_if_envelope(backend, B, links, pre, width, metadata)
+  if (can_cache) {
+    cdid_set_if_chunk_meta(backend, B, links, pre, NULL, cache_tag)
+    if (!is.null(c_env) && !is.null(env_key)) assign(env_key, pre, envir = c_env)
+  }
   pre
 }
 
@@ -2905,39 +3188,57 @@ evaluate_imputation_if_chunk <- function(backend, rows, links = seq_along(backen
   if (!is.null(backend$layout)) return(evaluate_imputation_layout_if_chunk(backend, reader, rows, links, scale, details))
   pre <- imputation_if_budget(backend, length(rows), links, details)
   X_F <- imputation_backend_X_F(backend, reader)
-  pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "reconstruction", details)
-  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
-  pair_reader <- function(r_sub, pair, read_outcomes = TRUE) {
-    pr <- if (is.null(pair_op)) cp04_pair_rows(reader, r_sub, pair, read_outcomes) else
-      pair_op$pair(r_sub, pair, read_outcomes)
-    if (read_outcomes && !is.null(backend$pair_outcomes)) {
-      pk <- paste0(as.character(pair$s), ":", as.character(pair$t))
-      dy <- backend$pair_outcomes[[pk]][r_sub]
-      observed <- pr$S == 1
-      if (!identical(!is.na(dy), observed) || any(!is.finite(dy[observed]))) {
-        imputation_abort("Retained private pair differences disagree with the sealed panel.", "support")
-      }
-      pr$dy <- numeric(length(r_sub))
-      pr$dy[observed] <- dy[observed]
-    }
-    pr
+  pair_op <- NULL
+  res <- NULL
+  if (!details && is.null(backend$reference_ref) && is.null(backend$pair_outcomes) &&
+      identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+      cdid_are_default_fns(c(
+        "imputation_evaluate_if_chunk_core", "imputation_if_needed_sets",
+        "cp04_pair_consumer_operation", "cp04_pair_read_operation", "cp04_pair_rows", "cp04_date_rows",
+        "reconstruction_cached_cell_reader", "reconstruction_score_cache_view",
+        "reconstruction_complete_cache_witness", "reconstruction_sparse_adjoint_ids",
+        "reconstruction_coarse_operation", "reconstruction_zero_template",
+        "reconstruction_zero_template_run", "or_pooled_wls_gram_solve", "or_wls_gram_solve",
+        "ipw_logit_values", "cp04_solve"
+      ))) {
+    res <- cdid_ia_fast_imp_if_chunk_core(st, X_F, backend, rows, links, scale, pre)
   }
+  if (is.null(res)) {
+    cdid_fast_kernel_cache$last_retained_if <- NULL
+    pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "reconstruction", details)
+    on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
+    pair_reader <- function(r_sub, pair, read_outcomes = TRUE) {
+      pr <- if (is.null(pair_op)) cp04_pair_rows(reader, r_sub, pair, read_outcomes) else
+        pair_op$pair(r_sub, pair, read_outcomes)
+      if (read_outcomes && !is.null(backend$pair_outcomes)) {
+        pk <- paste0(as.character(pair$s), ":", as.character(pair$t))
+        dy <- backend$pair_outcomes[[pk]][r_sub]
+        observed <- pr$S == 1
+        if (!identical(!is.na(dy), observed) || any(!is.finite(dy[observed]))) {
+          imputation_abort("Retained private pair differences disagree with the sealed panel.", "support")
+        }
+        pr$dy <- numeric(length(r_sub))
+        pr$dy[observed] <- dy[observed]
+      }
+      pr
+    }
 
-  res <- imputation_evaluate_if_chunk_core(
-    st = st,
-    X_F = X_F,
-    pair_reader = pair_reader,
-    core_fit = backend,
-    recipe = backend$outcome_recipe,
-    or_frame_index = backend$or_frame_index,
-    trt_recipe = backend$treatment_recipe,
-    est_method = backend$est_method,
-    rows = as.integer(rows),
-    links = as.integer(links),
-    scale = scale,
-    details = details,
-    sets = pre
-  )
+    res <- imputation_evaluate_if_chunk_core(
+      st = st,
+      X_F = X_F,
+      pair_reader = pair_reader,
+      core_fit = backend,
+      recipe = backend$outcome_recipe,
+      or_frame_index = backend$or_frame_index,
+      trt_recipe = backend$treatment_recipe,
+      est_method = backend$est_method,
+      rows = as.integer(rows),
+      links = as.integer(links),
+      scale = scale,
+      details = details,
+      sets = pre
+    )
+  }
 
   out <- list(
     rows = res$rows,

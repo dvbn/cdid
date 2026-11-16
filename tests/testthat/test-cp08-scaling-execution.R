@@ -394,10 +394,10 @@ test_that("the dated reference reader charges its live source before the require
   captured <- NULL
   orig <- get("build_chained_reference_reader", envir = api)
   on.exit(cp8_rebind("build_chained_reference_reader", orig), add = TRUE)
-  cp8_rebind("build_chained_reference_reader", function(src, reader, views, n_post, ctrl, retained = 0, work = 0) {
+  cp8_rebind("build_chained_reference_reader", function(src, reader, views, n_post, ctrl, retained = 0, work = 0, ...) {
     if (is.null(captured)) captured <<- list(src = src, reader = reader, views = views, n_post = n_post, ctrl = ctrl,
       retained = retained, work = work)
-    orig(src, reader, views, n_post, ctrl, retained, work)
+    orig(src, reader, views, n_post, ctrl, retained, work, ...)
   })
   invisible(cdid::att_gt(yname = "y", tname = "time", idname = "id", gname = "G", data = cp8_rid_panel(), xformla = ~x,
     weightsname = "w", est_method = "reg", fix_weights = "base_period", bstrap = FALSE, cband = FALSE, gmm_weighting = "identity",

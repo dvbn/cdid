@@ -28,7 +28,7 @@ Correct columns and two observations per unit are not an identification guarante
 The next blocks are self-contained base R code. They describe twelve study units in cohorts 0, 3 and 5, including units observed once or never. The artificial outcomes only make the input concrete. This tiny table illustrates checks and is not a recommended estimation sample.
 
 ```r
-roster_check <- data.frame(
+unit_table <- data.frame(
   id = 1:12,
   first_treat = rep(c(0, 3, 5), each = 4),
   x = rep(c(-1, 0, 1, 2), times = 3)
@@ -41,9 +41,9 @@ panel_check <- data.frame(
          10, 11, 11, 12, 12, 12),
   period = rep(c(2, 1, 2, 2, 4, 5), times = 3)
 )
-pos <- match(panel_check$id, roster_check$id)
-panel_check$first_treat <- roster_check$first_treat[pos]
-panel_check$x <- roster_check$x[pos]
+pos <- match(panel_check$id, unit_table$id)
+panel_check$first_treat <- unit_table$first_treat[pos]
+panel_check$x <- unit_table$x[pos]
 panel_check$y <- panel_check$id / 10 + panel_check$period / 5 +
   as.numeric(panel_check$first_treat > 0 &
                panel_check$period >= panel_check$first_treat)
@@ -59,25 +59,25 @@ rownames(panel_check) <- NULL
 
 ### Validate identity, dates and cohorts
 
-For your own data, replace `panel_check` and `roster_check` with your long panel and known unit table using these column names, or adapt the names in the checks. If no separate unit table is needed, first form it from unique unit attributes in the panel and verify that each unit has only one cohort. Do not construct a supposedly complete unit table from observed IDs when the target also includes units absent from the panel.
+For your own data, replace `panel_check` and `unit_table` with your long panel and known unit table using these column names, or adapt the names in the checks. If no separate unit table is needed, first form it from unique unit attributes in the panel and verify that each unit has only one cohort. Do not construct a supposedly complete unit table from observed IDs when the target also includes units absent from the panel.
 
 ```r
 stopifnot(
-  !anyNA(roster_check$id), !anyDuplicated(roster_check$id),
+  !anyNA(unit_table$id), !anyDuplicated(unit_table$id),
   !anyNA(panel_check$id),
   !anyDuplicated(panel_check[c("id", "period")]),
   is.numeric(panel_check$period), all(is.finite(panel_check$period)),
   is.numeric(panel_check$y),
   all(is.na(panel_check$y) | is.finite(panel_check$y)),
-  is.numeric(roster_check$first_treat),
-  all(is.finite(roster_check$first_treat)),
-  all(roster_check$first_treat >= 0),
+  is.numeric(unit_table$first_treat),
+  all(is.finite(unit_table$first_treat)),
+  all(unit_table$first_treat >= 0),
   is.numeric(panel_check$first_treat),
   all(is.finite(panel_check$first_treat))
 )
-pos <- match(panel_check$id, roster_check$id)
+pos <- match(panel_check$id, unit_table$id)
 stopifnot(!anyNA(pos))
-stopifnot(all(panel_check$first_treat == roster_check$first_treat[pos]))
+stopifnot(all(panel_check$first_treat == unit_table$first_treat[pos]))
 sort(unique(panel_check$period))
 ```
 
@@ -94,15 +94,15 @@ The last check verifies both constancy of each panel unit's cohort and agreement
 ```r
 observed <- !is.na(panel_check$y)
 n_outcomes <- tabulate(
-  match(panel_check$id[observed], roster_check$id),
-  nbins = nrow(roster_check)
+  match(panel_check$id[observed], unit_table$id),
+  nbins = nrow(unit_table)
 )
-cohorts <- sort(unique(roster_check$first_treat))
+cohorts <- sort(unique(unit_table$first_treat))
 
 coverage <- do.call(rbind, lapply(cohorts, function(g) {
-  take <- roster_check$first_treat == g
+  take <- unit_table$first_treat == g
   z <- n_outcomes[take]
-  data.frame(cohort = g, n_roster = sum(take),
+  data.frame(cohort = g, n_study_units = sum(take),
              n_zero = sum(z == 0), n_singleton = sum(z == 1),
              n_repeated = sum(z >= 2),
              share_repeated = mean(z >= 2))
@@ -110,11 +110,11 @@ coverage <- do.call(rbind, lapply(cohorts, function(g) {
 coverage
 
 date_coverage <- do.call(rbind, lapply(sort(unique(panel_check$period)), function(t) {
-  seen <- roster_check$id %in%
+  seen <- unit_table$id %in%
     panel_check$id[panel_check$period == t & observed]
   do.call(rbind, lapply(cohorts, function(g) {
-    take <- roster_check$first_treat == g
-    data.frame(cohort = g, period = t, n_roster = sum(take),
+    take <- unit_table$first_treat == g
+    data.frame(cohort = g, period = t, n_study_units = sum(take),
                n_observed = sum(seen[take]), share_observed = mean(seen[take]))
   }))
 }))
@@ -124,11 +124,11 @@ date_coverage
 Output:
 
 ```text
-cohort n_roster n_zero n_singleton n_repeated share_repeated
+cohort n_study_units n_zero n_singleton n_repeated share_repeated
 1      0        4      1           1          2            0.5
 2      3        4      1           1          2            0.5
 3      5        4      1           1          2            0.5
-   cohort period n_roster n_observed share_observed
+   cohort period n_study_units n_observed share_observed
 1       0      1        4          1           0.25
 2       3      1        4          1           0.25
 3       5      1        4          1           0.25
@@ -153,13 +153,13 @@ Zeros and singletons stay in the denominators. Units with two or more observed o
 ```r
 pair_counts <- function(s, t) {
   stopifnot(s < t)
-  at_s <- roster_check$id %in%
+  at_s <- unit_table$id %in%
     panel_check$id[panel_check$period == s & observed]
-  at_t <- roster_check$id %in%
+  at_t <- unit_table$id %in%
     panel_check$id[panel_check$period == t & observed]
   do.call(rbind, lapply(cohorts, function(g) {
-    take <- roster_check$first_treat == g
-    data.frame(cohort = g, start = s, end = t, n_roster = sum(take),
+    take <- unit_table$first_treat == g
+    data.frame(cohort = g, start = s, end = t, n_study_units = sum(take),
                n_start = sum(at_s[take]), n_end = sum(at_t[take]),
                n_both = sum(at_s[take] & at_t[take]),
                share_both = mean(at_s[take] & at_t[take]))
@@ -172,7 +172,7 @@ selected_pairs
 Output:
 
 ```text
-cohort start end n_roster n_start n_end n_both share_both
+cohort start end n_study_units n_start n_end n_both share_both
 1      0     1   2        4       1     3      1       0.25
 2      3     1   2        4       1     3      1       0.25
 3      5     1   2        4       1     3      1       0.25
@@ -191,16 +191,16 @@ Start with pairs relevant to your scientific targets and suspected gaps. On larg
 ### Compare observed covariate composition
 
 ```r
-at_2 <- roster_check$id %in%
+at_2 <- unit_table$id %in%
   panel_check$id[panel_check$period == 2 & observed]
-at_4 <- roster_check$id %in%
+at_4 <- unit_table$id %in%
   panel_check$id[panel_check$period == 4 & observed]
 composition <- do.call(rbind, lapply(cohorts, function(g) {
-  take <- roster_check$first_treat == g
+  take <- unit_table$first_treat == g
   pair <- take & at_2 & at_4
-  data.frame(cohort = g, mean_x_roster = mean(roster_check$x[take]),
+  data.frame(cohort = g, mean_x_study = mean(unit_table$x[take]),
              n_pair = sum(pair),
-             mean_x_pair = if (any(pair)) mean(roster_check$x[pair]) else NA_real_)
+             mean_x_pair = if (any(pair)) mean(unit_table$x[pair]) else NA_real_)
 }))
 composition
 ```
@@ -208,7 +208,7 @@ composition
 Output:
 
 ```text
-cohort mean_x_roster n_pair mean_x_pair
+cohort mean_x_study n_pair mean_x_pair
 1      0           0.5      1           2
 2      3           0.5      1           2
 3      5           0.5      1           2
@@ -218,7 +218,13 @@ Here `x` is known for the study population and is constant within unit. In your 
 
 ## Read the diagnostics from a fitted result
 
-Run the [rotating-panel worked example](../examples/incomplete-panels.md#worked-example-rotating-consecutive-panel-in-base-r) first to create `fit_rot`. The next block inspects that result without fitting anything again. It uses the package's public functions and documented fitted records. `print(fit)` gives the same display as `summary(fit)`. There is no exported standalone missingness-diagnosis function.
+If the fit warns about missing reference covariates, review
+`fit$chained$reference_eligibility$targets` before interpreting the effects.
+This table identifies the cohorts and reference dates to inspect in your data.
+Use a covariate-only row for any independently known reference value.
+[Reference covariate diagnostics](../reference/results.md#reference-covariate-exclusions).
+
+Run the [rotating-panel worked example](../examples/incomplete-panels.md#worked-example-rotating-consecutive-panel-in-base-r) first to create `fit_rot`. The next block inspects that result without fitting anything again. It shows the study units and the support for each reported effect.
 
 ```r
 fit <- fit_rot
@@ -230,15 +236,6 @@ cells[, c("target.id", "role", "estimate", "std.error", "available",
 
 head(fit$chained$frame)
 with(fit$chained$frame, table(cohort, eligible, useNA = "ifany"))
-str(fit$chained$support, max.level = 1, list.len = 8)
-str(fit$chained$support_ledger, max.level = 1, list.len = 8)
-str(fit$chained$selection, max.level = 1, list.len = 8)
-str(fit$chained$selection$models, max.level = 1)
-str(fit$chained$pt, max.level = 2, list.len = 8)
-str(fit$chained$covariance_handling, max.level = 1, list.len = 8)
-str(fit$chained$nuisance_diagnostics, max.level = 1, list.len = 8)
-fit$chained$inference[c("kind", "clustered", "n_clusters", "n_total", "draws")]
-c(roster_units = fit$n, influence_rows = nrow(fit$inffunc))
 ```
 
 <details>
@@ -301,67 +298,6 @@ Chained support: 4 of 4 requested cells available.
 cohort TRUE
    3    494
    Inf  506
-List of 6
- $ status                : chr "all_requested_supported"
- $ available_ids         : chr [1:4] "pre(g=3,t=2)" "ATT(g=3,t=3)" "ATT(g=3,t=4)" "ATT(g=3,t=5)"
- $ unavailable_ids       : chr(0) 
- $ n_available           : int 4
- $ n_requested           : int 4
- $ whole_request_complete: logi TRUE
-List of 10
- $ ledger                :'data.frame':	3 obs. of  27 variables:
- $ basis                 :'data.frame':	0 obs. of  14 variables:
- $ core_targets          :'data.frame':	4 obs. of  7 variables:
- $ n_requested           : int 3
- $ n_available           : int 3
- $ n_unavailable         : int 0
- $ whole_request_complete: logi TRUE
- $ unavailable           :'data.frame':	0 obs. of  5 variables:
-  [list output truncated]
-List of 2
- $ method              : chr "none"
- $ canonical_assumption: chr "none"
- NULL
-List of 2
- $ pt_assumption: chr "post"
- $ pt_start     : NULL
-List of 28
- $ weighting_requested   : chr "optimal"
- $ weighting_canonical   : chr "optimal"
- $ alias_used            : logi FALSE
- $ handler_selected      : chr "tikhonov"
- $ handler_invoked       : logi FALSE
- $ handler_used          : chr "none"
- $ trigger_reason        : chr "well_conditioned_pd"
- $ dimensions            :List of 9
-  [list output truncated]
-List of 14
- $ status                      : chr "available"
- $ reason                      : chr NA
- $ frame_counts                :List of 2
- $ records                     :List of 4
- $ post_links                  :List of 4
- $ auxiliary_links             :List of 1
- $ auxiliary_descriptors       :List of 1
- $ auxiliary_selections        :List of 2
-  [list output truncated]
-$kind
-[1] "analytic"
-
-$clustered
-[1] FALSE
-
-$n_clusters
-[1] 1000
-
-$n_total
-[1] 1000
-
-$draws
-[1] FALSE
-
-  roster_units influence_rows 
-          1000           1000
 ```
 
 </details>
@@ -380,7 +316,6 @@ The example uses `selection = "none"`, so it fits no observation model. To inspe
 
 ```r
 str(fit_weighting$chained$selection$models, max.level = 1)
-str(fit_weighting$chained$nuisance_diagnostics, max.level = 1, list.len = 8)
 ```
 
 <details>
@@ -398,16 +333,6 @@ List of 10
  $ n_shared_slopes       : int 1
  $ n_supports            : int 30
  $ n_treatment_fits      : int 15
-List of 23
- $ status                     : chr "available"
- $ method                     : chr "dr"
- $ outcome_model              : chr "shared one-period outcome-change control-mean regression"
- $ treatment_model            : chr "risk-set treatment propensity logit"
- $ fit_structure              : chr "single_joint_or_fit_with_block_local_intercepts_plus_deduplicated_treatment_logits"
- $ duration_convention        : chr "stored-calendar transition count L_e = i_t - i_s"
- $ selection                  : chr "corollary1"
- $ selection_model            : chr "independent_period_logit"
-  [list output truncated]
 ```
 
 </details>
@@ -420,8 +345,8 @@ With inference computed, the influence-function matrix retains one row for every
 | --- | --- |
 | Dropout, intermittent gaps or changing observed covariates | Observable features that help assess the design and choose scientifically justified models. They do not prove mean missing-at-random or parallel trends. |
 | Observed-pair units differ in outcome levels from the study population | This can matter for level comparisons. Chained DiD allows observation to depend on a unit fixed effect when the relevant mean changes remain representative. Differencing alone does not make this assumption true. |
-| A cell is unavailable in `tidy(fit)` | The retained catalog under the maintained assumptions cannot recover that target. This is distinct from proving population nonidentification under every possible design or assumption. |
-| A required logit is separated, or a model lacks rank or prediction support | The fitted nuisance model fails its own requirements. The call stops with an error. This is distinct from singular covariance across valid comparison moments. |
+| A cell is unavailable in `tidy(fit)` | With the chosen comparisons and assumptions, this fit cannot recover the effect. |
+| A required logit is separated, or a model lacks rank or prediction support | Check which covariate levels appear in the fitting and prediction samples. In a logit, check whether predictors perfectly separate the two outcomes. |
 | Moment covariance is singular or regularized | Comparisons share sampling variation. Covariance regularization stabilizes their weighting and cannot create target identification. See the two [analytical examples](../methods/gmm.md#covariance-singularity-versus-parameter-identification). |
 | Standard errors or a pretrend p value are reported | The computation was available. Valid inference still needs its large-sample assumptions, and few independent clusters can make the approximation unreliable. A nonrejection does not establish parallel trends. |
 

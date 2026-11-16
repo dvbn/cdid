@@ -31,11 +31,50 @@ ipn_locate_source <- function() {
 # (the existing compiler settings) and load it; returns the DLLInfo.
 ipn_build_dll <- function(c_text, name) {
   dir <- tempfile(paste0("ipn_", name, "_")); dir.create(dir)
+  orig_src <- ipn_locate_source()
+  extra_c <- character(0L)
+  if (!is.null(orig_src)) {
+    sdir <- dirname(orig_src)
+    hdrs <- list.files(sdir, pattern = "\\.h$", full.names = TRUE)
+    if (length(hdrs)) file.copy(hdrs, dir)
+    sibs <- setdiff(list.files(sdir, pattern = "\\.c$", full.names = TRUE), orig_src)
+    if (length(sibs)) {
+      file.copy(sibs, dir)
+      extra_c <- basename(sibs)
+    }
+  }
   src <- file.path(dir, paste0(name, ".c"))
   writeLines(c_text, src)
+  companions <- c(
+    "chained_zero_template.c",
+    "chained_legacy_ipw_chunk.c",
+    "chained_score_pullback.c",
+    "chained_coarse_pullback.c",
+    "chained_pair_operation.c",
+    "cdid_fast_kernels.c",
+    "cdid_fast_selection.c",
+    "cdid_fast_impaug.c",
+    "cdid_fast_pretest.c"
+  )
+  orig_src <- ipn_locate_source()
+  if (!is.null(orig_src)) {
+    src_dir <- dirname(orig_src)
+    hdr <- file.path(src_dir, "cdid_r_api.h")
+    if (file.exists(hdr)) file.copy(hdr, file.path(dir, "cdid_r_api.h"))
+    for (cf in companions) {
+      cp <- file.path(src_dir, cf)
+      if (file.exists(cp)) file.copy(cp, file.path(dir, cf))
+    }
+  }
+  present_companions <- companions[file.exists(file.path(dir, companions))]
   old <- setwd(dir); on.exit(setwd(old), add = TRUE)
-  out <- system2(file.path(R.home("bin"), "R"), c("CMD", "SHLIB", shQuote(basename(src))), stdout = TRUE, stderr = TRUE)
-  so <- file.path(dir, paste0(name, .Platform$dynlib.ext))
+  # The registered bundle: PERF's named companions plus every other sibling C
+  # source of the package (each compiled once), into an explicitly named DLL.
+  so_base <- paste0(name, .Platform$dynlib.ext)
+  c_files <- unique(c(basename(src), present_companions, extra_c))
+  c_args <- c("CMD", "SHLIB", "-o", shQuote(so_base), shQuote(c_files))
+  out <- system2(file.path(R.home("bin"), "R"), c_args, stdout = TRUE, stderr = TRUE)
+  so <- file.path(dir, so_base)
   if (!is.null(attr(out, "status")) || !file.exists(so)) stop("R CMD SHLIB failed for ", name, ":\n", paste(out, collapse = "\n"), call. = FALSE)
   dyn.load(so)
 }

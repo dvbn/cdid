@@ -16,9 +16,11 @@ or_baseline_separate <- function(backend) identical(backend$outcome_pooling, "se
 or_baseline_separate_fit_charges <- function(S, G, L, p, N, n_A, B, metadata, header, name_bytes,
                                               pools, links, support_rows) {
   P2 <- p + 2; incidence <- domains <- control_rows <- alias_rows <- 0; peak <- 0
+  link_reg <- vapply(links, `[[`, integer(1L), "regression")
+  link_sid <- vapply(links, `[[`, integer(1L), "support_id")
   for (b in seq_along(pools)) {
     ctrl <- pools[[b]]$support_ids
-    target <- vapply(links[vapply(links, function(l) l$regression == b, logical(1))], `[[`, integer(1), "support_id")
+    target <- link_sid[link_reg == b]
     ids <- union(ctrl, target)
     incidence <- incidence + length(ctrl); domains <- domains + length(ids); peak <- max(peak, length(ids))
     control_rows <- control_rows + sum(support_rows[ctrl]); alias_rows <- alias_rows + sum(support_rows[ids])
@@ -38,41 +40,93 @@ or_baseline_separate_fit_charges <- function(S, G, L, p, N, n_A, B, metadata, he
 or_baseline_separate_assemble <- function(recipe, supports, pools, links, rank_tol, N, visit_rows) {
   blocks <- lapply(seq_along(pools), function(b) list(name = paste0("b", b),
     support_ids = pools[[b]]$support_ids, L = pools[[b]]$transitions))
-  fitted <- or_outcome_fit_blocks(recipe, lapply(supports, function(u)
-      list(summary = u$design$summary, scale = u$v, colmax = u$design$colmax)),
-    blocks, lapply(links, function(l) list(regression = l$regression,
-      support_id = l$support_id)), rank_tol, N, visit_rows, "separate", "baseline")
+  fitted <- cdid_fast_or_baseline_outcome_fit(recipe, supports, blocks, links, rank_tol, N, "separate", "baseline")
+  if (is.null(fitted)) {
+    fitted <- or_outcome_fit_blocks(recipe, lapply(supports, function(u)
+        list(summary = u$design$summary, scale = u$v, colmax = u$design$colmax)),
+      blocks, lapply(links, function(l) list(regression = l$regression,
+        support_id = l$support_id)), rank_tol, N, visit_rows, "separate", "baseline")
+  }
+  use_fast <- cdid_are_default_fns(c("or_outcome_block_fit", "or_pooled_factor_moments",
+    "or_pooled_link_moments", "ipw_clip_floor", "cp04_finite"))
+  icpt <- isTRUE(recipe$intercept)
+  p_rec <- recipe$p
+  block_fits <- if (use_fast) {
+    lapply(seq_along(pools), function(b) {
+      g <- fitted$groups[[b]]
+      rec <- g$regressions[[1L]]
+      c(list(block_id = b, group_id = b, local_block_id = 1L), rec,
+        list(p = length(g$keep), coefficient_dimension = length(g$keep) + icpt,
+             keep = g$keep, beta = g$beta, basis = g$basis, fit = g$fit))
+    })
+  } else {
+    lapply(seq_along(pools), function(b) or_outcome_block_fit(fitted, b))
+  }
   regressions <- lapply(seq_along(pools), function(b) {
-    f <- or_outcome_block_fit(fitted, b); sids <- pools[[b]]$support_ids
+    f <- block_fits[[b]]; sids <- pools[[b]]$support_ids
     rec <- fitted$groups[[b]]$regressions[[1L]]
     fa <- fe <- numeric(length(sids)); fb <- matrix(0, f$p, length(sids))
     # Explicit H_N(score) centering, on the frozen local alias basis.
     mean_alpha <- 0; mean_beta <- numeric(f$p)
+    xi <- if (icpt) c(1L, 1L + f$keep) else f$keep
+    neg_ab <- c(if (icpt) -f$alpha, -f$beta)
+    y_col <- p_rec + 1L + icpt
     for (k in seq_along(sids)) {
       u <- supports[[sids[k]]]
-      m <- or_pooled_factor_moments(recipe, u$design$summary, f$keep, f$alpha, f$beta)
-      ga <- if (recipe$intercept) m$g[1L] else 0
-      gb <- if (recipe$intercept) m$g[-1L] - f$mean_d * ga else m$g
+      if (use_fast) {
+        F_mat <- if (icpt) u$design$summary$raw$factor else u$design$summary$factor
+        if (nrow(F_mat) > 0L) {
+          F_x <- F_mat[, xi, drop = FALSE]
+          rho <- F_mat[, y_col] + as.vector(F_x %*% neg_ab)
+          g_vec <- as.vector(crossprod(F_x, rho))
+          e2_val <- sum(rho^2)
+        } else {
+          g_vec <- numeric(length(xi)); e2_val <- 0
+        }
+        ga <- if (icpt) g_vec[1L] else 0
+        gb <- if (icpt) g_vec[-1L] - f$mean_d * ga else g_vec
+      } else {
+        m <- or_pooled_factor_moments(recipe, u$design$summary, f$keep, f$alpha, f$beta)
+        ga <- if (icpt) m$g[1L] else 0
+        gb <- if (icpt) m$g[-1L] - f$mean_d * ga else m$g
+        e2_val <- m$e2
+      }
       mean_alpha <- mean_alpha + u$v * ga / N
       mean_beta <- mean_beta + u$v * gb / N
       scale <- if (u$rate > ipw_clip_eps) -1 / (N * u$rate^2) else 0
-      fa[k] <- scale * ga; fb[, k] <- scale * gb; fe[k] <- scale * m$e2
+      fa[k] <- scale * ga; fb[, k] <- scale * gb; fe[k] <- scale * e2_val
     }
-    cp04_finite(c(fa, fb, fe, mean_alpha, mean_beta), "separate baseline forcing")
+    if (!use_fast || !is.finite(sum(fa) + sum(fb) + sum(fe) + mean_alpha + sum(mean_beta))) {
+      cp04_finite(c(fa, fb, fe, mean_alpha, mean_beta), "separate baseline forcing")
+    }
     c(rec, list(forcing_alpha = fa, forcing_beta = fb, forcing_energy = fe,
       score_mean_alpha = mean_alpha, score_mean_beta = mean_beta))
   })
   for (i in seq_along(links)) {
     l <- links[[i]]; u <- supports[[l$support_id]]
-    f <- or_outcome_block_fit(fitted, l$regression)
-    m <- or_pooled_link_moments(recipe, f$keep, u$pair_mass, u$design$sumZ,
-      u$design$sumY, f$L, f$alpha, f$beta)
-    rc <- ipw_clip_floor(u$rate); ra <- u$rate > ipw_clip_eps
+    f <- block_fits[[l$regression]]
+    if (use_fast) {
+      mass <- u$pair_mass; sumZ_k <- u$design$sumZ[f$keep]; sumY <- u$design$sumY
+      fitted_val <- (if (icpt) f$alpha * mass else 0) + f$L * sum(sumZ_k * f$beta)
+      mu_val <- (sumY - fitted_val) / mass
+      c_val <- f$L * sumZ_k / mass
+      res_val <- sumY - fitted_val - mu_val * mass
+      ra <- u$rate > ipw_clip_eps
+      rc <- if (ra) u$rate else ipw_clip_eps
+    } else {
+      m <- or_pooled_link_moments(recipe, f$keep, u$pair_mass, u$design$sumZ,
+        u$design$sumY, f$L, f$alpha, f$beta)
+      mu_val <- m$mu; c_val <- m$c; res_val <- m$residual
+      rc <- ipw_clip_floor(u$rate); ra <- u$rate > ipw_clip_eps
+    }
     d <- u$pair_mass / (N * rc)
-    links[[i]] <- c(l, list(mu = m$mu, c = m$c, d = d, numerator = m$mu * d,
-      rate_loading = if (ra) -m$residual / (N * rc^2 * d) else 0,
+    rl <- if (ra) -res_val / (N * rc^2 * d) else 0
+    links[[i]] <- c(l, list(mu = mu_val, c = c_val, d = d, numerator = mu_val * d,
+      rate_loading = rl,
       log_weight_derivative = if (ra) -1 / rc else 0))
-    cp04_finite(c(m$mu, m$c, d, links[[i]]$rate_loading), "separate baseline link moments")
+    if (!use_fast || !is.finite(mu_val + sum(c_val) + d + rl)) {
+      cp04_finite(c(mu_val, c_val, d, rl), "separate baseline link moments")
+    }
   }
   list(supports = lapply(supports, function(u) list(rate = u$rate, v = u$v, massA = u$massA,
       pair_mass = u$pair_mass, repeat_mass = u$repeat_mass, n_pair = u$n_pair,

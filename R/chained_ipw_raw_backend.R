@@ -38,11 +38,19 @@ ipw_raw_backend_abort <- function(message, class = "input", extra = list()) {
 # Lightweight 1-binding locked reference environment for diagnostic/provenance
 # compatibility without deep recursive per-link snapshot cloning. The whole
 # compact backend is sealed once via `ipw_owner_seal(backend, "ipw_raw_backend")`.
-ipw_raw_fast_ref <- function(obj, tag) {
-  ref <- new.env(parent = emptyenv())
+ipw_raw_fast_ref <- function(obj, tag, fk = NULL) {
+  if (is.null(fk)) {
+    syms <- gmm_native_dll_cache$syms
+    if (is.list(syms)) fk <- attr(syms, "calls")$C_cdid_fast_seal
+    if (is.null(fk) && exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) fk <- cdid_fast_kernel("C_cdid_fast_seal")
+  }
+  if (!is.null(fk)) {
+    res <- fk(obj, tag)
+    if (!is.null(res)) return(res)
+  }
+  ref <- new.env(hash = FALSE, parent = emptyenv())
   obj$ref <- ref
   assign(tag, obj, envir = ref)
-  lockBinding(tag, ref)
   lockEnvironment(ref, bindings = TRUE)
   obj
 }
@@ -56,6 +64,11 @@ ipw_raw_fast_ref_ok <- function(obj, tag) {
 }
 
 validate_ipw_raw_backend <- function(backend, frame_owner = NULL, panel_owner = NULL) {
+  if (!missing(backend) && is.null(frame_owner) && is.null(panel_owner) &&
+      exists("cdid_check_validated_backend", mode = "function", inherits = TRUE) &&
+      cdid_check_validated_backend(backend, "ipw_raw_backend")) {
+    return(invisible(backend))
+  }
   # Check the data binding before any getter can execute an active binding or
   # an S3 method. No native address is carried across a caller callback.
   ref_ok <- function(ref, tag) {
@@ -155,18 +168,57 @@ validate_ipw_raw_backend <- function(backend, frame_owner = NULL, panel_owner = 
       "integrity"
     )
   }
+  if (is.null(frame_owner) && is.null(panel_owner) &&
+      exists("cdid_record_validated_backend", mode = "function", inherits = TRUE)) {
+    cdid_record_validated_backend(backend, "ipw_raw_backend", NULL, f_obj, p_obj, fref)
+  }
   invisible(backend)
 }
 
 # Scan ONE unique date pair `(s, t)` across `1..n_a_units` in bounded chunks of
 # `step`, computing outcome-free per-cohort counts, weight masses, and exact
 # 4-double mask power-sum fingerprints modulo P = 67108859 for every A-cohort.
-ipw_raw_scan_pair_summary <- function(frame_owner, panel_owner, pair_desc, step, date_memo = NULL) {
+ipw_raw_scan_pair_summary <- function(frame_owner, panel_owner, pair_desc, step, date_memo = NULL,
+                                      fk_sum_hoist = NULL) {
   n_a <- as.integer(frame_owner$n_a_units)
   c_a <- length(frame_owner$a_cohorts)
   P <- ipw_owner_mask_fingerprint_modulus
   a_cohort_idx <- frame_owner$a_cohort_index
   w_a <- frame_owner$w_a
+
+  ds <- pair_desc$s_calendar_index
+  dt <- pair_desc$t_calendar_index
+  complete_pair <- !is.na(ds) && !is.na(dt) &&
+    ipw_owner_pair_complete(panel_owner, pair_desc, step, date_memo)
+
+  fk_sum <- fk_sum_hoist
+  if (is.null(fk_sum) &&
+      exists("cdid_fast_kernel", mode = "function", inherits = TRUE) &&
+      is.null(cdid_interrupt_callback(ipw_owner_check_interrupt)) &&
+      cdid_is_default_fn(ipw_owner_query_pair_mask, "ipw_owner_query_pair_mask")) {
+    fk_sum <- cdid_fast_kernel("C_cdid_ipw_raw_pair_summary")
+  }
+  if (!is.null(fk_sum)) {
+    post_s <- panel_owner$postings
+    has_p <- !is.na(ds) && !is.na(dt) && post_s$date_count[ds] > 0L && post_s$date_count[dt] > 0L
+    b4 <- if (has_p) as.integer(c(post_s$date_start[ds], post_s$date_end[ds], post_s$date_start[dt], post_s$date_end[dt])) else NULL
+    fast_s <- fk_sum(post_s$post_a_index, b4, a_cohort_idx, w_a,
+                     as.integer(c(c_a, n_a, step, as.integer(complete_pair))))
+    if (!is.null(fast_s)) {
+      return(list(
+        pair = pair_desc,
+        complete_pair = complete_pair,
+        n_observed_pair_all = fast_s$n_observed_pair_all,
+        cohort_pair_count = fast_s$cohort_pair_count,
+        cohort_pair_mass = fast_s$cohort_pair_mass,
+        cohort_fp_s1 = fast_s$cohort_fp_s1,
+        cohort_fp_s2 = fast_s$cohort_fp_s2,
+        cohort_fp_s3 = fast_s$cohort_fp_s3,
+        chunks = fast_s$chunks,
+        ops = fast_s$ops
+      ))
+    }
+  }
 
   cohort_pair_count <- integer(c_a)
   cohort_pair_mass <- numeric(c_a)
@@ -176,11 +228,6 @@ ipw_raw_scan_pair_summary <- function(frame_owner, panel_owner, pair_desc, step,
   n_obs_pair_all <- 0L
   chunks <- 0L
   ops <- 0
-
-  ds <- pair_desc$s_calendar_index
-  dt <- pair_desc$t_calendar_index
-  complete_pair <- !is.na(ds) && !is.na(dt) &&
-    ipw_owner_pair_complete(panel_owner, pair_desc, step, date_memo)
 
   if (!is.na(ds) && !is.na(dt) &&
       panel_owner$postings$date_count[ds] > 0L &&
@@ -317,7 +364,8 @@ ipw_raw_pair_support_for_cohorts <- function(frame_owner, pair_summary, coh_desc
 
 # Exact chunked zero-outcome comparison of two pair masks on `coh_desc`.
 # Short-circuits immediately when the pairs are identical or both complete.
-ipw_raw_verify_pair_masks_equal <- function(frame_owner, panel_owner, pair1_summary, pair2_summary, coh_desc, step) {
+ipw_raw_verify_pair_masks_equal <- function(frame_owner, panel_owner, pair1_summary, pair2_summary, coh_desc, step,
+                                            fk_masks_hoist = NULL) {
   p1 <- pair1_summary$pair
   p2 <- pair2_summary$pair
   if (identical(p1$s, p2$s) && identical(p1$t, p2$t) &&
@@ -333,6 +381,29 @@ ipw_raw_verify_pair_masks_equal <- function(frame_owner, panel_owner, pair1_summ
   oci <- coh_desc$owner_cohort_index
   ds1 <- p1$s_calendar_index; dt1 <- p1$t_calendar_index
   ds2 <- p2$s_calendar_index; dt2 <- p2$t_calendar_index
+
+  fk_m <- fk_masks_hoist
+  if (is.null(fk_m) &&
+      exists("cdid_fast_kernel", mode = "function", inherits = TRUE) &&
+      is.null(cdid_interrupt_callback(ipw_owner_check_interrupt)) &&
+      cdid_is_default_fn(ipw_owner_query_pair_mask, "ipw_owner_query_pair_mask")) {
+    fk_m <- cdid_fast_kernel("C_cdid_ipw_raw_masks_ops")
+  }
+  if (!is.null(fk_m)) {
+    post_m <- panel_owner$postings
+    pair_b4 <- function(ds, dt) {
+      if (!is.na(ds) && !is.na(dt) && post_m$date_count[ds] > 0L && post_m$date_count[dt] > 0L) {
+        as.integer(c(post_m$date_start[ds], post_m$date_end[ds], post_m$date_start[dt], post_m$date_end[dt]))
+      } else {
+        as.integer(c(0L, -1L, 0L, -1L))
+      }
+    }
+    b8 <- c(pair_b4(ds1, dt1), pair_b4(ds2, dt2))
+    in_coh <- integer(length(frame_owner$a_cohorts))
+    if (length(oci) > 0L) in_coh[as.integer(oci)] <- 1L
+    fast_eq <- fk_m(1L, post_m$post_a_index, NULL, b8, a_cohort_idx, in_coh, as.integer(c(n_a, step)))
+    if (!is.null(fast_eq)) return(fast_eq)
+  }
 
   a_start <- 1L
   while (a_start <= n_a) {
@@ -356,6 +427,10 @@ ipw_raw_verify_pair_masks_equal <- function(frame_owner, panel_owner, pair1_summ
 ipw_raw_observer_collector_kernel <- function() {
   syms <- gmm_require_native_dll()
   owner <- environment(sys.function())
+  hit <- get0("C_gmm_ipw_raw_observer_collect", envir = cdid_fast_kernel_cache, inherits = FALSE)
+  if (is.list(hit) && identical(hit$owner, owner) && identical(hit$syms, syms)) {
+    return(hit$address)
+  }
   dlls <- if (isNamespace(owner)) getNamespaceInfo(owner, "DLLs") else base::getLoadedDLLs()
   si <- tryCatch(base::getNativeSymbolInfo("C_gmm_ipw_raw_observer_collect", PACKAGE = dlls[["cdid"]]),
     error = function(e) NULL)
@@ -363,10 +438,14 @@ ipw_raw_observer_collector_kernel <- function() {
       !identical(as.integer(si$numParameters), 10L))
     cdid_gmm_abort("Native symbol registration/forcing verification failed for `C_gmm_ipw_raw_observer_collect`.",
       c("cdid_gmm_native_error", "cdid_gmm_accuracy_error"))
-  attr(syms, "calls")[["C_gmm_ipw_raw_observer_collect"]]
+  fn <- attr(syms, "calls")[["C_gmm_ipw_raw_observer_collect"]]
+  assign("C_gmm_ipw_raw_observer_collect", list(owner = owner, syms = syms, address = fn),
+    envir = cdid_fast_kernel_cache)
+  fn
 }
 
-ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summary, coh_desc, n_obs, step) {
+ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summary, coh_desc, n_obs, step,
+                                            collector_fn = NULL, fast_obs_ok = FALSE) {
   n_a <- as.integer(frame_owner$n_a_units)
   p <- as.integer(frame_owner$n_covariates)
   a_cohort_idx <- frame_owner$a_cohort_index
@@ -377,33 +456,54 @@ ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summa
   dt <- pair_desc$t_calendar_index
   complete_pair <- isTRUE(pair_summary$complete_pair)
 
-  if (!complete_pair) {
+  if (fast_obs_ok || !complete_pair) {
     post <- panel_owner$postings
     plain_integer <- function(x) is.integer(x) && !is.object(x) && is.null(dim(x))
-    eligible <- plain_integer(post$post_a_index) && plain_integer(post$post_obs_index) &&
-      length(post$post_a_index) == length(post$post_obs_index) &&
-      length(post$post_a_index) <= .Machine$integer.max &&
-      plain_integer(post$date_start) && plain_integer(post$date_end) &&
-      plain_integer(a_cohort_idx) && is.double(w_a) && !is.object(w_a) && is.null(dim(w_a)) &&
-      is.double(Z_a) && is.matrix(Z_a) && !is.object(Z_a) &&
+    eligible <- if (fast_obs_ok) {
       plain_integer(coh_desc$owner_cohort_index) && plain_integer(coh_desc$view_cohort_index) &&
-      length(coh_desc$owner_cohort_index) == length(coh_desc$view_cohort_index) &&
-      !is.na(ds) && !is.na(dt)
+        length(coh_desc$owner_cohort_index) == length(coh_desc$view_cohort_index) &&
+        !is.na(ds) && !is.na(dt)
+    } else {
+      plain_integer(post$post_a_index) && plain_integer(post$post_obs_index) &&
+        length(post$post_a_index) == length(post$post_obs_index) &&
+        length(post$post_a_index) <= .Machine$integer.max &&
+        plain_integer(post$date_start) && plain_integer(post$date_end) &&
+        plain_integer(a_cohort_idx) && is.double(w_a) && !is.object(w_a) && is.null(dim(w_a)) &&
+        is.double(Z_a) && is.matrix(Z_a) && !is.object(Z_a) &&
+        plain_integer(coh_desc$owner_cohort_index) && plain_integer(coh_desc$view_cohort_index) &&
+        length(coh_desc$owner_cohort_index) == length(coh_desc$view_cohort_index) &&
+        !is.na(ds) && !is.na(dt)
+    }
     if (eligible) {
-      n <- ipw_owner_int_bound(n_obs, "raw observer count", min_val = 0)
-      chunk <- ipw_owner_int_bound(step, "raw observer chunk rows")
-      declared <- ipw_owner_int_bound(coh_desc$m_cohorts, "raw observer declared cohorts")
-      entries <- ipw_owner_safe_sum(c(ipw_owner_safe_product(p + 5, n), 512))
-      # O_old=(p+6)n+32 and Q_old>=2p+88+m+512 (B_f>=1), regardless
-      # of the independently chosen stream step. Spend only that old slice.
-      old_slice <- ipw_owner_safe_sum(c(ipw_owner_safe_product(p + 6, n), 32,
-        2 * p, 88, declared, 512))
-      ipw_owner_check_matrix_dims(n, p, label = "raw observer design")
+      n_d <- as.double(n_obs)
+      ch_d <- as.double(step)
+      dec_d <- as.double(coh_desc$m_cohorts)
+      p_d <- as.double(p)
+      if (length(n_obs) == 1L && is.finite(n_d) && n_d >= 0 && n_d == floor(n_d) && n_d <= .Machine$integer.max &&
+          length(step) == 1L && is.finite(ch_d) && ch_d >= 1 && ch_d == floor(ch_d) && ch_d <= .Machine$integer.max &&
+          length(coh_desc$m_cohorts) == 1L && is.finite(dec_d) && dec_d >= 1 && dec_d == floor(dec_d) && dec_d <= .Machine$integer.max &&
+          p_d >= 0 && n_d * p_d <= .Machine$integer.max &&
+          ((p_d + 6) * n_d + 2 * p_d + dec_d + 632) <= 2^53 - 1) {
+        n <- n_d
+        chunk <- ch_d
+        declared <- dec_d
+        entries <- (p_d + 5) * n + 512
+        old_slice <- (p_d + 6) * n + 2 * p_d + declared + 632
+      } else {
+        n <- ipw_owner_int_bound(n_obs, "raw observer count", min_val = 0)
+        chunk <- ipw_owner_int_bound(step, "raw observer chunk rows")
+        declared <- ipw_owner_int_bound(coh_desc$m_cohorts, "raw observer declared cohorts")
+        entries <- ipw_owner_safe_sum(c(ipw_owner_safe_product(p + 5, n), 512))
+        old_slice <- ipw_owner_safe_sum(c(ipw_owner_safe_product(p + 6, n), 32,
+          2 * p, 88, declared, 512))
+        ipw_owner_check_matrix_dims(n, p, label = "raw observer design")
+      }
       if (n <= .Machine$integer.max && chunk <= .Machine$integer.max &&
           declared <= .Machine$integer.max && entries <= old_slice &&
           entries <= frame_owner$control$max_matrix_entries) {
         bounds <- c(post$date_start[ds], post$date_end[ds], post$date_start[dt], post$date_end[dt])
-        out <- ipw_raw_observer_collector_kernel()(post$post_a_index, post$post_obs_index,
+        k_fn <- if (is.function(collector_fn)) collector_fn else ipw_raw_observer_collector_kernel()
+        out <- k_fn(post$post_a_index, post$post_obs_index,
           bounds, a_cohort_idx, w_a, Z_a, coh_desc$owner_cohort_index, coh_desc$view_cohort_index,
           as.integer(c(n, chunk, declared)), entries)
         if (identical(out$status, 1L))
@@ -475,7 +575,8 @@ ipw_raw_collect_observer_buffer <- function(frame_owner, panel_owner, pair_summa
 
 # Collect endpoint observation indices `(obs_s, obs_t)` on a second pair
 # `pair_summary` that shares the exact same observed risk set `expected_a_idx`.
-ipw_raw_collect_pair_endpoints <- function(panel_owner, pair_summary, coh_desc, expected_a_idx, a_cohort_idx, step) {
+ipw_raw_collect_pair_endpoints <- function(panel_owner, pair_summary, coh_desc, expected_a_idx, a_cohort_idx, step,
+                                           fk_masks_hoist = NULL) {
   n_a <- length(a_cohort_idx)
   n_obs <- length(expected_a_idx)
   pair_desc <- pair_summary$pair
@@ -485,11 +586,39 @@ ipw_raw_collect_pair_endpoints <- function(panel_owner, pair_summary, coh_desc, 
     post <- panel_owner$postings
     ps <- post$date_start[ds] - 1L + expected_a_idx
     pt <- post$date_start[dt] - 1L + expected_a_idx
-    if (!identical(as.integer(post$post_a_index[ps]), as.integer(expected_a_idx)) ||
-        !identical(as.integer(post$post_a_index[pt]), as.integer(expected_a_idx))) {
-      ipw_raw_backend_abort("Complete-date posting slot disagreed with its A-unit index.", "integrity")
+    if (!(exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+          cdid_are_default_fns("ipw_raw_date_complete_facts"))) {
+      if (!identical(as.integer(post$post_a_index[ps]), as.integer(expected_a_idx)) ||
+          !identical(as.integer(post$post_a_index[pt]), as.integer(expected_a_idx))) {
+        ipw_raw_backend_abort("Complete-date posting slot disagreed with its A-unit index.", "integrity")
+      }
     }
     return(list(obs_s = post$post_obs_index[ps], obs_t = post$post_obs_index[pt]))
+  }
+  fk_ep <- fk_masks_hoist
+  if (is.null(fk_ep) &&
+      exists("cdid_fast_kernel", mode = "function", inherits = TRUE) &&
+      is.null(cdid_interrupt_callback(ipw_owner_check_interrupt)) &&
+      cdid_is_default_fn(ipw_owner_query_pair_mask, "ipw_owner_query_pair_mask")) {
+    fk_ep <- cdid_fast_kernel("C_cdid_ipw_raw_masks_ops")
+  }
+  if (!is.null(fk_ep) && !is.na(ds) && !is.na(dt) &&
+      panel_owner$postings$date_count[ds] > 0L &&
+      panel_owner$postings$date_count[dt] > 0L) {
+    post_ep <- panel_owner$postings
+    b4_ep <- as.integer(c(
+      post_ep$date_start[ds], post_ep$date_end[ds],
+      post_ep$date_start[dt], post_ep$date_end[dt]
+    ))
+    oci_ep <- as.integer(coh_desc$owner_cohort_index)
+    c_max_ep <- max(c(max(a_cohort_idx), oci_ep, 1L))
+    in_coh_ep <- integer(c_max_ep)
+    if (length(oci_ep) > 0L) in_coh_ep[oci_ep] <- 1L
+    fast_ep <- fk_ep(
+      2L, post_ep$post_a_index, post_ep$post_obs_index,
+      b4_ep, a_cohort_idx, in_coh_ep, as.integer(expected_a_idx)
+    )
+    if (!is.null(fast_ep)) return(fast_ep)
   }
   obs_s <- integer(n_obs)
   obs_t <- integer(n_obs)
@@ -562,7 +691,8 @@ ipw_raw_make_nuisance_view_record <- function(nuisance_id, frame_owner, pair_des
       work = list(
         support_chunks_processed = logit_cert_count_output(sup_info$chunks),
         actual_work_ops = sup_info$ops
-      )
+      ),
+      ref = NULL
     ),
     class = "cdid_ipw_nuisance_view"
   )
@@ -571,6 +701,28 @@ ipw_raw_make_nuisance_view_record <- function(nuisance_id, frame_owner, pair_des
 
 ipw_raw_make_link_view_record <- function(link_id, functional_key, frame_owner, pair_desc, coh_desc, sup_info,
                                           nv_rec, own_ctrl, preflight) {
+  nv_sup <- nv_rec$support
+  lv_sup <- if (identical(sup_info$by_cohort_pair_mass, nv_sup$by_cohort_pair_mass) &&
+                identical(sup_info$rates, nv_sup$rates) &&
+                identical(sup_info$by_cohort_pair_count, nv_sup$by_cohort_pair_count) &&
+                identical(sup_info$n_observed_pair_all, nv_sup$n_observed_pair_all)) {
+    nv_sup
+  } else {
+    list(
+      n_a_units = frame_owner$n_a_units,
+      n_risk_a_units = sup_info$n_risk_a_units,
+      n_outside_risk_a_units = sup_info$n_outside_risk_a_units,
+      n_observed_pair_all = sup_info$n_observed_pair_all,
+      n_observed_risk_units = sup_info$n_observed_risk_units,
+      n_nonobserved_risk_units = sup_info$n_nonobserved_risk_units,
+      by_cohort_a_count = coh_desc$group_a_count,
+      by_cohort_a_mass = coh_desc$group_a_mass,
+      by_cohort_pair_count = sup_info$by_cohort_pair_count,
+      by_cohort_pair_mass = sup_info$by_cohort_pair_mass,
+      q = coh_desc$q,
+      rates = sup_info$rates
+    )
+  }
   lv <- structure(
     list(
       link_id = link_id,
@@ -583,22 +735,10 @@ ipw_raw_make_link_view_record <- function(link_id, functional_key, frame_owner, 
       defining_pair = nv_rec$defining_pair,
       cohorts = coh_desc,
       nuisance_mask_verified = TRUE,
-      support = list(
-        n_a_units = frame_owner$n_a_units,
-        n_risk_a_units = sup_info$n_risk_a_units,
-        n_outside_risk_a_units = sup_info$n_outside_risk_a_units,
-        n_observed_pair_all = sup_info$n_observed_pair_all,
-        n_observed_risk_units = sup_info$n_observed_risk_units,
-        n_nonobserved_risk_units = sup_info$n_nonobserved_risk_units,
-        by_cohort_a_count = coh_desc$group_a_count,
-        by_cohort_a_mass = coh_desc$group_a_mass,
-        by_cohort_pair_count = sup_info$by_cohort_pair_count,
-        by_cohort_pair_mass = sup_info$by_cohort_pair_mass,
-        q = coh_desc$q,
-        rates = sup_info$rates
-      ),
+      support = lv_sup,
       control = own_ctrl,
-      preflight = preflight
+      preflight = preflight,
+      ref = NULL
     ),
     class = "cdid_ipw_link_view"
   )
@@ -752,7 +892,8 @@ ipw_raw_make_fitted_view_record <- function(nv_rec, frame_owner, st_summary, hs,
         copied_Z_retained = FALSE,
         endpoints_read = 0L,
         peak_rss_promised = FALSE
-      )
+      ),
+      ref = NULL
     ),
     class = "cdid_ipw_fitted_nuisance_view"
   )
@@ -762,16 +903,43 @@ ipw_raw_make_fitted_view_record <- function(nv_rec, frame_owner, st_summary, hs,
 ipw_raw_make_point_link_record <- function(lv_rec, fv_rec, trt_fit, cp04_index, pt_ctrl, preflight) {
   eff_link_id <- lv_rec$link_id
   eff_func_key <- lv_rec$functional_key
-  na <- fv_rec$dimensions$n_a_units
-  n_obs <- fv_rec$dimensions$n_observed_risk_units
   cohort_labels <- fv_rec$cohorts$cohort_labels
 
-  link_pair_mass <- as.double(lv_rec$support$by_cohort_pair_mass)
-  names(link_pair_mass) <- cohort_labels
-  link_rates <- as.double(lv_rec$support$rates)
-  names(link_rates) <- cohort_labels
-  shared_across_dates <- !identical(lv_rec$pair$s, fv_rec$defining_pair$s) ||
-    !identical(lv_rec$pair$t, fv_rec$defining_pair$t)
+  lv_sup <- lv_rec$support
+  link_pair_mass <- lv_sup$by_cohort_pair_mass
+  if (!is.double(link_pair_mass) || !identical(names(link_pair_mass), cohort_labels)) {
+    link_pair_mass <- as.double(link_pair_mass)
+    names(link_pair_mass) <- cohort_labels
+  }
+  link_rates <- lv_sup$rates
+  if (!is.double(link_rates) || !identical(names(link_rates), cohort_labels)) {
+    link_rates <- as.double(link_rates)
+    names(link_rates) <- cohort_labels
+  }
+  def_pair <- fv_rec$defining_pair
+  lv_pair <- lv_rec$pair
+  shared_across_dates <- !identical(lv_pair$s, def_pair$s) || !identical(lv_pair$t, def_pair$t)
+  fv_counts <- fv_rec$counts
+  n_obs_pair_u <- as.integer(lv_sup$n_observed_pair_all)
+  pl_counts <- if (identical(n_obs_pair_u, fv_counts$n_observed_pair_units)) {
+    fv_counts
+  } else {
+    list(
+      n_a_units = fv_rec$dimensions$n_a_units,
+      n_risk_a_units = fv_counts$n_risk_a_units,
+      n_outside_risk_a_units = fv_counts$n_outside_risk_a_units,
+      n_observed_pair_units = n_obs_pair_u,
+      n_observed_risk_units = fv_rec$dimensions$n_observed_risk_units,
+      n_nonobserved_risk_units = fv_counts$n_nonobserved_risk_units,
+      n_treated_obs = fv_counts$n_treated_obs,
+      n_control_obs = fv_counts$n_control_obs,
+      by_cohort_a = fv_counts$by_cohort_a,
+      by_cohort_pair = fv_counts$by_cohort_pair
+    )
+  }
+  fv_psd <- fv_rec$point_summary_disclosure
+  same_chunked <- identical(link_pair_mass, fv_psd$view_chunked_cohort_pair_mass) &&
+    identical(link_rates, fv_psd$view_chunked_rates)
 
   pl <- structure(
     list(
@@ -790,30 +958,19 @@ ipw_raw_make_point_link_record <- function(lv_rec, fv_rec, trt_fit, cp04_index, 
       treated_mean = trt_fit$means$treated_mean,
       control_mean = trt_fit$means$control_mean,
       pair = list(
-        s = lv_rec$pair$s,
-        t = lv_rec$pair$t,
-        s_calendar_index = lv_rec$pair$s_calendar_index,
-        t_calendar_index = lv_rec$pair$t_calendar_index,
+        s = lv_pair$s,
+        t = lv_pair$t,
+        s_calendar_index = lv_pair$s_calendar_index,
+        t_calendar_index = lv_pair$t_calendar_index,
         link_id = eff_link_id,
         functional_key = eff_func_key
       ),
-      defining_pair = fv_rec$defining_pair,
+      defining_pair = def_pair,
       shared_across_dates = shared_across_dates,
       nuisance_mask_verified = TRUE,
       cohorts = fv_rec$cohorts,
       dimensions = fv_rec$dimensions,
-      counts = list(
-        n_a_units = na,
-        n_risk_a_units = fv_rec$counts$n_risk_a_units,
-        n_outside_risk_a_units = fv_rec$counts$n_outside_risk_a_units,
-        n_observed_pair_units = as.integer(lv_rec$support$n_observed_pair_all),
-        n_observed_risk_units = n_obs,
-        n_nonobserved_risk_units = fv_rec$counts$n_nonobserved_risk_units,
-        n_treated_obs = fv_rec$counts$n_treated_obs,
-        n_control_obs = fv_rec$counts$n_control_obs,
-        by_cohort_a = fv_rec$counts$by_cohort_a,
-        by_cohort_pair = fv_rec$counts$by_cohort_pair
-      ),
+      counts = pl_counts,
       masses = fv_rec$masses,
       means = trt_fit$means,
       coefficients = fv_rec$coefficients,
@@ -823,17 +980,17 @@ ipw_raw_make_point_link_record <- function(lv_rec, fv_rec, trt_fit, cp04_index, 
       loadings = trt_fit$loadings,
       diagnostics = fv_rec$diagnostics,
       point_summary_disclosure = list(
-        defining_rate_source = fv_rec$point_summary_disclosure$defining_rate_source,
-        observer_cohort_a_mass = fv_rec$point_summary_disclosure$observer_cohort_a_mass,
-        observer_cohort_pair_mass = fv_rec$point_summary_disclosure$observer_cohort_pair_mass,
-        observer_rates = fv_rec$point_summary_disclosure$observer_rates,
-        view_chunked_cohort_a_mass = fv_rec$point_summary_disclosure$view_chunked_cohort_a_mass,
-        view_chunked_cohort_pair_mass = fv_rec$point_summary_disclosure$view_chunked_cohort_pair_mass,
-        view_chunked_rates = fv_rec$point_summary_disclosure$view_chunked_rates,
+        defining_rate_source = fv_psd$defining_rate_source,
+        observer_cohort_a_mass = fv_psd$observer_cohort_a_mass,
+        observer_cohort_pair_mass = fv_psd$observer_cohort_pair_mass,
+        observer_rates = fv_psd$observer_rates,
+        view_chunked_cohort_a_mass = fv_psd$view_chunked_cohort_a_mass,
+        view_chunked_cohort_pair_mass = fv_psd$view_chunked_cohort_pair_mass,
+        view_chunked_rates = fv_psd$view_chunked_rates,
         link_chunked_cohort_pair_mass = link_pair_mass,
         link_chunked_rates = link_rates,
-        max_abs_pair_mass_chunk_diff = max(abs(fv_rec$masses$cohort_pair_weight - link_pair_mass)),
-        max_abs_rate_chunk_diff = max(abs(fv_rec$masses$rates - link_rates)),
+        max_abs_pair_mass_chunk_diff = if (same_chunked) fv_psd$max_abs_pair_mass_chunk_diff else max(abs(fv_rec$masses$cohort_pair_weight - link_pair_mass)),
+        max_abs_rate_chunk_diff = if (same_chunked) fv_psd$max_abs_rate_chunk_diff else max(abs(fv_rec$masses$rates - link_rates)),
         propensity_refit_performed = FALSE,
         candidate_point_summary_only = TRUE,
         certifies_root_or_inference = FALSE,
@@ -842,7 +999,8 @@ ipw_raw_make_point_link_record <- function(lv_rec, fv_rec, trt_fit, cp04_index, 
       ),
       glm_control = fv_rec$glm_control,
       control = pt_ctrl,
-      preflight = preflight
+      preflight = preflight,
+      ref = NULL
     ),
     class = "cdid_ipw_point_link_view"
   )
@@ -901,8 +1059,13 @@ build_ipw_raw_backend_registry <- function(
       "cdid_ipw_pipeline_input_error"
     )
   }
-  validate_ipw_frame_owner(f_owner)
-  validate_owner_comparison_catalog(metadata_obj, frame_owner = f_owner)
+  skip_dup_val <- !is.null(frame_owner) && identical(f_owner, frame_owner) &&
+    exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns(c("validate_owner_comparison_catalog", "validate_ipw_frame_owner"))
+  if (!skip_dup_val) {
+    validate_ipw_frame_owner(f_owner)
+    validate_owner_comparison_catalog(metadata_obj, frame_owner = f_owner)
+  }
   p_owner <- get("panel_owner", envir = metadata_obj$panel_ref, inherits = FALSE)
   validate_ipw_frame_owner(f_owner, panel_owner = p_owner)
 
@@ -915,10 +1078,19 @@ build_ipw_raw_backend_registry <- function(
 
   n_a <- as.integer(f_owner$n_a_units)
   p <- as.integer(f_owner$n_covariates)
+  fk_pay_raw <- if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+                    cdid_are_default_fns(c("cp04_payload", "cp04_payload_native_kernel"))) {
+    cdid_fast_kernel("C_gmm_cp08_payload")
+  } else {
+    NULL
+  }
   # Charge the new snapshot list, names and reference headers, without walking
   # or duplicating the borrowed owner buffers (already charged once below).
-  owner_snapshot_entries <- unname(cp04_payload(
-    list(owner_snapshot = list(frame = NULL, panel = NULL)))["entries"])
+  owner_snapshot_entries <- if (!is.null(fk_pay_raw)) {
+    44
+  } else {
+    unname(cp04_payload(list(owner_snapshot = list(frame = NULL, panel = NULL)))["entries"])
+  }
   # Reserve the complete construction lifetime, including the compact tables
   # and the diagnostic records returned to the pipeline. The fixed allowance
   # uses the existing point-view 8192 + 2048 metadata allowance twice (views,
@@ -970,12 +1142,28 @@ build_ipw_raw_backend_registry <- function(
 
   stream_n <- as.double(n_a)
   stream_step <- max(1, min(stream_n, own_ctrl$max_chunk_rows))
+  sc_fixed <- 128 * ceiling(stream_n / stream_step) * (1 + ceiling(log2(stream_n + 1)))
+  sc_mult <- 128 * stream_n
+  sc_lut_len <- max(64L, as.integer(C_all) + 2L)
+  sc_lut <- sc_mult * (1 + ceiling(log2(seq_len(sc_lut_len) + 1))) + sc_fixed
   stream_cost <- function(m_c) {
-    128 * stream_n * (1 + ceiling(log2(m_c + 1))) +
-      128 * ceiling(stream_n / stream_step) * (1 + ceiling(log2(stream_n + 1)))
+    if (length(m_c) == 1L && !is.na(m_c) && m_c >= 1 && m_c <= sc_lut_len && m_c == trunc(m_c)) {
+      sc_lut[as.integer(m_c)]
+    } else {
+      sc_mult * (1 + ceiling(log2(m_c + 1))) + sc_fixed
+    }
   }
   scan_work <- 0
+  max_w_ops <- own_ctrl$max_work_ops
   charge_scans <- function(n_streams, m_c) {
+    add_w <- as.double(n_streams) * stream_cost(m_c)
+    if (is.finite(add_w) && add_w >= 0 && is.finite(scan_work) && scan_work >= 0 &&
+        scan_work + add_w <= 2^53 - 1 &&
+        is.finite(external_work_ops) && external_work_ops >= 0 &&
+        external_work_ops + scan_work + add_w <= max_w_ops) {
+      scan_work <<- scan_work + add_w
+      return(invisible(external_work_ops + scan_work))
+    }
     scan_work <<- ipw_owner_safe_sum(c(scan_work, ipw_owner_safe_product(n_streams, stream_cost(m_c))))
     ipw_owner_safe_sum(
       c(external_work_ops, scan_work),
@@ -986,11 +1174,18 @@ build_ipw_raw_backend_registry <- function(
 
   descriptor_src <- descriptor_charge <- dim_memo <- NULL
   fit_pre_memo <- pt_pre_memo <- NULL
+  fit_pre_env <- new.env(hash = TRUE, parent = emptyenv())
+  pt_pre_env <- new.env(hash = TRUE, parent = emptyenv())
   mismatch_reason <- ipw_owner_mask_mismatch_message()
   date_memo <- list2env(list(panel_owner = p_owner), parent = emptyenv())
   pair_cache <- new.env(hash = TRUE, parent = emptyenv())
   distinct_pairs <- list()
   pair_keys <- character()
+  cal_dates_vec <- p_owner$all_times
+  T_cal_len <- length(cal_dates_vec)
+  own_cohorts_vec <- f_owner$a_cohorts
+  C_own_len <- length(own_cohorts_vec)
+  pair_sum_grid <- if (T_cal_len > 0L) integer(T_cal_len * T_cal_len) else NULL
   # One invocation, one immutable frame/panel and one fixed stream_step.
   # Every complete pair visits the identical A positions in identical chunk
   # order, so counts, weighted masses and modular power sums are identical.
@@ -998,14 +1193,28 @@ build_ipw_raw_backend_registry <- function(
   # extra reference/header is inside its existing128*(M+1) summary reservation.
   complete_summary <- NULL
   complete_summary_reuses <- 0L
+  can_fast_pair_ops <- exists("cdid_fast_kernel", mode = "function", inherits = TRUE) &&
+    is.null(cdid_interrupt_callback(ipw_owner_check_interrupt)) &&
+    cdid_is_default_fn(ipw_owner_query_pair_mask, "ipw_owner_query_pair_mask")
+  fk_sum_hoist <- if (can_fast_pair_ops) cdid_fast_kernel("C_cdid_ipw_raw_pair_summary") else NULL
+  fk_masks_hoist <- if (can_fast_pair_ops) cdid_fast_kernel("C_cdid_ipw_raw_masks_ops") else NULL
 
   get_pair_summary <- function(pair_desc) {
+    ds <- pair_desc$s_calendar_index
+    dt <- pair_desc$t_calendar_index
+    has_grid <- !is.null(pair_sum_grid) && !is.na(ds) && !is.na(dt) &&
+      ds >= 1L && ds <= T_cal_len && dt >= 1L && dt <= T_cal_len
+    if (has_grid) {
+      gidx <- (ds - 1L) * T_cal_len + dt
+      pid <- pair_sum_grid[gidx]
+      if (pid > 0L) return(distinct_pairs[[pid]])
+    }
     pkey <- paste0(
-      if (is.na(pair_desc$s_calendar_index)) sprintf("s:%a", pair_desc$s) else paste0("ds:", pair_desc$s_calendar_index),
+      if (is.na(ds)) sprintf("s:%a", pair_desc$s) else paste0("ds:", ds),
       "|",
-      if (is.na(pair_desc$t_calendar_index)) sprintf("t:%a", pair_desc$t) else paste0("dt:", pair_desc$t_calendar_index)
+      if (is.na(dt)) sprintf("t:%a", pair_desc$t) else paste0("dt:", dt)
     )
-    pid <- get0(pkey, envir = pair_cache, inherits = FALSE)
+    pid <- if (has_grid) NULL else get0(pkey, envir = pair_cache, inherits = FALSE)
     if (is.null(pid)) {
       charge_scans(1, C_bound)
       # A new pair must prove BOTH its own dates complete. Equal fitted
@@ -1016,19 +1225,21 @@ build_ipw_raw_backend_registry <- function(
         ps$pair <- pair_desc
         complete_summary_reuses <<- complete_summary_reuses + 1L
       } else {
-        ps <- ipw_raw_scan_pair_summary(f_owner, p_owner, pair_desc, stream_step, date_memo)
+        ps <- ipw_raw_scan_pair_summary(f_owner, p_owner, pair_desc, stream_step, date_memo, fk_sum_hoist)
       }
       pid <- length(distinct_pairs) + 1L
       ps$pair_id <- as.integer(pid)
       if (is.null(complete_summary) && isTRUE(ps$complete_pair)) complete_summary <<- ps
       distinct_pairs[[pid]] <<- ps
       pair_keys[pid] <<- pkey
+      if (has_grid) pair_sum_grid[gidx] <<- pid
       assign(pkey, pid, envir = pair_cache)
     }
     distinct_pairs[[pid]]
   }
 
-  nuisance_buckets <- list()
+  max_op_id <- if (M > 0L) max(1L, max(cat_rows$operator_id)) else 1L
+  nuisance_buckets <- vector("list", max_op_id)
   distinct_nuisance_views <- list()
   distinct_nuisance_specs <- list()
   distinct_nuisance_keys <- character()
@@ -1039,15 +1250,82 @@ build_ipw_raw_backend_registry <- function(
   row_pair_ids <- integer(M)
   row_sup_infos <- vector("list", M)
   link_to_nuisance_idx <- integer(M)
-  mask_splits <- list()
+  mask_splits <- vector("list", max(16L, M * 4L))
+  n_mask_splits <- 0L
   n_compared <- n_fp_rejected <- n_exact <- n_exact_mismatch <- n_fp_passes <- 0
   n_support_reused <- 0
+
+  same_meta_own_ctrl <- identical(own_ctrl, metadata_obj$control$owner_control)
+  can_fast_row_pre <- same_meta_own_ctrl &&
+    exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns("pipeline_metadata_row_spec_preflight")
+  last_pre_pool_sz <- -1L
+  use_desc_memo <- exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns(c("ipw_owner_make_pair_descriptor", "ipw_owner_make_cohort_descriptor"))
+  pair_grid <- if (use_desc_memo && T_cal_len > 0L) vector("list", T_cal_len * T_cal_len) else NULL
+  coh_grid1 <- if (use_desc_memo && C_own_len > 0L) vector("list", C_own_len * C_own_len) else NULL
+  pair_desc_memo <- if (use_desc_memo) new.env(hash = TRUE, parent = emptyenv()) else NULL
+  coh_desc_memo <- if (use_desc_memo) new.env(hash = TRUE, parent = emptyenv()) else NULL
+  get_pair_desc_fast <- function(s_val, t_val) {
+    if (use_desc_memo &&
+        is.numeric(s_val) && is.null(attributes(s_val)) && length(s_val) == 1L && is.finite(s_val) &&
+        is.numeric(t_val) && is.null(attributes(t_val)) && length(t_val) == 1L && is.finite(t_val)) {
+      si <- match(as.double(s_val), cal_dates_vec)
+      ti <- match(as.double(t_val), cal_dates_vec)
+      if (!is.na(si) && !is.na(ti)) {
+        pidx <- (si - 1L) * T_cal_len + ti
+        hit <- pair_grid[[pidx]]
+        if (!is.null(hit)) return(hit)
+        pd <- ipw_owner_make_pair_descriptor(p_owner, s_val, t_val)
+        pair_grid[[pidx]] <<- pd
+        return(pd)
+      }
+      pk <- paste0(sprintf("%a", as.double(s_val)), "|", sprintf("%a", as.double(t_val)))
+      hit <- get0(pk, envir = pair_desc_memo, inherits = FALSE)
+      if (!is.null(hit)) return(hit)
+      pd <- ipw_owner_make_pair_descriptor(p_owner, s_val, t_val)
+      assign(pk, pd, envir = pair_desc_memo)
+      return(pd)
+    }
+    ipw_owner_make_pair_descriptor(p_owner, s_val, t_val)
+  }
+  get_coh_desc_fast <- function(g_val, K_val) {
+    if (use_desc_memo &&
+        is.numeric(g_val) && is.null(attributes(g_val)) && length(g_val) == 1L && is.finite(g_val) &&
+        is.numeric(K_val) && is.null(attributes(K_val)) && length(K_val) >= 1L && !anyNA(K_val)) {
+      if (length(K_val) == 1L && is.finite(K_val)) {
+        gi <- match(as.double(g_val), own_cohorts_vec)
+        ki <- match(as.double(K_val), own_cohorts_vec)
+        if (!is.na(gi) && !is.na(ki)) {
+          cidx <- (gi - 1L) * C_own_len + ki
+          hit <- coh_grid1[[cidx]]
+          if (!is.null(hit)) return(hit)
+          cd <- ipw_owner_make_cohort_descriptor(f_owner, g_val, K_val, require_support = TRUE)
+          coh_grid1[[cidx]] <<- cd
+          return(cd)
+        }
+      }
+      ck <- paste0(sprintf("%a", as.double(g_val)), "|", paste(sprintf("%a", as.double(K_val)), collapse = ","))
+      hit <- get0(ck, envir = coh_desc_memo, inherits = FALSE)
+      if (!is.null(hit)) return(hit)
+      cd <- ipw_owner_make_cohort_descriptor(f_owner, g_val, K_val, require_support = TRUE)
+      assign(ck, cd, envir = coh_desc_memo)
+      return(cd)
+    }
+    ipw_owner_make_cohort_descriptor(f_owner, g_val, K_val, require_support = TRUE)
+  }
 
   # 1. Catalog row loop: exact per-row preflight, pair/cohort support checks, and
   #    operator mask-branch grouping in catalog row order 1..M.
   for (m in seq_len(M)) {
-    pipeline_metadata_row_spec_preflight(metadata_obj, m, own_ctrl)
-    pipeline_metadata_row_spec_preflight(metadata_obj, m, metadata_obj$control$owner_control)
+    cur_pool_sz <- metadata_obj$catalog$pools$size[cat_rows$pool_id[m]]
+    if (!can_fast_row_pre || m == 1L || !identical(cur_pool_sz, last_pre_pool_sz)) {
+      pipeline_metadata_row_spec_preflight(metadata_obj, m, own_ctrl)
+      if (!same_meta_own_ctrl) {
+        pipeline_metadata_row_spec_preflight(metadata_obj, m, metadata_obj$control$owner_control)
+      }
+      last_pre_pool_sz <- cur_pool_sz
+    }
     if (is.null(descriptor_src)) {
       descriptor_src <- pipeline_metadata_descriptor_source(
         metadata_obj, own_ctrl, retained_with_masks, external_work_ops, M, memo_entries = 64
@@ -1061,7 +1339,7 @@ build_ipw_raw_backend_registry <- function(
         "IPW registry plus descriptor preparation work"
       )
     }
-    row_cohorts <- 1 + metadata_obj$catalog$pools$size[cat_rows$pool_id[m]]
+    row_cohorts <- 1 + cur_pool_sz
     dim_inputs <- list(n_a, p, row_cohorts, own_ctrl)
     if (is.null(dim_memo) || !identical(dim_memo$inputs, dim_inputs)) {
       row_nuisance_preflight <- preflight_ipw_nuisance_view(n_a, p, row_cohorts, own_ctrl)
@@ -1073,26 +1351,25 @@ build_ipw_raw_backend_registry <- function(
         peak = max(row_nuisance_preflight$concurrent_entries, row_link_preflight$concurrent_entries),
         retained = max(row_nuisance_preflight$total_retained_entries, row_link_preflight$total_retained_entries)
       )
+      ipw_owner_safe_sum(
+        c(mask_registry_entries, split_cert_entries, max(retained_pipeline_entries, dim_memo$retained)),
+        own_ctrl$max_retained_entries,
+        "mask fingerprint registry plus existing row constructor retention"
+      )
+      ipw_owner_safe_sum(
+        c(mask_registry_entries, split_cert_entries, max(retained_pipeline_entries, dim_memo$peak),
+          descriptor_charge$scratch_entries),
+        own_ctrl$max_matrix_entries,
+        "mask fingerprint registry plus row constructor and descriptor scratch envelope"
+      )
     }
-    ipw_owner_safe_sum(
-      c(mask_registry_entries, split_cert_entries, max(retained_pipeline_entries, dim_memo$retained)),
-      own_ctrl$max_retained_entries,
-      "mask fingerprint registry plus existing row constructor retention"
-    )
-    ipw_owner_safe_sum(
-      c(mask_registry_entries, split_cert_entries, max(retained_pipeline_entries, dim_memo$peak),
-        descriptor_charge$scratch_entries),
-      own_ctrl$max_matrix_entries,
-      "mask fingerprint registry plus row constructor and descriptor scratch envelope"
-    )
     spec <- ipw_raw_catalog_row_spec(pipeline_metadata_row_spec_fields(metadata_obj, m, descriptor_src))
     op_id <- as.integer(cat_rows$operator_id[m])
-    op_key <- paste0("op_", op_id)
-    bucket <- nuisance_buckets[[op_key]]
+    bucket <- if (op_id >= 1L && op_id <= max_op_id) nuisance_buckets[[op_id]] else nuisance_buckets[[paste0("op_", op_id)]]
     matched_idx <- NA_integer_
 
-    pair_desc <- ipw_owner_make_pair_descriptor(p_owner, spec$s, spec$t)
-    coh_desc <- ipw_owner_make_cohort_descriptor(f_owner, spec$g, spec$K, require_support = TRUE)
+    pair_desc <- get_pair_desc_fast(spec$s, spec$t)
+    coh_desc <- get_coh_desc_fast(spec$g, spec$K)
     pair_sum <- get_pair_summary(pair_desc)
     sup_info <- ipw_raw_pair_support_for_cohorts(f_owner, pair_sum, coh_desc, require_support = TRUE)
     row_fp <- sup_info$fingerprint
@@ -1113,7 +1390,8 @@ build_ipw_raw_backend_registry <- function(
           }
           if (!identical(row_fp, distinct_fingerprints[[cand_idx]])) {
             n_fp_rejected <- n_fp_rejected + 1
-            mask_splits[[length(mask_splits) + 1L]] <- list(
+            n_mask_splits <- n_mask_splits + 1L
+            mask_splits[[n_mask_splits]] <- list(
               row_id = m,
               operator_id = op_id,
               candidate_nuisance_id = cand_nv$nuisance_id,
@@ -1127,7 +1405,7 @@ build_ipw_raw_backend_registry <- function(
         masks_eq <- identical(as.double(spec$g), cand_nv$cohorts$g) &&
           identical(as.double(spec$K), cand_nv$cohorts$K) &&
           ipw_raw_verify_pair_masks_equal(
-            f_owner, p_owner, cand_spec$pair_summary, pair_sum, coh_desc, stream_step
+            f_owner, p_owner, cand_spec$pair_summary, pair_sum, coh_desc, stream_step, fk_masks_hoist
           )
         if (isTRUE(masks_eq)) {
           matched_idx <- cand_idx
@@ -1138,7 +1416,8 @@ build_ipw_raw_backend_registry <- function(
           break
         } else {
           n_exact_mismatch <- n_exact_mismatch + 1
-          mask_splits[[length(mask_splits) + 1L]] <- list(
+          n_mask_splits <- n_mask_splits + 1L
+          mask_splits[[n_mask_splits]] <- list(
             row_id = m,
             operator_id = op_id,
             candidate_nuisance_id = cand_nv$nuisance_id,
@@ -1169,7 +1448,11 @@ build_ipw_raw_backend_registry <- function(
       distinct_operator_ids[new_idx] <- op_id
       distinct_nuisance_keys[new_idx] <- nuis_key
       distinct_fingerprints[[new_idx]] <- row_fp
-      nuisance_buckets[[op_key]] <- c(bucket, new_idx)
+      if (op_id >= 1L && op_id <= max_op_id) {
+        nuisance_buckets[[op_id]] <- c(bucket, new_idx)
+      } else {
+        nuisance_buckets[[paste0("op_", op_id)]] <- c(bucket, new_idx)
+      }
       matched_idx <- new_idx
       n_support_reused <- n_support_reused + 1
     }
@@ -1187,6 +1470,7 @@ build_ipw_raw_backend_registry <- function(
     link_to_nuisance_idx[m] <- matched_idx
     if (is.function(progress)) progress(m, M, length(distinct_nuisance_views))
   }
+  mask_splits <- if (n_mask_splits > 0L) mask_splits[seq_len(n_mask_splits)] else list()
   names(link_views) <- vapply(link_views, `[[`, character(1L), "link_id")
   names(distinct_nuisance_views) <- distinct_nuisance_keys
   descriptor_src <- NULL
@@ -1204,17 +1488,16 @@ build_ipw_raw_backend_registry <- function(
         c("cdid_ipw_fitted_view_bound_error", "cdid_ipw_owner_bound_error")
       )
     }
-    fit_in <- list(n_a, n_obs_u, p, m_u, fit_ctrl)
-    if (is.null(fit_pre_memo) || !identical(fit_pre_memo$inputs, fit_in)) {
-      fit_pre_memo <- list(
-        inputs = fit_in,
-        preflight = preflight_ipw_fitted_nuisance_view_dimensions(
-          na = n_a, n_obs = n_obs_u, p = p, m = m_u, ctrl = fit_ctrl,
-          nuisance_view = nv_u, frame_owner = f_owner, glm_ctrl = glm_ctrl
-        )
+    fkey <- paste0(n_obs_u, ":", m_u)
+    fpre <- get0(fkey, envir = fit_pre_env, inherits = FALSE)
+    if (is.null(fpre)) {
+      fpre <- preflight_ipw_fitted_nuisance_view_dimensions(
+        na = n_a, n_obs = n_obs_u, p = p, m = m_u, ctrl = fit_ctrl,
+        nuisance_view = nv_u, frame_owner = f_owner, glm_ctrl = glm_ctrl
       )
+      assign(fkey, fpre, envir = fit_pre_env)
     }
-    fit_preflights[[u]] <- fit_pre_memo$preflight
+    fit_preflights[[u]] <- fpre
   }
 
   # 3. Determine structural class certificate when `weighting == "optimal"`.
@@ -1222,8 +1505,8 @@ build_ipw_raw_backend_registry <- function(
   #    design, cohort/pair descriptors, and verified outcome-free nuisance mask
   #    groups (`link_to_nuisance_idx`), under `early_reduction` it runs BEFORE
   #    any outcome endpoints are read so dropped rows never read outcomes.
-  wt_mode <- match.arg(weighting, c("optimal", "identity"))
-  early_reduction <- identical(wt_mode, "optimal") &&
+  wt_mode <- match.arg(weighting, c("optimal", "identity", "within"))
+  early_reduction <- wt_mode %in% c("optimal", "within") &&
     isTRUE(reduce_structural_redundancy) &&
     identical(structural_reduction_stage, "outcome_free")
 
@@ -1235,10 +1518,10 @@ build_ipw_raw_backend_registry <- function(
     if (as.double(M) * as.double(n_a) > b$max_mask_entries) {
       cdid_abort("Mask verification work exceeds `max_mask_entries`.", c("cdid_ipw_bound_error", "cdid_ipw_certificate_error"))
     }
-    link_g <- vapply(row_specs, function(s) as.double(s$g), numeric(1L))
-    link_s <- vapply(row_specs, function(s) as.double(s$s), numeric(1L))
-    link_t <- vapply(row_specs, function(s) as.double(s$t), numeric(1L))
-    link_fk <- lapply(row_specs, function(s) s$functional_key)
+    link_g <- as.double(cat_rows$g)
+    link_s <- as.double(cat_rows$s)
+    link_t <- as.double(cat_rows$t)
+    link_fk <- lapply(row_specs, `[[`, "functional_key")
     link_K <- lapply(row_specs, function(s) as.double(s$K))
     checks <- ipw_structural_design_checks(link_g, link_s, link_t, link_K, link_fk, design, design_link_index, M)
 
@@ -1253,15 +1536,19 @@ build_ipw_raw_backend_registry <- function(
       sp_rep <- distinct_nuisance_specs[[u_rep]]
       if (!identical(sp_ell$sup_info$fingerprint, sp_rep$sup_info$fingerprint)) return(FALSE)
       ipw_raw_verify_pair_masks_equal(
-        f_owner, p_owner, sp_rep$pair_summary, sp_ell$pair_summary, sp_rep$coh_desc, stream_step
+        f_owner, p_owner, sp_rep$pair_summary, sp_ell$pair_summary, sp_rep$coh_desc, stream_step, fk_masks_hoist
       )
+    }
+    gk_keys <- paste0(link_g, ":", vapply(link_K, paste, character(1L), collapse = ","))
+    if (identical(match(gk_keys, gk_keys), match(cat_rows$operator_id, cat_rows$operator_id))) {
+      attr(same_mask_fn, "partition_by_nu_gid") <- TRUE
     }
     ipw_structural_classes_assemble(
       M, link_s, link_t, checks$fk, checks$vs, checks$vt, checks$dli,
       link_to_nuisance_idx, nu_refs,
-      link_cohort_g = lapply(row_specs, function(s) as.double(s$g)),
+      link_cohort_g = as.list(link_g),
       link_cohort_K = link_K,
-      link_glm = replicate(M, glm_ctrl, simplify = FALSE),
+      link_glm = rep(list(glm_ctrl), M),
       same_mask_fn = same_mask_fn,
       b = b,
       link_kind = link_kind,
@@ -1325,8 +1612,8 @@ build_ipw_raw_backend_registry <- function(
   for (j in seq_len(Q)) {
     d <- aux_descriptors[[j]]
     trial <- tryCatch({
-      p_d <- ipw_owner_make_pair_descriptor(p_owner, d$s, d$t)
-      c_d <- ipw_owner_make_cohort_descriptor(f_owner, d$g, d$K, require_support = TRUE)
+      p_d <- get_pair_desc_fast(d$s, d$t)
+      c_d <- get_coh_desc_fast(d$g, d$K)
       ps_d <- get_pair_summary(p_d)
       sup_d <- ipw_raw_pair_support_for_cohorts(f_owner, ps_d, c_d, require_support = TRUE)
       list(pair_desc = p_d, coh_desc = c_d, pair_summary = ps_d, sup_info = sup_d)
@@ -1334,7 +1621,7 @@ build_ipw_raw_backend_registry <- function(
 
     if (inherits(trial, "error")) {
       raw_aux_errors[[j]] <- trial
-      p_d <- ipw_owner_make_pair_descriptor(p_owner, d$s, d$t)
+      p_d <- get_pair_desc_fast(d$s, d$t)
       c_d <- ipw_owner_make_cohort_descriptor(f_owner, d$g, d$K, require_support = FALSE)
       ps_d <- get_pair_summary(p_d)
       sup_d <- ipw_raw_pair_support_for_cohorts(f_owner, ps_d, c_d, require_support = FALSE)
@@ -1361,17 +1648,17 @@ build_ipw_raw_backend_registry <- function(
       candidate <- identical(cand_u$coh_desc$g, c_d$g) && identical(cand_u$coh_desc$K, c_d$K) &&
         identical(cand_u$sup_info$fingerprint, fp_d)
       if (candidate) charge_scans(2, c_d$m_cohorts)
-      if (candidate && ipw_raw_verify_pair_masks_equal(f_owner, p_owner, cand_u$pair_summary, ps_d, c_d, stream_step)) {
+      if (candidate && ipw_raw_verify_pair_masks_equal(f_owner, p_owner, cand_u$pair_summary, ps_d, c_d, stream_step, fk_masks_hoist)) {
         matched_u <- u
         break
       }
     }
-    fkey_j <- paste0("reporting_operator:", gsub(" ", "", paste(d$g, paste(d$K, collapse = ","), sep = ":")))
+    same_aux_m <- !is.null(dim_memo) && identical(as.double(c_d$m_cohorts), as.double(dim_memo$inputs[[3L]]))
     if (is.na(matched_u)) {
       fkey_j <- paste0("reporting_operator:", j)
       new_u <- length(distinct_nuisance_views) + 1L
       nv_id <- paste0("reporting_nuisance:", j)
-      nv_pre <- preflight_ipw_nuisance_view(n_a, p, c_d$m_cohorts, own_ctrl)
+      nv_pre <- if (same_aux_m) dim_memo$nuisance_preflight else preflight_ipw_nuisance_view(n_a, p, c_d$m_cohorts, own_ctrl)
       nv_rec <- ipw_raw_make_nuisance_view_record(nv_id, f_owner, p_d, c_d, sup_d, own_ctrl, nv_pre)
       distinct_nuisance_views[[new_u]] <- nv_rec
       distinct_nuisance_specs[[new_u]] <- list(
@@ -1385,8 +1672,10 @@ build_ipw_raw_backend_registry <- function(
         aux_j = j
       )
       matched_u <- new_u
+    } else {
+      fkey_j <- paste0("reporting_operator:", gsub(" ", "", paste(d$g, paste(d$K, collapse = ","), sep = ":")))
     }
-    lv_pre <- preflight_ipw_link_view(n_a, p, c_d$m_cohorts, own_ctrl)
+    lv_pre <- if (same_aux_m) dim_memo$link_preflight else preflight_ipw_link_view(n_a, p, c_d$m_cohorts, own_ctrl)
     raw_aux_link_views[[j]] <- ipw_raw_make_link_view_record(
       link_id = paste0("reporting:", j), functional_key = fkey_j,
       frame_owner = f_owner, pair_desc = p_d, coh_desc = c_d, sup_info = sup_d,
@@ -1399,57 +1688,115 @@ build_ipw_raw_backend_registry <- function(
 
   # 5. Build deduplicated `(pair_id, cohort)` supports across all active links.
   U_total <- length(distinct_nuisance_specs)
+  n_dist_pairs <- length(distinct_pairs)
   support_keys <- character()
   support_specs <- list()
   supports <- list()
+  support_id_grid <- if (n_dist_pairs > 0L && C_own_len > 0L) matrix(0L, nrow = n_dist_pairs, ncol = C_own_len) else NULL
 
   get_support_id <- function(pair_id, cohort_pos, coh_desc, sup_info, k_in_coh) {
-    skey <- paste0(pair_id, ":", cohort_pos)
-    sid <- match(skey, support_keys)
-    if (is.na(sid)) {
-      sid <- length(support_specs) + 1L
-      support_keys[sid] <<- skey
-      pair_sum <- distinct_pairs[[pair_id]]
-      rate_k <- as.double(sup_info$rates[k_in_coh])
-      rate_clip_k <- as.double(ipw_clip_floor(rate_k))
-      mass_a_k <- as.double(coh_desc$group_a_mass[k_in_coh])
-      q_k <- as.double(coh_desc$q[k_in_coh])
-      support_specs[[sid]] <<- list(
-        pair = pair_sum$pair,
-        pair_id = as.integer(pair_id),
-        cohort = as.integer(cohort_pos),
-        cohort_value = as.double(coh_desc$cohorts[k_in_coh])
-      )
-      supports[[sid]] <<- list(
-        rate = rate_k,
-        rate_clip = rate_clip_k,
-        v = 1.0 / rate_clip_k,
-        massA = mass_a_k,
-        q = q_k,
-        n_pair = as.integer(sup_info$by_cohort_pair_count[k_in_coh]),
-        pair_mass = as.double(sup_info$by_cohort_pair_mass[k_in_coh])
-      )
+    has_sgrid <- !is.null(support_id_grid) && pair_id >= 1L && pair_id <= n_dist_pairs &&
+      cohort_pos >= 1L && cohort_pos <= C_own_len
+    if (has_sgrid) {
+      sid <- support_id_grid[pair_id, cohort_pos]
+      if (sid > 0L) return(sid)
+    } else {
+      skey <- paste0(pair_id, ":", cohort_pos)
+      sid <- match(skey, support_keys)
+      if (!is.na(sid)) return(as.integer(sid))
     }
+    sid <- length(support_specs) + 1L
+    if (has_sgrid) {
+      support_id_grid[pair_id, cohort_pos] <<- sid
+    } else {
+      support_keys[sid] <<- skey
+    }
+    pair_sum <- distinct_pairs[[pair_id]]
+    rate_k <- as.double(sup_info$rates[k_in_coh])
+    rate_clip_k <- as.double(ipw_clip_floor(rate_k))
+    mass_a_k <- as.double(coh_desc$group_a_mass[k_in_coh])
+    q_k <- as.double(coh_desc$q[k_in_coh])
+    support_specs[[sid]] <<- list(
+      pair = pair_sum$pair,
+      pair_id = as.integer(pair_id),
+      cohort = as.integer(cohort_pos),
+      cohort_value = as.double(coh_desc$cohorts[k_in_coh])
+    )
+    supports[[sid]] <<- list(
+      rate = rate_k,
+      rate_clip = rate_clip_k,
+      v = 1.0 / rate_clip_k,
+      massA = mass_a_k,
+      q = q_k,
+      n_pair = as.integer(sup_info$by_cohort_pair_count[k_in_coh]),
+      pair_mass = as.double(sup_info$by_cohort_pair_mass[k_in_coh])
+    )
     as.integer(sid)
   }
 
   # Map active catalog rows (`rows_to_fit`) and supported auxiliary descriptors
   # onto deduplicated `(pair_id, nuisance_branch)` treatment models.
   rows_to_fit <- if (early_reduction) sort(as.integer(kept_idx)) else seq_len(M)
-  nuisance_to_rows <- split(rows_to_fit, link_to_nuisance_idx[rows_to_fit])
+  nuisance_to_rows_vec <- vector("list", U_total)
+  if (length(rows_to_fit) > 0L) {
+    sp_r <- split(rows_to_fit, link_to_nuisance_idx[rows_to_fit])
+    nuisance_to_rows_vec[as.integer(names(sp_r))] <- sp_r
+  }
   sup_aux_j <- which(!is.na(raw_aux_nuisance_idx))
-  nuisance_to_aux <- if (length(sup_aux_j)) split(sup_aux_j, raw_aux_nuisance_idx[sup_aux_j]) else list()
+  nuisance_to_aux_vec <- vector("list", U_total)
+  if (length(sup_aux_j) > 0L) {
+    sp_a <- split(sup_aux_j, raw_aux_nuisance_idx[sup_aux_j])
+    nuisance_to_aux_vec[as.integer(names(sp_a))] <- sp_a
+  }
 
   fitted_views_all <- vector("list", U_total)
   treatment_keys <- character()
   treatment_specs <- list()
   treatments <- list()
+  treatment_id_grid <- if (n_dist_pairs > 0L && U_total > 0L) matrix(0L, nrow = n_dist_pairs, ncol = U_total) else NULL
   row_treatment_id <- rep(NA_integer_, M)
   aux_treatment_id <- rep(NA_integer_, Q)
 
   # 6. Single-observer-buffer loop over distinct nuisance branches 1..U_total:
   #    Outcome-free weighted logit + Hessian stage FIRST, then endpoint reads +
   #    point link means/partials on the SAME observer buffer, then immediate release.
+  collector_fn_hoist <- if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+                            cdid_are_default_fns("ipw_raw_observer_collector_kernel")) {
+    tryCatch(ipw_raw_observer_collector_kernel(), error = function(e) NULL)
+  } else {
+    NULL
+  }
+  plain_int_hoist <- function(x) is.integer(x) && !is.object(x) && is.null(dim(x))
+  post_hoist <- p_owner$postings
+  fast_obs_ok_hoist <- !is.null(collector_fn_hoist) &&
+    is.null(cdid_interrupt_callback(ipw_owner_check_interrupt)) &&
+    cdid_are_default_fns(c("ipw_owner_query_complete_pair_mask", "ipw_owner_view_cohort_index")) &&
+    plain_int_hoist(post_hoist$post_a_index) && plain_int_hoist(post_hoist$post_obs_index) &&
+    length(post_hoist$post_a_index) == length(post_hoist$post_obs_index) &&
+    length(post_hoist$post_a_index) <= .Machine$integer.max &&
+    plain_int_hoist(post_hoist$date_start) && plain_int_hoist(post_hoist$date_end) &&
+    plain_int_hoist(f_owner$a_cohort_index) &&
+    is.double(f_owner$w_a) && !is.object(f_owner$w_a) && is.null(dim(f_owner$w_a)) &&
+    is.double(f_owner$Z_a) && is.matrix(f_owner$Z_a) && !is.object(f_owner$Z_a)
+  fk_hess_mp_hoist <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE) &&
+                          cdid_are_default_fns(c("ipw_owner_read_y_positions", "ipw_link_means",
+                                                 "ipw_link_partials", "ipw_clip_odds_active",
+                                                 "ipw_clip_floor", "ipw_clip_floor_active"))) {
+    cdid_fast_kernel("C_cdid_ipw_hessian")
+  } else {
+    NULL
+  }
+  min_peak_bound <- min(own_ctrl$max_matrix_entries, fit_ctrl$max_matrix_entries, pt_ctrl$max_matrix_entries)
+  can_fast_safe_sum <- exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns(c("ipw_owner_safe_sum", "ipw_owner_safe_product")) &&
+    is.finite(min_peak_bound) && is.finite(own_ctrl$max_work_ops)
+  fk_ds_hoist <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE) &&
+                     cdid_are_default_fns("ipw_fitted_diagnostic_summary")) {
+    cdid_fast_kernel("C_cdid_diag_summary")
+  } else {
+    NULL
+  }
+
   for (u in seq_len(U_total)) {
     sp_u <- distinct_nuisance_specs[[u]]
     nv_u <- distinct_nuisance_views[[u]]
@@ -1472,34 +1819,59 @@ build_ipw_raw_backend_registry <- function(
         raw_aux_fit_errors[[sp_u$aux_j]] <- err_b
         next
       }
-      preflight_ipw_fitted_nuisance_view_dimensions(
-        na = n_a, n_obs = n_obs_u, p = p, m = m_u, ctrl = fit_ctrl,
-        nuisance_view = nv_u, frame_owner = f_owner, glm_ctrl = glm_ctrl
-      )
+      fkey <- paste0(n_obs_u, ":", m_u)
+      fpre <- get0(fkey, envir = fit_pre_env, inherits = FALSE)
+      if (is.null(fpre)) {
+        fpre <- preflight_ipw_fitted_nuisance_view_dimensions(
+          na = n_a, n_obs = n_obs_u, p = p, m = m_u, ctrl = fit_ctrl,
+          nuisance_view = nv_u, frame_owner = f_owner, glm_ctrl = glm_ctrl
+        )
+        assign(fkey, fpre, envir = fit_pre_env)
+      }
+      fpre
     }
 
     # Compose the one live observer/solver state with all retained records.
     # Endpoint copies, control-design copies, subsets, triangular solves and
     # expression temporaries can coexist with that state during point work.
-    branch_rows <- nuisance_to_rows[[as.character(u)]]
-    branch_aux <- nuisance_to_aux[[as.character(u)]]
+    branch_rows <- nuisance_to_rows_vec[[u]]
+    branch_aux <- nuisance_to_aux_vec[[u]]
     branch_pairs <- unique(c(row_pair_ids[branch_rows], raw_aux_pair_ids[branch_aux]))
-    point_pre_u <- if (!length(branch_pairs)) list(concurrent_entries = 0, work_ops_bound = 0) else
-      preflight_ipw_point_link_view_dimensions(
-        n_a, n_obs_u, p, m_u, pt_ctrl, fitted_view = NULL, link_view = NULL)
+    point_pre_u <- if (!length(branch_pairs)) list(concurrent_entries = 0, work_ops_bound = 0) else {
+      pkey0 <- paste0("0:", n_obs_u, ":", m_u)
+      ppre0 <- get0(pkey0, envir = pt_pre_env, inherits = FALSE)
+      if (is.null(ppre0)) {
+        ppre0 <- preflight_ipw_point_link_view_dimensions(
+          n_a, n_obs_u, p, m_u, pt_ctrl, fitted_view = NULL, link_view = NULL)
+        assign(pkey0, ppre0, envir = pt_pre_env)
+      }
+      ppre0
+    }
     leaf_peak <- max(fit_pre_u$concurrent_entries,
       fit_pre_u$observer_buffer_entries + fit_pre_u$worker_workspace_entries +
         point_pre_u$concurrent_entries)
-    construction_peak <- max(construction_peak, ipw_owner_safe_sum(
-      c(construction_retained, descriptor_charge$retained_entries, retained_failure_entries, leaf_peak),
-      min(own_ctrl$max_matrix_entries, fit_ctrl$max_matrix_entries, pt_ctrl$max_matrix_entries),
-      "raw-IPW complete construction inventory plus one model buffer and leaf copies"))
-    numerical_work <- ipw_owner_safe_sum(c(numerical_work, fit_pre_u$work_ops_bound,
-      ipw_owner_safe_product(length(branch_pairs), point_pre_u$work_ops_bound)))
-    ipw_owner_safe_sum(c(external_work_ops, scan_work, numerical_work), own_ctrl$max_work_ops,
-      "raw-IPW cumulative construction scans, weighted fits, Hessians and point work")
+    cand_peak <- as.double(construction_retained) + as.double(descriptor_charge$retained_entries) +
+      as.double(retained_failure_entries) + as.double(leaf_peak)
+    cand_num_work <- as.double(numerical_work) + as.double(fit_pre_u$work_ops_bound) +
+      as.double(length(branch_pairs)) * as.double(point_pre_u$work_ops_bound)
+    cand_tot_work <- as.double(external_work_ops) + as.double(scan_work) + cand_num_work
+    if (can_fast_safe_sum && is.finite(cand_peak) && cand_peak <= min_peak_bound &&
+        is.finite(cand_tot_work) && cand_tot_work <= own_ctrl$max_work_ops) {
+      if (cand_peak > construction_peak) construction_peak <- cand_peak
+      numerical_work <- cand_num_work
+    } else {
+      construction_peak <- max(construction_peak, ipw_owner_safe_sum(
+        c(construction_retained, descriptor_charge$retained_entries, retained_failure_entries, leaf_peak),
+        min_peak_bound,
+        "raw-IPW complete construction inventory plus one model buffer and leaf copies"))
+      numerical_work <- ipw_owner_safe_sum(c(numerical_work, fit_pre_u$work_ops_bound,
+        ipw_owner_safe_product(length(branch_pairs), point_pre_u$work_ops_bound)))
+      ipw_owner_safe_sum(c(external_work_ops, scan_work, numerical_work), own_ctrl$max_work_ops,
+        "raw-IPW cumulative construction scans, weighted fits, Hessians and point work")
+    }
 
-    obs_buf <- ipw_raw_collect_observer_buffer(f_owner, p_owner, pair_u, coh_u, n_obs_u, stream_step)
+    obs_buf <- ipw_raw_collect_observer_buffer(f_owner, p_owner, pair_u, coh_u, n_obs_u, stream_step,
+                                               collector_fn_hoist, fast_obs_ok_hoist)
     sup_worker <- list(
       n = n_a,
       g = coh_u$g,
@@ -1569,7 +1941,7 @@ build_ipw_raw_backend_registry <- function(
       if (is_aux_only) {
         retained_failure_entries <- ipw_owner_safe_sum(c(retained_failure_entries,
           unname(cp04_payload(fit_attempt)["entries"])))
-        aux_rows_u <- nuisance_to_aux[[as.character(u)]]
+        aux_rows_u <- nuisance_to_aux_vec[[u]]
         for (aj in aux_rows_u) raw_aux_fit_errors[[aj]] <- fit_attempt
         next
       }
@@ -1594,24 +1966,30 @@ build_ipw_raw_backend_registry <- function(
       mean_b = as.double(st_u$mean_b),
       fit_info = st_u$fit_info,
       weight_concentration = list(
-        propensity_fit_weights = ipw_fitted_diagnostic_summary(st_u$fit_weights, eff_chunk, TRUE),
-        target_outcome_weights = ipw_fitted_diagnostic_summary(st_u$a_obs, eff_chunk, TRUE),
-        pooled_control_outcome_ipw_weights = ipw_fitted_diagnostic_summary(st_u$b_obs, eff_chunk, TRUE)
+        propensity_fit_weights = if (!is.null(fk_ds_hoist)) fk_ds_hoist(st_u$fit_weights, eff_chunk, TRUE) else ipw_fitted_diagnostic_summary(st_u$fit_weights, eff_chunk, TRUE),
+        target_outcome_weights = if (!is.null(fk_ds_hoist)) fk_ds_hoist(st_u$a_obs, eff_chunk, TRUE) else ipw_fitted_diagnostic_summary(st_u$a_obs, eff_chunk, TRUE),
+        pooled_control_outcome_ipw_weights = if (!is.null(fk_ds_hoist)) fk_ds_hoist(st_u$b_obs, eff_chunk, TRUE) else ipw_fitted_diagnostic_summary(st_u$b_obs, eff_chunk, TRUE)
       ),
-      probability_range = ipw_fitted_diagnostic_summary(st_u$prob_use, eff_chunk, FALSE)
+      probability_range = if (!is.null(fk_ds_hoist)) fk_ds_hoist(st_u$prob_use, eff_chunk, FALSE) else ipw_fitted_diagnostic_summary(st_u$prob_use, eff_chunk, FALSE)
     )
     fv_rec <- ipw_raw_make_fitted_view_record(nv_u, f_owner, st_summary, hs_u, glm_ctrl, fit_ctrl, fit_pre_u)
     fitted_views_all[[u]] <- fv_rec
 
     # Fit each distinct pair on this nuisance branch using the ALREADY-LIVE
     # observer buffer `st_u` and `hs_u` before releasing `st_u`.
-    cat_rows_u <- nuisance_to_rows[[as.character(u)]]
-    aux_rows_u <- nuisance_to_aux[[as.character(u)]]
+    cat_rows_u <- nuisance_to_rows_vec[[u]]
+    aux_rows_u <- nuisance_to_aux_vec[[u]]
 
     fit_pair_on_branch <- function(pid, sup_info_p, is_aux_target = FALSE) {
-      tkey <- paste0(pid, ":", u)
-      tid <- match(tkey, treatment_keys)
-      if (!is.na(tid)) return(tid)
+      has_tgrid <- !is.null(treatment_id_grid) && pid >= 1L && pid <= n_dist_pairs && u >= 1L && u <= U_total
+      if (has_tgrid) {
+        tid <- treatment_id_grid[pid, u]
+        if (tid > 0L) return(tid)
+      } else {
+        tkey <- paste0(pid, ":", u)
+        tid <- match(tkey, treatment_keys)
+        if (!is.na(tid)) return(tid)
+      }
 
       if (n_obs_u > pt_ctrl$max_observer_units) {
         cdid_ipw_point_view_abort(
@@ -1624,24 +2002,40 @@ build_ipw_raw_backend_registry <- function(
         list(obs_s = obs_buf$obs_s, obs_t = obs_buf$obs_t)
       } else {
         ipw_raw_collect_pair_endpoints(
-          p_owner, distinct_pairs[[pid]], coh_u, obs_buf$risk_a_idx, f_owner$a_cohort_index, stream_step
+          p_owner, distinct_pairs[[pid]], coh_u, obs_buf$risk_a_idx, f_owner$a_cohort_index, stream_step,
+          fk_masks_hoist
         )
       }
-      ep <- ipw_owner_read_y_positions(p_owner, ep_pos$obs_s, ep_pos$obs_t)
-      risk_dy <- as.double(ep$y_right_obs) - as.double(ep$y_left_obs)
-      if (anyNA(risk_dy) || any(!is.finite(risk_dy))) {
-        cdid_abort("Pair difference overflow.", c("cdid_ipw_outcome_error", "cdid_pairs_outcome_error"))
+      fast_mp <- if (!is.null(fk_hess_mp_hoist)) {
+        fk_hess_mp_hoist(st_u, hs_u, p_owner$observations$y, ep_pos$obs_s, ep_pos$obs_t,
+                         coh_u$q, coh_u$cohort_labels)
+      } else {
+        NULL
       }
+      if (!is.null(fast_mp)) {
+        means <- fast_mp
+        part <- fast_mp
+      } else {
+        ep <- ipw_owner_read_y_positions(p_owner, ep_pos$obs_s, ep_pos$obs_t)
+        risk_dy <- as.double(ep$y_right_obs) - as.double(ep$y_left_obs)
+        if (anyNA(risk_dy) || any(!is.finite(risk_dy))) {
+          cdid_abort("Pair difference overflow.", c("cdid_ipw_outcome_error", "cdid_pairs_outcome_error"))
+        }
 
-      means <- ipw_link_means(st_u, risk_dy)
-      part <- ipw_link_partials(st_u, hs_u, risk_dy, means, coh_u$q, coh_u$cohort_labels)
+        means <- ipw_link_means(st_u, risk_dy)
+        part <- ipw_link_partials(st_u, hs_u, risk_dy, means, coh_u$q, coh_u$cohort_labels)
+      }
 
       sids <- integer(m_u)
       for (k in seq_len(m_u)) {
         sids[k] <- get_support_id(pid, coh_u$a_cohort_map[k], coh_u, sup_info_p, k)
       }
       tid <- length(treatments) + 1L
-      treatment_keys[tid] <<- tkey
+      if (has_tgrid) {
+        treatment_id_grid[pid, u] <<- tid
+      } else {
+        treatment_keys[tid] <<- tkey
+      }
       treatment_specs[[tid]] <<- list(
         pair = distinct_pairs[[pid]]$pair,
         pair_id = as.integer(pid),
@@ -1718,15 +2112,14 @@ build_ipw_raw_backend_registry <- function(
     t_fit <- treatments[[tid]]
     lv_m <- link_views[[m]]
     fv_m <- fitted_views_all[[link_to_nuisance_idx[m]]]
-    pt_in <- list(n_a, t_spec$n_observers, p, length(t_spec$cohorts), pt_ctrl)
-    if (is.null(pt_pre_memo) || !identical(pt_pre_memo$inputs, pt_in)) {
-      pt_pre_memo <- list(
-        inputs = pt_in,
-        preflight = preflight_ipw_point_link_view_dimensions(
-          na = n_a, n_obs = t_spec$n_observers, p = p, m = length(t_spec$cohorts),
-          ctrl = pt_ctrl, fitted_view = fv_m, link_view = lv_m
-        )
+    pkey_m <- paste0("1:", t_spec$n_observers, ":", length(t_spec$cohorts))
+    ppre_m <- get0(pkey_m, envir = pt_pre_env, inherits = FALSE)
+    if (is.null(ppre_m)) {
+      ppre_m <- preflight_ipw_point_link_view_dimensions(
+        na = n_a, n_obs = t_spec$n_observers, p = p, m = length(t_spec$cohorts),
+        ctrl = pt_ctrl, fitted_view = fv_m, link_view = lv_m
       )
+      assign(pkey_m, ppre_m, envir = pt_pre_env)
     }
     b_idx <- length(backend_links) + 1L
     backend_links[[b_idx]] <- list(
@@ -1741,7 +2134,7 @@ build_ipw_raw_backend_registry <- function(
       mu = as.double(t_fit$means$estimate)
     )
     point_links_all[[m]] <- ipw_raw_make_point_link_record(
-      lv_m, fv_m, t_fit, b_idx, pt_ctrl, pt_pre_memo$preflight
+      lv_m, fv_m, t_fit, b_idx, pt_ctrl, ppre_m
     )
   }
 
@@ -1792,10 +2185,15 @@ build_ipw_raw_backend_registry <- function(
     t_fit <- treatments[[tid]]
     lv_j <- raw_aux_link_views[[j]]
     fv_j <- fitted_views_all[[raw_aux_nuisance_idx[j]]]
-    pt_pre_j <- preflight_ipw_point_link_view_dimensions(
-      na = n_a, n_obs = t_spec$n_observers, p = p, m = length(t_spec$cohorts),
-      ctrl = pt_ctrl, fitted_view = fv_j, link_view = lv_j
-    )
+    pkey_j <- paste0("1:", t_spec$n_observers, ":", length(t_spec$cohorts))
+    pt_pre_j <- get0(pkey_j, envir = pt_pre_env, inherits = FALSE)
+    if (is.null(pt_pre_j)) {
+      pt_pre_j <- preflight_ipw_point_link_view_dimensions(
+        na = n_a, n_obs = t_spec$n_observers, p = p, m = length(t_spec$cohorts),
+        ctrl = pt_ctrl, fitted_view = fv_j, link_view = lv_j
+      )
+      assign(pkey_j, pt_pre_j, envir = pt_pre_env)
+    }
     b_idx <- length(backend_links) + 1L
     backend_links[[b_idx]] <- list(
       link_id = lv_j$link_id,
@@ -1848,9 +2246,14 @@ build_ipw_raw_backend_registry <- function(
       n_observed_pair_all = ps$n_observed_pair_all
     )
   })
-  owned_entries <- unname(cp04_payload(list(
+  raw_payload_list <- list(
     pairs_compact, support_specs, supports, treatment_specs, treatments, backend_links
-  ))["entries"]) + 256 + owner_snapshot_entries + character_inventory$metadata_entries
+  )
+  owned_entries <- unname((if (!is.null(fk_pay_raw)) {
+    fk_pay_raw(raw_payload_list, TRUE, environment())
+  } else {
+    cp04_payload(raw_payload_list)
+  })["entries"]) + 256 + owner_snapshot_entries + character_inventory$metadata_entries
   borrowed_entries <- ipw_point_view_owner_entries(f_owner, p_owner)
   work_charged <- ipw_owner_safe_sum(c(scan_work, descriptor_charge$work_ops_bound, numerical_work))
   composed_work <- ipw_owner_safe_sum(
@@ -1975,6 +2378,68 @@ preflight_ipw_fitted_nuisance_view_dimensions <- function(na, n_obs, p, m, ctrl,
   B_eff <- min(na, max_ch)
   n_chunks <- ceiling(na / B_eff)
 
+  if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(c("ipw_owner_safe_sum", "ipw_owner_safe_product",
+                             "ipw_fitted_view_char_bytes", "preflight_ipw_range_query",
+                             "ipw_fitted_view_to_owner_control"))) {
+    chr_vec <- c(
+      nuisance_view$nuisance_id,
+      nuisance_view$cohorts$cohort_labels,
+      colnames(frame_owner$Z_a)
+    )
+    if (is.character(chr_vec) && !anyNA(chr_vec) &&
+        B_eff >= 1 && B_eff <= max_ch && p >= 1 && m >= 2 &&
+        B_eff <= .Machine$integer.max && p <= .Machine$integer.max) {
+      nb_vec <- as.double(nchar(chr_vec, type = "bytes"))
+      tot_bytes <- sum(nb_vec)
+      char_slots <- ceiling(tot_bytes / 2) + 32
+      char_work <- 128 + tot_bytes + 8 * length(nb_vec)
+      cap_ret <- min(max_ret, max_out, max_me)
+      rm_e <- 3 * p * p + p * m + nuisance_view$preflight$retained_matrix_entries + 64
+      rv_e <- 4 * p + 14 * m + 2176 + nuisance_view$preflight$retained_vector_entries + char_slots
+      rt_e <- rm_e + rv_e
+      Bp <- B_eff * p
+      q_out <- 24 * B_eff + 256 + 2 * Bp
+      q_scr <- 64 * B_eff + m + 256
+      q_conc <- q_out + q_scr
+      q_work <- 64 * (1 + ceiling(log2(m + 1))) * B_eff + 2 * Bp + 4096
+      ob_e <- n_obs * p + 6 * n_obs + 32
+      wt_e <- 6 * n_obs * p + 24 * n_obs + 6 * p * p + 12 * p + 4 * p * m + 8 * m + 256
+      ds_e <- 2 * B_eff + 64
+      str_e <- rt_e + ob_e + q_conc + char_slots
+      sol_e <- rt_e + ob_e + wt_e + ds_e
+      pk_e <- max(str_e, sol_e)
+      str_w <- n_chunks * q_work + n_obs * (p + 8) + char_work
+      fit_w <- (glm_ctrl$maxit + 2) * (4 * n_obs * p * p + 16 * n_obs * p + 4 * p * p * p) +
+        4 * n_obs * p * p + 4 * n_obs * p * m + 4 * p * p * p + 4 * p * p * m +
+        16 * n_obs + 64 * ceiling(n_obs / B_eff) + 128
+      tot_w <- str_w + fit_w
+      if (is.finite(rt_e) && rt_e >= 0 && rt_e <= cap_ret &&
+          is.finite(Bp) && Bp <= max_me &&
+          is.finite(q_out) && q_out <= max_out &&
+          is.finite(pk_e) && pk_e >= 0 && pk_e <= max_me &&
+          is.finite(tot_w) && tot_w >= 0 && tot_w <= max_wo &&
+          pk_e <= 2^53 - 1 && tot_w <= 2^53 - 1) {
+        return(list(
+          n_a_units = na,
+          n_observed_risk_units = n_obs,
+          p_covariates = p,
+          m_cohorts = m,
+          effective_chunk_rows = B_eff,
+          n_chunks = n_chunks,
+          retained_matrix_entries_per_fit = rm_e,
+          retained_vector_entries_per_fit = rv_e,
+          retained_entries_per_fit = rt_e,
+          observer_buffer_entries = ob_e,
+          worker_workspace_entries = wt_e,
+          concurrent_entries = pk_e,
+          work_ops_bound = tot_w,
+          total_work_ops_bound = tot_w
+        ))
+      }
+    }
+  }
+
   char_meta <- ipw_fitted_view_char_bytes(
     list(
       nuisance_view$nuisance_id,
@@ -2090,6 +2555,35 @@ preflight_ipw_point_link_view_dimensions <- function(na, n_obs, p, m, ctrl, fitt
 
   B_eff <- min(na, max_ch)
   n_chunks <- ceiling(na / B_eff)
+
+  lv_rm <- if (is.null(link_view)) 0 else link_view$preflight$retained_matrix_entries
+  lv_rv <- if (is.null(link_view)) 0 else link_view$preflight$retained_vector_entries
+  cap_r <- min(max_ret, max_out, max_me)
+  rm_val <- 3 * p * p + p * m + lv_rm + 64
+  rv_val <- 5 * p + 18 * m + 10240 + lv_rv
+  rt_val <- rm_val + rv_val
+  ob_val <- 5 * n_obs * p + 68 * n_obs + 4 * p * p + 2 * p * m + 8 * p + 12 * m + 256
+  tw_val <- 32 * na + 32 * n_obs * (p + m + 4) + 16 * (p * p + p * m) + 512
+  if (is.finite(rt_val) && rt_val >= 0 && rt_val <= cap_r &&
+      is.finite(ob_val) && ob_val >= 0 && ob_val <= max_me &&
+      is.finite(tw_val) && tw_val >= 0 && tw_val <= max_wo &&
+      rt_val <= 2^53 - 1 && ob_val <= 2^53 - 1 && tw_val <= 2^53 - 1) {
+    return(list(
+      n_a_units = na,
+      n_observed_risk_units = n_obs,
+      p_covariates = p,
+      m_cohorts = m,
+      effective_chunk_rows = B_eff,
+      n_chunks = n_chunks,
+      retained_matrix_entries_per_link = rm_val,
+      retained_vector_entries_per_link = rv_val,
+      retained_entries_per_link = rt_val,
+      observer_buffer_entries = ob_val,
+      concurrent_entries = ob_val + rt_val,
+      work_ops_bound = tw_val,
+      total_work_ops_bound = tw_val
+    ))
+  }
 
   ret_matrix_entries <- ipw_owner_safe_sum(c(3 * p * p, p * m,
     if (is.null(link_view)) 0 else link_view$preflight$retained_matrix_entries, 64),
@@ -2341,6 +2835,91 @@ ipw_raw_query_pair_rows <- function(panel_owner, pair_rec, rows) {
   list(obs = obs, pos_s = pos_s, pos_t = pos_t)
 }
 
+cdid_fast_ipw_raw_if_pack <- function(backend, pre, meta, replay_index, model_pos, frame, panel, plan_ref = NULL) {
+  if (!is.null(plan_ref) && exists("cdid_fast_kernel_cache", inherits = TRUE)) {
+    cached <- cdid_fast_kernel_cache$last_raw_if_pack
+    if (!is.null(cached) &&
+        identical(cached$plan_ref, plan_ref) &&
+        identical(cached$backend_ref, backend$ref)) {
+      return(cached)
+    }
+  }
+  c_a <- length(frame$a_cohorts)
+  n_pids <- length(pre$pids)
+  n_tids <- length(pre$tids)
+  if (c_a < 1L || n_pids < 1L || n_tids < 1L) return(NULL)
+
+  post <- panel$postings
+  pair_tab <- matrix(0L, nrow = 5L, ncol = n_pids)
+  pair_active_coh <- matrix(0L, nrow = c_a, ncol = n_pids)
+  for (p_idx in seq_len(n_pids)) {
+    pid <- pre$pids[p_idx]
+    pair_rec <- backend$pairs[[pid]]
+    ds <- pair_rec$pair$s_calendar_index
+    dt <- pair_rec$pair$t_calendar_index
+    if (!is.na(ds) && !is.na(dt) && post$date_count[ds] >= 1L && post$date_count[dt] >= 1L) {
+      pair_tab[, p_idx] <- c(
+        as.integer(post$date_start[ds]),
+        as.integer(post$date_end[ds]),
+        as.integer(post$date_start[dt]),
+        as.integer(post$date_end[dt]),
+        as.integer(isTRUE(pair_rec$complete_pair))
+      )
+    } else {
+      pair_tab[, p_idx] <- c(0L, -1L, 0L, -1L, 0L)
+    }
+    act_p <- if (is.null(replay_index)) {
+      meta$support_cohorts[meta$support_pairs == pid]
+    } else meta$pair_cohorts[[p_idx]]
+    if (length(act_p) > 0L) {
+      pair_active_coh[as.integer(act_p), p_idx] <- 1L
+    }
+  }
+
+  trt_int <- matrix(0L, nrow = 4L + c_a, ncol = n_tids)
+  trt_dbl_list <- vector("list", n_tids + 1L)
+  for (t_idx in seq_len(n_tids)) {
+    tj <- pre$tids[t_idx]
+    spec <- backend$treatment_specs[[tj]]
+    f <- backend$treatments[[tj]]
+    m_coh <- length(spec$cohorts)
+    cmap <- integer(c_a)
+    if (m_coh > 0L) cmap[as.integer(spec$cohorts)] <- seq_len(m_coh)
+    trt_int[, t_idx] <- c(
+      as.integer(meta$treatment_pair_pos[t_idx]),
+      as.integer(meta$nuisance_ids[t_idx]),
+      as.integer(m_coh),
+      0L,
+      cmap
+    )
+    trt_dbl_list[[t_idx]] <- as.double(c(
+      f$means$mean_a,
+      f$means$treated_mean,
+      f$means$mean_b,
+      f$means$control_mean,
+      f$coefficients,
+      f$loadings$loading_beta,
+      f$rates_clip,
+      f$loadings$rate_coef_s0,
+      f$loadings$rate_coef_s1
+    ))
+  }
+  trt_dbl_list[[n_tids + 1L]] <- as.integer(model_pos)
+
+  pack <- list(
+    plan_ref = plan_ref,
+    backend_ref = backend$ref,
+    pair_tab = pair_tab,
+    pair_active_coh = pair_active_coh,
+    trt_int = trt_int,
+    trt_dbl_list = trt_dbl_list
+  )
+  if (!is.null(plan_ref) && exists("cdid_fast_kernel_cache", inherits = TRUE)) {
+    cdid_fast_kernel_cache$last_raw_if_pack <- pack
+  }
+  pack
+}
+
 evaluate_ipw_raw_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE,
                                       plan = NULL, include_components = FALSE) {
   validate_ipw_raw_backend(backend)
@@ -2395,9 +2974,65 @@ evaluate_ipw_raw_if_chunk <- function(backend, rows, links, scale = "frame", det
 
   frame <- get("frame_owner", envir = backend$frame_ref, inherits = FALSE)
   panel <- get("panel_owner", envir = backend$panel_ref, inherits = FALSE)
-  u_a_cohort <- frame$a_cohort_index[rows_i]
   u_w <- frame$w_a[rows_i]
   Z_a <- frame$Z_a
+
+  if (!want_details &&
+      exists("cdid_fast_kernel", mode = "function", inherits = TRUE) &&
+      cdid_is_default_fn(ipw_owner_read_y_positions, "ipw_owner_read_y_positions") &&
+      cdid_is_default_fn(ipw_owner_query_pair_mask, "ipw_owner_query_pair_mask")) {
+    fk_if <- cdid_fast_kernel("C_cdid_ipw_raw_if_chunk")
+    if (!is.null(fk_if)) {
+      p_ref <- if (!is.null(plan) && typeof(plan) == "list" && !is.object(plan)) .subset2(plan, "ref") else NULL
+      pack <- cdid_fast_ipw_raw_if_pack(backend, pre, meta, replay_index, model_pos, frame, panel, plan_ref = p_ref)
+      if (!is.null(pack)) {
+        fast_res <- fk_if(
+          rows_i,
+          panel$postings$post_a_index,
+          panel$postings$post_obs_index,
+          panel$observations$y,
+          frame$a_cohort_index,
+          frame$w_a,
+          Z_a,
+          pack$pair_tab,
+          pack$pair_active_coh,
+          pack$trt_int,
+          pack$trt_dbl_list
+        )
+        if (!is.null(fast_res)) {
+          phi_fast <- fast_res$phi
+          dimnames(phi_fast) <- list(NULL, link_ids)
+          return(list(
+            rows = rows_i,
+            a_index = rows_i,
+            unit_index = panel$a_unit_index[rows_i],
+            id = panel$a_id[rows_i],
+            g = panel$a_g[rows_i],
+            weight = u_w,
+            links = links_i,
+            link_ids = link_ids,
+            phi = phi_fast,
+            scale = scale,
+            normalization_count = n_a,
+            components = NULL,
+            details = NULL,
+            diagnostics = list(
+              n_rate_score_evaluations = length(pre$sids),
+              n_regression_score_evaluations = 0L,
+              n_global_beta_blocks = 0L,
+              n_treatment_score_evaluations = length(pre$tids),
+              n_nuisance_score_evaluations = fast_res$nuisance_evaluations,
+              output_entries_bound = pre$output,
+              concurrent_scratch_bound = pre$scratch,
+              work_ops_bound = pre$work
+            )
+          ))
+        }
+      }
+    }
+  }
+
+  u_a_cohort <- frame$a_cohort_index[rows_i]
 
   # 1. Query each active pair once on `rows` and read outcome differences once
   #    on the union of observed active-support rows for that pair.

@@ -792,19 +792,35 @@ chained_cluster_multiplier <- function(target_ids,
     }
 
     # Scan matrix values for finiteness after all dimension/budget/identity checks.
-    if (!all(is.finite(if_mat))) {
-      multiplier_abort(
-        sprintf("IF batch %.0f 'if_matrix' contains non-finite values (NA, NaN, or Inf).", b_idx),
-        c("cdid_multiplier_nonfinite_if_error", "cdid_multiplier_input_error")
-      )
-    }
+    fk_acc <- if (is.integer(streamed_cluster_unit_counts) &&
+                  cdid_is_default_fn(sys.function(), "chained_cluster_multiplier")) {
+      cdid_fast_kernel("C_cdid_ia_multiplier_acc_if")
+    } else NULL
+    if (!is.null(fk_acc)) {
+      seen_unit[u_pos] <- TRUE
+      total_if_rows_seen <- total_if_rows_seen + r_b
+      ok_acc <- fk_acc(S_mat, streamed_cluster_unit_counts, if_mat, as.integer(u_pos), as.integer(unit_cluster_idx))
+      if (!isTRUE(ok_acc)) {
+        multiplier_abort(
+          sprintf("IF batch %.0f 'if_matrix' contains non-finite values (NA, NaN, or Inf).", b_idx),
+          c("cdid_multiplier_nonfinite_if_error", "cdid_multiplier_input_error")
+        )
+      }
+    } else {
+      if (!all(is.finite(if_mat))) {
+        multiplier_abort(
+          sprintf("IF batch %.0f 'if_matrix' contains non-finite values (NA, NaN, or Inf).", b_idx),
+          c("cdid_multiplier_nonfinite_if_error", "cdid_multiplier_input_error")
+        )
+      }
 
-    seen_unit[u_pos] <- TRUE
-    total_if_rows_seen <- total_if_rows_seen + r_b
-    for (r in seq_len(r_b)) {
-      c_idx <- unit_cluster_idx[u_pos[r]]
-      S_mat[c_idx, ] <- S_mat[c_idx, ] + if_mat[r, ]
-      streamed_cluster_unit_counts[c_idx] <- streamed_cluster_unit_counts[c_idx] + 1L
+      seen_unit[u_pos] <- TRUE
+      total_if_rows_seen <- total_if_rows_seen + r_b
+      for (r in seq_len(r_b)) {
+        c_idx <- unit_cluster_idx[u_pos[r]]
+        S_mat[c_idx, ] <- S_mat[c_idx, ] + if_mat[r, ]
+        streamed_cluster_unit_counts[c_idx] <- streamed_cluster_unit_counts[c_idx] + 1L
+      }
     }
   }
 
@@ -1019,7 +1035,15 @@ chained_cluster_multiplier <- function(target_ids,
     }
 
     # Scan sign_matrix content for exact {-1, +1} entries after alignment/budget checks.
-    if (anyNA(smat) || !all(smat == 1 | smat == -1)) {
+    fk_sign <- if (cdid_is_default_fn(sys.function(), "chained_cluster_multiplier")) {
+      cdid_fast_kernel("C_cdid_ia_check_sign_matrix")
+    } else NULL
+    sign_ok <- if (!is.null(fk_sign)) {
+      fk_sign(smat)
+    } else {
+      !(anyNA(smat) || !all(smat == 1 | smat == -1))
+    }
+    if (!sign_ok) {
       multiplier_abort(
         sprintf("Sign batch %.0f 'sign_matrix' entries must be finite and strictly in {-1, +1}.", s_idx),
         c("cdid_multiplier_invalid_sign_error", "cdid_multiplier_input_error")

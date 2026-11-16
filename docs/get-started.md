@@ -435,7 +435,7 @@ That expectation comes from the algebra of this common case. In the run describe
 
 ---
 
-**Reading path, step 1 of 20** · Previous: [Guide home](README.md) · Next: [Moving from did](from-did.md)
+**Reading path, step 1 of 22** · Previous: [Guide home](README.md) · Next: [Moving from did](from-did.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -462,6 +462,8 @@ That expectation comes from the algebra of this common case. In the run describe
 | 18 | [Options](reference/options.md) |
 | 19 | [Results](reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](examples/short-pretreatment-windows.md) |
 
 [Guide home](README.md) · [Package overview](../README.md)
 

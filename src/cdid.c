@@ -5820,6 +5820,59 @@ SEXP C_gmm_dr_separate_sparse_if(SEXP y_s, SEXP pa_s, SEXP po_s, SEXP rows_s,
 }
 
 extern SEXP C_gmm_reconstruction_zero_run(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_match_sorted_double(SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_pair_support_scan(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_occupancy_accumulate(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_catalog_row_mappings(SEXP, SEXP, SEXP);
+extern SEXP C_cdid_point_payload_budget(SEXP, SEXP, SEXP);
+extern SEXP C_cdid_num_id_tracker(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_if_unit_batch_weighted(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_wls_compress(SEXP);
+extern SEXP C_cdid_logit_exact_alias(SEXP);
+extern SEXP C_cdid_clip_logit(SEXP, SEXP);
+extern SEXP C_cdid_cp04_logit_fast(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_center_gram(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_custom_ipw_collect(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_custom_ipw_if_chunk(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ipw_raw_pair_summary(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ipw_raw_masks_ops(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ipw_glm_fit(SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ipw_hessian(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ipw_raw_if_chunk(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_incomplete_or_supports(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_incomplete_dr_trt_fit(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_fast_seal(SEXP, SEXP);
+extern SEXP C_cdid_verify_fast(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_matrix_set_rows(SEXP, SEXP, SEXP);
+extern SEXP C_cdid_retained_cov_gram(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_dr_batch_chol_solve(SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_diag_summary(SEXP, SEXP, SEXP);
+extern SEXP C_cdid_sel_ref_lookup(SEXP, SEXP);
+extern SEXP C_cdid_sel_ref_slice(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_sel_date_rows(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_sel_fit_block(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_sel_upstream_chunk(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_sel_trt_fit(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_sel_support_collect(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_sel_if_chunk(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ia_check_design_matrix(SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ia_multiplier_acc_if(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ia_check_sign_matrix(SEXP);
+extern SEXP C_cdid_ia_imp_if_chunk(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ia_cell_replay_build(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ia_aug_if_chunk(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ia_imp_stage1(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ia_imp_stage2_cells(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ia_imp_stage24_forcing_links(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ia_aug_stage456(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_ia_fit_sel_blocks(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_cpt_distinct_grid(SEXP);
+extern SEXP C_cdid_cpt_acc_init(SEXP);
+extern SEXP C_cdid_cpt_acc_add_piece(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_cpt_acc_add_fast(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_cpt_acc_finalize(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cdid_cpt_batch_cvmb(SEXP, SEXP, SEXP);
+extern SEXP C_cdid_cpt_process_nonzero(SEXP, SEXP);
 
 static const R_CallMethodDef CallEntries[] = {
   {"C_gmm_reconstruction_zero_run", (DL_FUNC) &C_gmm_reconstruction_zero_run, 6},
@@ -5857,6 +5910,59 @@ static const R_CallMethodDef CallEntries[] = {
   {"C_gmm_if_unit_batch", (DL_FUNC) &C_gmm_if_unit_batch, 10},
   {"C_gmm_cp08_payload", (DL_FUNC) &C_gmm_cp08_payload, 3},
   {"C_gmm_cp04_diagnostic_fields", (DL_FUNC) &C_gmm_cp04_diagnostic_fields, 3},
+  {"C_cdid_match_sorted_double", (DL_FUNC) &C_cdid_match_sorted_double, 4},
+  {"C_cdid_pair_support_scan", (DL_FUNC) &C_cdid_pair_support_scan, 9},
+  {"C_cdid_occupancy_accumulate", (DL_FUNC) &C_cdid_occupancy_accumulate, 6},
+  {"C_cdid_catalog_row_mappings", (DL_FUNC) &C_cdid_catalog_row_mappings, 3},
+  {"C_cdid_point_payload_budget", (DL_FUNC) &C_cdid_point_payload_budget, 3},
+  {"C_cdid_num_id_tracker", (DL_FUNC) &C_cdid_num_id_tracker, 5},
+  {"C_cdid_if_unit_batch_weighted", (DL_FUNC) &C_cdid_if_unit_batch_weighted, 9},
+  {"C_cdid_wls_compress", (DL_FUNC) &C_cdid_wls_compress, 1},
+  {"C_cdid_logit_exact_alias", (DL_FUNC) &C_cdid_logit_exact_alias, 1},
+  {"C_cdid_clip_logit", (DL_FUNC) &C_cdid_clip_logit, 2},
+  {"C_cdid_cp04_logit_fast", (DL_FUNC) &C_cdid_cp04_logit_fast, 6},
+  {"C_cdid_center_gram", (DL_FUNC) &C_cdid_center_gram, 6},
+  {"C_cdid_custom_ipw_collect", (DL_FUNC) &C_cdid_custom_ipw_collect, 9},
+  {"C_cdid_custom_ipw_if_chunk", (DL_FUNC) &C_cdid_custom_ipw_if_chunk, 8},
+  {"C_cdid_ipw_raw_pair_summary", (DL_FUNC) &C_cdid_ipw_raw_pair_summary, 5},
+  {"C_cdid_ipw_raw_masks_ops", (DL_FUNC) &C_cdid_ipw_raw_masks_ops, 7},
+  {"C_cdid_ipw_glm_fit", (DL_FUNC) &C_cdid_ipw_glm_fit, 4},
+  {"C_cdid_ipw_hessian", (DL_FUNC) &C_cdid_ipw_hessian, 7},
+  {"C_cdid_ipw_raw_if_chunk", (DL_FUNC) &C_cdid_ipw_raw_if_chunk, 11},
+  {"C_cdid_incomplete_or_supports", (DL_FUNC) &C_cdid_incomplete_or_supports, 11},
+  {"C_cdid_incomplete_dr_trt_fit", (DL_FUNC) &C_cdid_incomplete_dr_trt_fit, 13},
+  {"C_cdid_fast_seal", (DL_FUNC) &C_cdid_fast_seal, 2},
+  {"C_cdid_verify_fast", (DL_FUNC) &C_cdid_verify_fast, 5},
+  {"C_cdid_matrix_set_rows", (DL_FUNC) &C_cdid_matrix_set_rows, 3},
+  {"C_cdid_retained_cov_gram", (DL_FUNC) &C_cdid_retained_cov_gram, 5},
+  {"C_cdid_dr_batch_chol_solve", (DL_FUNC) &C_cdid_dr_batch_chol_solve, 4},
+  {"C_cdid_diag_summary", (DL_FUNC) &C_cdid_diag_summary, 3},
+  {"C_cdid_sel_ref_lookup", (DL_FUNC) &C_cdid_sel_ref_lookup, 2},
+  {"C_cdid_sel_ref_slice", (DL_FUNC) &C_cdid_sel_ref_slice, 6},
+  {"C_cdid_sel_date_rows", (DL_FUNC) &C_cdid_sel_date_rows, 6},
+  {"C_cdid_sel_fit_block", (DL_FUNC) &C_cdid_sel_fit_block, 6},
+  {"C_cdid_sel_upstream_chunk", (DL_FUNC) &C_cdid_sel_upstream_chunk, 7},
+  {"C_cdid_sel_trt_fit", (DL_FUNC) &C_cdid_sel_trt_fit, 9},
+  {"C_cdid_sel_support_collect", (DL_FUNC) &C_cdid_sel_support_collect, 8},
+  {"C_cdid_sel_if_chunk", (DL_FUNC) &C_cdid_sel_if_chunk, 9},
+  {"C_cdid_ia_check_design_matrix", (DL_FUNC) &C_cdid_ia_check_design_matrix, 4},
+  {"C_cdid_ia_multiplier_acc_if", (DL_FUNC) &C_cdid_ia_multiplier_acc_if, 5},
+  {"C_cdid_ia_check_sign_matrix", (DL_FUNC) &C_cdid_ia_check_sign_matrix, 1},
+  {"C_cdid_ia_imp_if_chunk", (DL_FUNC) &C_cdid_ia_imp_if_chunk, 8},
+  {"C_cdid_ia_cell_replay_build", (DL_FUNC) &C_cdid_ia_cell_replay_build, 8},
+  {"C_cdid_ia_aug_if_chunk", (DL_FUNC) &C_cdid_ia_aug_if_chunk, 9},
+  {"C_cdid_ia_imp_stage1", (DL_FUNC) &C_cdid_ia_imp_stage1, 7},
+  {"C_cdid_ia_imp_stage2_cells", (DL_FUNC) &C_cdid_ia_imp_stage2_cells, 8},
+  {"C_cdid_ia_imp_stage24_forcing_links", (DL_FUNC) &C_cdid_ia_imp_stage24_forcing_links, 9},
+  {"C_cdid_ia_aug_stage456", (DL_FUNC) &C_cdid_ia_aug_stage456, 11},
+  {"C_cdid_ia_fit_sel_blocks", (DL_FUNC) &C_cdid_ia_fit_sel_blocks, 6},
+  {"C_cdid_cpt_distinct_grid", (DL_FUNC) &C_cdid_cpt_distinct_grid, 1},
+  {"C_cdid_cpt_acc_init", (DL_FUNC) &C_cdid_cpt_acc_init, 1},
+  {"C_cdid_cpt_acc_add_piece", (DL_FUNC) &C_cdid_cpt_acc_add_piece, 10},
+  {"C_cdid_cpt_acc_add_fast", (DL_FUNC) &C_cdid_cpt_acc_add_fast, 10},
+  {"C_cdid_cpt_acc_finalize", (DL_FUNC) &C_cdid_cpt_acc_finalize, 6},
+  {"C_cdid_cpt_batch_cvmb", (DL_FUNC) &C_cdid_cpt_batch_cvmb, 3},
+  {"C_cdid_cpt_process_nonzero", (DL_FUNC) &C_cdid_cpt_process_nonzero, 2},
   {NULL, NULL, 0}
 };
 

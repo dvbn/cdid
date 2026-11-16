@@ -272,6 +272,15 @@ ipw_point_view_payload_budget <- function(objects, control) {
   max_wo <- control$max_work_ops
   cap_me <- if (is.null(max_me)) limit else min(limit, max_me)
   cap_wo <- if (is.null(max_wo)) limit else min(limit, max_wo)
+  fk <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+    cdid_fast_kernel("C_cdid_point_payload_budget")
+  } else {
+    NULL
+  }
+  if (!is.null(fk)) {
+    fast_pb <- fk(objects, cap_me, cap_wo)
+    if (!is.null(fast_pb)) return(fast_pb)
+  }
   visit <- function(x, depth = 0L, scan_attrs = TRUE) {
     if (is.null(x) || is.environment(x)) return(invisible(NULL))
     if (depth > 12L || is.function(x) || is.language(x) || isS4(x)) {
@@ -4676,28 +4685,37 @@ stream_ipw_point_covariance_general <- function(
   mean_phi <- sum_phi / n_a
   names(mean_phi) <- link_ids
 
-  cov_mat <- matrix(0.0, nrow = L, ncol = L, dimnames = list(link_ids, link_ids))
-  replay_info <- replay_ipw_point_if_general(
-    plan = plan,
-    control = ctrl,
-    callback_schema = TRUE,
-    use_nuisance_cache = use_nuisance_cache,
-    trace_env = trace_env,
-    state = state,
-    carrier = carrier,
-    callback = function(batch) {
-      centered <- sweep(batch$phi, 2L, mean_phi, FUN = "-")
-      if (any(!is.finite(centered))) {
-        cdid_abort("Nonfinite centered IF during covariance replay.", "cdid_ipw_numeric_error")
+  fast_cov <- if (!is.null(carrier) && is.null(trace_env) &&
+      exists("cdid_fast_retained_point_cov", mode = "function", inherits = TRUE)) {
+    cdid_fast_retained_point_cov(carrier, plan, ctrl, mean_phi, n_a, link_ids)
+  } else NULL
+  if (!is.null(fast_cov)) {
+    cov_mat <- fast_cov$cov_mat
+    replay_info <- fast_cov$replay_info
+  } else {
+    cov_mat <- matrix(0.0, nrow = L, ncol = L, dimnames = list(link_ids, link_ids))
+    replay_info <- replay_ipw_point_if_general(
+      plan = plan,
+      control = ctrl,
+      callback_schema = TRUE,
+      use_nuisance_cache = use_nuisance_cache,
+      trace_env = trace_env,
+      state = state,
+      carrier = carrier,
+      callback = function(batch) {
+        centered <- sweep(batch$phi, 2L, mean_phi, FUN = "-")
+        if (any(!is.finite(centered))) {
+          cdid_abort("Nonfinite centered IF during covariance replay.", "cdid_ipw_numeric_error")
+        }
+        cov_mat <<- cov_mat + crossprod(centered)
+        if (any(!is.finite(cov_mat))) {
+          cdid_abort("Nonfinite IF crossproduct or sum during covariance replay.", "cdid_ipw_numeric_error")
+        }
+        rm(centered)
       }
-      cov_mat <<- cov_mat + crossprod(centered)
-      if (any(!is.finite(cov_mat))) {
-        cdid_abort("Nonfinite IF crossproduct or sum during covariance replay.", "cdid_ipw_numeric_error")
-      }
-      rm(centered)
-    }
-  )
-  cov_mat <- cov_mat / n_a
+    )
+    cov_mat <- cov_mat / n_a
+  }
 
   list(
     covariance = cov_mat,
@@ -6127,6 +6145,17 @@ ipw_point_if_retained_reserve <- function(plan, control, live, work, envelope_co
 # point-link bindings) and the reserved plan identity (the same sealed object,
 # not a resealed or edited copy).
 ipw_point_if_retained_check <- function(carrier, plan, control, verify_plan = TRUE, expected_state = NULL) {
+  if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns("ipw_owner_seal_ok")) {
+    fk_vf <- cdid_fast_kernel("C_cdid_verify_fast")
+    if (!is.null(fk_vf) && isTRUE(fk_vf(2L, carrier, plan, expected_state, NULL))) {
+      if (isTRUE(verify_plan)) {
+        ipw_point_if_retained_plan_verify(plan, control)
+      }
+      carrier$verifications <- carrier$verifications + 1L
+      return(invisible(TRUE))
+    }
+  }
   if (!is.environment(carrier) || !identical(carrier$kind, "ipw_point_if_retained") ||
       !identical(parent.env(carrier), emptyenv()) ||
       !is.character(carrier$state) || length(carrier$state) != 1L || is.na(carrier$state) ||
@@ -6224,27 +6253,41 @@ ipw_point_if_retained_fill <- function(
   po <- plan$panel_owner
   carrier$state <- "filling"
   phi <- matrix(0, N, L); filled <- 0L; batches <- 0L; cn <- NULL
+  fk_set <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+    cdid_fast_kernel("C_cdid_matrix_set_rows")
+  } else NULL
   obs_cb <- function(batch) {
     rows <- seq.int(filled + 1L, min(N, filled + B))
     if (!is.list(batch) || !is.numeric(batch$a_index) || is.object(batch$a_index) ||
         !is.null(dim(batch$a_index)) ||
         !identical(as.double(batch$a_index), as.double(rows)) || !identical(batch$link_ids, plan$link_ids) ||
         !is.matrix(batch$phi) || !is.double(batch$phi) || nrow(batch$phi) != length(rows) || ncol(batch$phi) != L ||
-        any(!is.finite(batch$phi)) || !identical(batch$id, po$a_id[rows]) || !is.null(batch$components)) {
+        !identical(batch$id, po$a_id[rows]) || !is.null(batch$components)) {
       ipw_point_view_batch_abort("The producer chunk does not match the reserved retained point IF layout.")
+    }
+    if (is.null(fk_set)) {
+      if (any(!is.finite(batch$phi))) {
+        ipw_point_view_batch_abort("The producer chunk does not match the reserved retained point IF layout.")
+      }
     }
     if (filled == 0L) cn <<- colnames(batch$phi) else if (!identical(colnames(batch$phi), cn)) {
       ipw_point_view_batch_abort("The producer chunk link labels changed within one pass.")
     }
     ipw_point_if_retained_check(carrier, plan, control, expected_state = "filling")
-    phi[rows, ] <<- batch$phi
+    if (!is.null(fk_set)) {
+      if (!isTRUE(fk_set(phi, filled + 1L, batch$phi))) {
+        ipw_point_view_batch_abort("The producer chunk does not match the reserved retained point IF layout.")
+      }
+    } else {
+      phi[rows, ] <<- batch$phi
+    }
     filled <<- filled + length(rows); batches <<- batches + 1L
-    counts <- lapply(c("producer_passes", "slice_passes", "batches", "slices_emitted"),
-      function(nm) get(nm, carrier, inherits = FALSE))
+    p0 <- carrier$producer_passes; s0 <- carrier$slice_passes
+    b0 <- carrier$batches; e0 <- carrier$slices_emitted
     callback(batch)
     ipw_point_if_retained_check(carrier, plan, control, expected_state = "filling")
-    if (!identical(counts, lapply(c("producer_passes", "slice_passes", "batches", "slices_emitted"),
-        function(nm) get(nm, carrier, inherits = FALSE)))) {
+    if (!identical(p0, carrier$producer_passes) || !identical(s0, carrier$slice_passes) ||
+        !identical(b0, carrier$batches) || !identical(e0, carrier$slices_emitted)) {
       ipw_point_view_batch_abort("Retained point IF carrier counters changed during the callback.")
     }
   }
@@ -6341,8 +6384,8 @@ replay_ipw_point_if_retained <- function(carrier, plan, control, callback, trace
     a_seq <- seq.int(as.integer(a_start), as.integer(a_end))
     batches <- batches + 1L
     ipw_point_if_retained_check(carrier, plan, control, expected_state = "slicing")
-    counts <- lapply(c("producer_passes", "slice_passes", "batches", "slices_emitted"),
-      function(nm) get(nm, carrier, inherits = FALSE))
+    p0 <- carrier$producer_passes; s0 <- carrier$slice_passes
+    b0 <- carrier$batches; e0 <- carrier$slices_emitted
     callback(list(
       phi = full[a_seq, , drop = FALSE],
       id = plan$panel_owner$a_id[a_seq],
@@ -6352,8 +6395,8 @@ replay_ipw_point_if_retained <- function(carrier, plan, control, callback, trace
     # Match the original replay's post-callback source check, including the
     # last callback; the filled carrier's raw identity is checked here too.
     ipw_point_if_retained_check(carrier, plan, control, expected_state = "slicing")
-    if (!identical(counts, lapply(c("producer_passes", "slice_passes", "batches", "slices_emitted"),
-        function(nm) get(nm, carrier, inherits = FALSE)))) {
+    if (!identical(p0, carrier$producer_passes) || !identical(s0, carrier$slice_passes) ||
+        !identical(b0, carrier$batches) || !identical(e0, carrier$slices_emitted)) {
       ipw_point_view_batch_abort("Retained point IF carrier counters changed during the callback.")
     }
     verifications <- verifications + 2L
@@ -6516,24 +6559,33 @@ stream_ipw_point_covariance_plan <- function(plan, control, carrier = NULL) {
   mean_phi <- sum_phi / n_a
   names(mean_phi) <- link_ids
 
-  cov_mat <- matrix(0.0, nrow = L, ncol = L, dimnames = list(link_ids, link_ids))
-  gram_callback <- function(batch) {
-    centered <- sweep(batch$phi, 2L, mean_phi, FUN = "-")
-    if (any(!is.finite(centered))) {
-      cdid_abort("Nonfinite centered IF during covariance replay.", "cdid_ipw_numeric_error")
-    }
-    cov_mat <<- cov_mat + crossprod(centered)
-    if (any(!is.finite(cov_mat))) {
-      cdid_abort("Nonfinite IF crossproduct or sum during covariance replay.", "cdid_ipw_numeric_error")
-    }
-    rm(centered)
-  }
-  replay_info <- if (is.null(carrier)) {
-    replay_ipw_point_if_plan(plan = plan, control = control, callback = gram_callback)
+  fast_cov <- if (!is.null(carrier) &&
+      exists("cdid_fast_retained_point_cov", mode = "function", inherits = TRUE)) {
+    cdid_fast_retained_point_cov(carrier, plan, control, mean_phi, n_a, link_ids)
+  } else NULL
+  if (!is.null(fast_cov)) {
+    cov_mat <- fast_cov$cov_mat
+    replay_info <- fast_cov$replay_info
   } else {
-    replay_ipw_point_if_retained(carrier, plan, control, callback = gram_callback)
+    cov_mat <- matrix(0.0, nrow = L, ncol = L, dimnames = list(link_ids, link_ids))
+    gram_callback <- function(batch) {
+      centered <- sweep(batch$phi, 2L, mean_phi, FUN = "-")
+      if (any(!is.finite(centered))) {
+        cdid_abort("Nonfinite centered IF during covariance replay.", "cdid_ipw_numeric_error")
+      }
+      cov_mat <<- cov_mat + crossprod(centered)
+      if (any(!is.finite(cov_mat))) {
+        cdid_abort("Nonfinite IF crossproduct or sum during covariance replay.", "cdid_ipw_numeric_error")
+      }
+      rm(centered)
+    }
+    replay_info <- if (is.null(carrier)) {
+      replay_ipw_point_if_plan(plan = plan, control = control, callback = gram_callback)
+    } else {
+      replay_ipw_point_if_retained(carrier, plan, control, callback = gram_callback)
+    }
+    cov_mat <- cov_mat / n_a
   }
-  cov_mat <- cov_mat / n_a
 
   list(
     covariance = cov_mat,

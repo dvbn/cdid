@@ -38,10 +38,16 @@ chained_result_pick <- function(x, name, default = NULL) {
 }
 
 chained_result_versions <- function() {
+  hit <- get0("result_versions", envir = cdid_fast_kernel_cache, inherits = FALSE)
+  if (!is.null(hit)) return(hit)
   ver <- function(pkg) tryCatch(as.character(utils::packageVersion(pkg)),
                                 error = function(e) NA_character_)
-  list(cdid = ver("cdid"), did = ver("did"),
-       did_tested = unname(tested_upstream[["did"]]))
+  res <- list(cdid = ver("cdid"), did = ver("did"),
+              did_tested = unname(tested_upstream[["did"]]))
+  if (!is.na(res$cdid) && !is.na(res$did)) {
+    assign("result_versions", res, envir = cdid_fast_kernel_cache)
+  }
+  res
 }
 
 chained_result_estimator <- function(est_method, selection_est_method = NULL) {
@@ -224,48 +230,65 @@ chained_result_law_text <- function(inf) {
 # D61 results (`allow_missing_weight`) keep V = w_t1 by original id with NA
 # where a unit has no weight at the first calendar date.
 chained_result_frame <- function(frame_ids, units, n, inference, allow_missing_weight = FALSE) {
-  chained_result_need(is.atomic(frame_ids) && !is.null(frame_ids) &&
-    length(frame_ids) == n && !anyNA(frame_ids) && !anyDuplicated(frame_ids),
+  ids_ok <- is.atomic(frame_ids) && !is.null(frame_ids) && length(frame_ids) == n && !anyNA(frame_ids) &&
+    ((is.numeric(frame_ids) && !is.object(frame_ids) && !is.unsorted(frame_ids, strictly = TRUE)) ||
+     !anyDuplicated(frame_ids))
+  chained_result_need(ids_ok,
     paste0("`frame_ids` must be a complete, unique full-frame ID vector of length n_total = ", n,
            " given in influence-function row order (never inferred from first-period data)."))
-  frame <- data.frame(id = frame_ids, stringsAsFactors = FALSE)
-  frame$cohort <- NA_real_
-  frame$weight <- NA_real_
-  frame$cluster <- NA
-  frame$eligible <- NA
+  f_coh <- NULL
+  f_w <- NULL
+  f_cl <- NULL
+  f_el <- NULL
   if (!is.null(units)) {
     chained_result_need(is.data.frame(units) && "id" %in% names(units),
       "`units` must be a data.frame with an `id` column (any row order).")
-    chained_result_need(!anyNA(units$id) && !anyDuplicated(units$id) &&
-      length(units$id) == n && all(as.character(units$id) %in% as.character(frame_ids)),
-      "`units$id` must contain exactly the full-frame IDs once each.")
-    pos <- match(as.character(frame_ids), as.character(units$id))
+    same_id_order <- cdid_sexp_aliases(units$id, frame_ids) || identical(units$id, frame_ids)
+    if (!same_id_order) {
+      chained_result_need(!anyNA(units$id) && !anyDuplicated(units$id) &&
+        length(units$id) == n && all(as.character(units$id) %in% as.character(frame_ids)),
+        "`units$id` must contain exactly the full-frame IDs once each.")
+      pos <- match(as.character(frame_ids), as.character(units$id))
+    } else {
+      pos <- NULL
+    }
     if (!is.null(units$cohort)) {
-      coh <- as.double(units$cohort[pos])
+      coh <- as.double(if (is.null(pos)) units$cohort else units$cohort[pos])
       chained_result_need(!any(is.nan(coh) | coh == -Inf, na.rm = TRUE),
         "Frame cohorts must be finite dates, Inf (never treated) or NA (unknown frame-only cohort).")
-      frame$cohort <- coh
+      f_coh <- coh
     }
     if (!is.null(units$weight)) {
-      w <- as.double(units$weight[pos])
-      chained_result_need(if (isTRUE(allow_missing_weight)) all(is.na(w) | (is.finite(w) & w > 0)) else
-        all(is.finite(w)) && all(w > 0),
+      w <- as.double(if (is.null(pos)) units$weight else units$weight[pos])
+      w_ok <- if (isTRUE(allow_missing_weight)) {
+        all(is.na(w) | (is.finite(w) & w > 0))
+      } else if (length(w) > 0L && is.finite(sum(w))) {
+        min(w) > 0
+      } else {
+        all(is.finite(w)) && all(w > 0)
+      }
+      chained_result_need(w_ok,
         "Frame weights must be finite and positive for every full-frame unit.")
-      frame$weight <- w
+      f_w <- w
     }
     if (!is.null(units$cluster)) {
-      cl <- units$cluster[pos]
+      cl <- if (is.null(pos)) units$cluster else units$cluster[pos]
       chained_result_need(!anyNA(cl), "Frame cluster labels must not be NA.")
-      frame$cluster <- cl
+      f_cl <- cl
     }
     if (!is.null(units$eligible)) {
-      el <- units$eligible[pos]
+      el <- if (is.null(pos)) units$eligible else units$eligible[pos]
       chained_result_need(is.logical(el) && !anyNA(el),
         "`units$eligible` must be a complete logical vector.")
-      frame$eligible <- el
+      f_el <- el
     }
   }
-  has_cluster <- !all(is.na(frame$cluster))
+  if (is.null(f_coh)) f_coh <- rep(NA_real_, n)
+  if (is.null(f_w)) f_w <- rep(NA_real_, n)
+  if (is.null(f_cl)) f_cl <- rep(NA, n)
+  if (is.null(f_el)) f_el <- rep(NA, n)
+  frame <- cdid_fast_df(list(id = frame_ids, cohort = f_coh, weight = f_w, cluster = f_cl, eligible = f_el))
+  has_cluster <- !is.null(units$cluster) || !all(is.na(frame$cluster))
   if (isTRUE(inference$clustered)) {
     chained_result_need(has_cluster,
       "The inference is clustered: supply the aligned full-frame cluster labels in `units$cluster`.")
@@ -277,8 +300,12 @@ chained_result_frame <- function(frame_ids, units, n, inference, allow_missing_w
       "Cluster labels were supplied but the inference is not clustered; the labels cannot describe it.")
   }
   if (!all(is.na(frame$eligible))) {
-    cl <- if (has_cluster) frame$cluster else seq_len(n)
-    zero_el <- sum(!unique(cl) %in% cl[frame$eligible])
+    if (!has_cluster) {
+      zero_el <- n - sum(frame$eligible)
+    } else {
+      cl <- frame$cluster
+      zero_el <- sum(!unique(cl) %in% cl[frame$eligible])
+    }
     chained_result_need(zero_el == inference$n_zero_eligible_clusters,
       paste0("Eligibility flags imply ", zero_el, " zero-eligible cluster(s) but the inference reports ",
              inference$n_zero_eligible_clusters, "."))
@@ -416,7 +443,8 @@ chained_did_MP <- function(reporting, frame_ids, call, params, units = NULL,
     paste0("`reporting$if_full` must be an n_total x J numeric matrix (", n, " x ", J, ")."))
   chained_result_need(is.null(colnames(IF)) || identical(colnames(IF), ids),
     "`reporting$if_full` columns must follow `target_meta` order.")
-  chained_result_need(is.null(rownames(IF)) || identical(rownames(IF), as.character(frame_ids)),
+  chr_fids <- cdid_fast_chr_frame_ids(frame_ids, n)
+  chained_result_need(is.null(rownames(IF)) || identical(rownames(IF), chr_fids),
     "`reporting$if_full` rownames disagree with `frame_ids`.")
   Omega <- inference$Omega
   chained_result_need(is.matrix(Omega) && is.numeric(Omega) && all(dim(Omega) == J) &&
@@ -424,7 +452,9 @@ chained_did_MP <- function(reporting, frame_ids, call, params, units = NULL,
     "`reporting$inference$Omega` must be the J x J asymptotic covariance in `target_meta` order.")
   vc <- inference$vcov
   if (!is.null(vc)) {
-    chained_result_need(isTRUE(all.equal(unname(Omega), unname(vc) * n)),
+    vc_ok <- (!anyNA(Omega) && !anyNA(vc) && max(abs(Omega - vc * n)) <= 1e-12) ||
+      isTRUE(all.equal(unname(Omega), unname(vc) * n))
+    chained_result_need(vc_ok,
       "`reporting$inference$Omega` must equal n_total * `reporting$inference$vcov`.")
   }
   crit <- reporting$cband_crit_val
@@ -432,33 +462,49 @@ chained_did_MP <- function(reporting, frame_ids, call, params, units = NULL,
     "`reporting$cband_crit_val` must be a single critical value (NA when nothing is supported).")
   # Selection-before-arithmetic contract: unavailable targets are NA everywhere,
   # never zero; available targets are finite with finite IF columns.
-  if (any(avail)) {
-    chained_result_need(all(is.finite(est[avail])) && all(is.finite(IF[, avail, drop = FALSE])),
+  all_avail <- all(avail)
+  IF_avail <- if (all_avail) IF else if (any(avail)) IF[, avail, drop = FALSE] else NULL
+  if (all_avail) {
+    chained_result_need((is.finite(sum(est)) || all(is.finite(est))) &&
+      (is.finite(sum(IF_avail)) || all(is.finite(IF_avail))),
+      "Available targets must have finite estimates and finite influence-function columns.")
+  } else if (any(avail)) {
+    chained_result_need(all(is.finite(est[avail])) &&
+      (is.finite(sum(IF_avail)) || all(is.finite(IF_avail))),
       "Available targets must have finite estimates and finite influence-function columns.")
   }
-  if (any(!avail)) {
+  if (!all_avail) {
     chained_result_need(all(is.na(est[!avail])) && all(is.na(se[!avail])) &&
       all(is.na(IF[, !avail, drop = FALSE])) && all(is.na(Omega[!avail, ])) && all(is.na(Omega[, !avail])),
       "Unavailable targets must stay NA in estimates, SEs, IF columns and covariance (never zero-filled).")
   }
   if (any(avail)) {
-    scale_ok <- isTRUE(all.equal(unname(reporting$analytical_se[avail]),
-                                 unname(sqrt(pmax(0, diag(Omega)[avail]) / n))))
+    om_diag <- if (J >= 1L) Omega[seq.int(1L, J * J, by = J + 1L)] else numeric(0L)
+    ase_av <- if (all_avail) reporting$analytical_se else reporting$analytical_se[avail]
+    om_av <- if (all_avail) om_diag else om_diag[avail]
+    exp_se <- sqrt(pmax(0, om_av) / n)
+    scale_ok <- (!anyNA(ase_av) && !anyNA(exp_se) && max(abs(ase_av - exp_se)) <= 1e-12) ||
+      isTRUE(all.equal(unname(ase_av), unname(exp_se)))
     chained_result_need(scale_ok,
       "`analytical_se` must equal sqrt(diag(Omega)/n_total): Omega is not on did's V_analytical scale.")
   }
   certificate <- reporting$numerical_certificate
-  defaults <- formals(did::DIDparams)
+  defaults <- get0("did_DIDparams_defaults", envir = cdid_fast_kernel_cache, inherits = FALSE)
+  if (is.null(defaults)) {
+    defaults <- formals(did::DIDparams)
+    assign("did_DIDparams_defaults", defaults, envir = cdid_fast_kernel_cache)
+  }
   request <- list(bstrap = chained_result_pick(params, "bstrap", defaults$bstrap),
                   cband = chained_result_pick(params, "cband", defaults$cband),
                   biters = chained_result_pick(params, "biters", defaults$biters))
-  zero_law <- !any(avail) || (all(est[avail] == 0) && all(IF[, avail, drop = FALSE] == 0))
+  zero_law <- !any(avail) || (all(est[avail] == 0) && all(IF_avail == 0))
   flags <- chained_result_inference_flags(inference, certificate,
     requested = request, what = "reported-cell", zero_law = zero_law, endpoint = "cells")
   if (!flags$cband && any(avail) && !is.na(crit)) {
-    deterministic <- all(est[avail] == 0) && all(IF[, avail, drop = FALSE] == 0)
+    deterministic <- zero_law
     expected <- if (deterministic) 0 else stats::qnorm(1 - params$alp / 2)
-    chained_result_need(isTRUE(all.equal(unname(crit), expected)),
+    crit_ok <- (is.finite(crit) && abs(crit - expected) <= 1e-12) || isTRUE(all.equal(unname(crit), expected))
+    chained_result_need(crit_ok,
       "The pointwise critical value does not match `params$alp`.")
   }
   frame <- chained_result_frame(frame_ids, units, n, inference,
@@ -481,9 +527,9 @@ chained_did_MP <- function(reporting, frame_ids, call, params, units = NULL,
     if (!is.null(bif)) {
       chained_result_need(is.matrix(bif) && nrow(bif) == n,
         "`basis$if_full` must have one row per full-frame unit.")
-      chained_result_need(is.null(rownames(bif)) || identical(rownames(bif), as.character(frame_ids)),
+      chained_result_need(is.null(rownames(bif)) || identical(rownames(bif), chr_fids),
         "`basis$if_full` rownames disagree with `frame_ids`.")
-      rownames(bif) <- as.character(frame_ids)
+      rownames(bif) <- chr_fids
       basis$if_full <- bif
     }
   }
@@ -525,13 +571,17 @@ chained_did_MP <- function(reporting, frame_ids, call, params, units = NULL,
   chained_result_need(all(tm$g %in% dp$glist) && all(tm$time %in% dp$tlist),
     "Reported cohorts/dates must belong to the explicit `glist`/`tlist`.")
 
-  dimnames(IF) <- list(as.character(frame_ids), ids)
+  dimnames(IF) <- list(chr_fids, ids)
   dimnames(Omega) <- list(ids, ids)
   mp <- did::MP(group = as.double(tm$g), t = as.double(tm$time), att = unname(as.double(est)),
                 V_analytical = Omega, se = unname(as.double(se)), c = unname(crit), inffunc = IF,
                 n = n, W = W, Wpval = Wpval, aggte = NULL, alp = params$alp, DIDparams = dp)
-  deterministic <- avail & est == 0 & colSums(abs(IF)) == 0
-  deterministic[is.na(deterministic)] <- FALSE
+  zero_est <- avail & est == 0
+  deterministic <- rep.int(FALSE, J)
+  if (any(zero_est)) {
+    z_idx <- which(zero_est)
+    deterministic[z_idx] <- colSums(abs(IF[, z_idx, drop = FALSE])) == 0
+  }
   mp$chained <- list(
     estimator = chained_result_estimator(params$est_method, params$selection_est_method),
     references = chained_result_references(params$est_method, params$selection_est_method), versions = versions,
@@ -964,7 +1014,8 @@ chained_result_gmm_text <- function(cov_h) {
   if (!is.list(cov_h) || !is.character(cov_h$weighting_canonical)) return(invisible(NULL))
   unweighted <- identical(cov_h$weighting_canonical, "identity")
   weighting <- if (unweighted) "identity" else
-    if (identical(cov_h$weighting_canonical, "optimal")) "optimal (two-step)" else cov_h$weighting_canonical
+    if (identical(cov_h$weighting_canonical, "optimal")) "optimal (two-step)" else
+    if (identical(cov_h$weighting_canonical, "within")) "within (analytical unit-FE levels covariance)" else cov_h$weighting_canonical
   reason <- chained_result_trigger_text(cov_h$trigger_reason)
   lambda <- cov_h$lambda
   regularization <- if (unweighted) "not applicable" else if (isTRUE(cov_h$handler_invoked)) {
@@ -1064,6 +1115,7 @@ summary.cdid_MP <- function(object, ...) {
     cat("  Exact-zero reference cells (no test statistic): ", sum(ch$deterministic_reference), ".\n", sep = "")
   }
   chained_result_units_text(ch, object$n)
+  chained_result_eligibility_text(ch$reference_eligibility)
   chained_result_selection_text(ch$selection)
   chained_result_pt_text(ch$pt, object$DIDparams$base_period)
   chained_result_gmm_text(ch$covariance_handling)
@@ -1081,6 +1133,24 @@ summary.cdid_MP <- function(object, ...) {
 
 print.cdid_MP <- function(x, ...) {
   summary(x, ...)
+}
+
+# Report restricted comparisons separately from treated populations.
+chained_result_eligibility_text <- function(el) {
+  if (is.null(el)) return(invisible(NULL))
+  tg <- el$targets
+  if (identical(el$status, "restricted")) {
+    r <- tg[tg$restricted, , drop = FALSE]
+    cat("Restricted comparisons for cohort(s) ", paste(fmt_design_num(r$g), collapse = ", "),
+      ". See $chained$reference_eligibility.\n", sep = "")
+    tr <- r[r$n_treated_excluded > 0L, , drop = FALSE]
+    if (nrow(tr))
+      cat("Effects for ", paste0("cohort ", fmt_design_num(tr$g), " cover ",
+        tr$n_treated_eligible, " of ", tr$n_treated, " treated units", collapse = ", "), ".\n", sep = "")
+  }
+  n_aux <- if (is.data.frame(el$auxiliary_unavailable)) nrow(el$auxiliary_unavailable) else 0L
+  if (n_aux) cat("  ", n_aux, " auxiliary pretrend comparison(s) unavailable under missing_reference = \"exclude\".\n", sep = "")
+  invisible(NULL)
 }
 
 tidy.cdid_MP <- function(x, ...) {
@@ -1269,6 +1339,13 @@ ggdid.cdid_AGGTEobj <- function(object, ylim = NULL, xlab = NULL, ylab = NULL, t
 chained_result_pt_text <- function(pt, base_period = NULL) {
   if (!is.list(pt) || !is.character(pt$pt_assumption)) return(invisible(NULL))
   bp <- if (is.character(base_period) && length(base_period) == 1L) paste0("; base_period = \"", base_period, "\"") else ""
+  if (identical(pt$pt_assumption, "ctrl")) {
+    cat("  Parallel trends: PT-ctrl from stored date ", fmt_design_num(pt$pt_start),
+      " (common untreated trends across control pools)", bp, ".\n", sep = "")
+    if (isTRUE(pt$no_extra_restrictions)) cat("    No additional control-pool restrictions (PT-post-equivalent model).\n") else
+      cat("    Merged pre-period control-pool parameters: ", pt$n_merged_pre_parameters, ".\n", sep = "")
+    return(invisible(NULL))
+  }
   if (!identical(pt$pt_assumption, "all")) {
     cat("  Parallel trends: PT-post", bp, ".\n", sep = "")
     return(invisible(NULL))

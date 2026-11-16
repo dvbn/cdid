@@ -21,6 +21,12 @@
 #     explicit total log-weight gradient g).
 # Every unit keeps ONE row with all channels; W and C^r are frozen data. The
 # static custom contract (callback output validation, no recentering) is kept.
+#
+# Issue #16 (missing_reference = "exclude"): a recipe of a restricted
+# eligibility context E_g reads its A rows, observed pair rows, rate supports,
+# risk sets and influence-function channels inside E_g only; the empirical
+# normalizer stays N and every original unit keeps its IF row (zero in the
+# channels of contexts that exclude it). Unrestricted recipes are unchanged.
 
 reference_ipw_abort <- function(message, class = "input", extra = list()) {
   stop(structure(c(list(message = message, call = NULL), extra),
@@ -43,6 +49,7 @@ validate_reference_ipw_backend <- function(backend) {
 reference_ipw_support <- function(reader, spec, ref, ctrl) {
   st <- reader$state
   a_rows <- chained_reference_cohort_rows(st, spec$cohort, "A")
+  if (chained_reference_restricted(ref)) a_rows <- a_rows[chained_reference_eligible(ref, spec$reference, a_rows)]
   pair_mass <- repeat_mass <- 0; n_pair <- 0L
   if (length(a_rows)) for (s0 in seq.int(1L, length(a_rows), by = ctrl$max_chunk_rows)) {
     rr <- a_rows[seq.int(s0, min(length(a_rows), s0 + ctrl$max_chunk_rows - 1L))]
@@ -65,6 +72,7 @@ reference_ipw_risk_set <- function(reader, spec, supports, ref, ctrl) {
   rows <- integer(); kk <- integer(); dy <- numeric()
   for (i in seq_along(spec$cohorts)) {
     a_rows <- chained_reference_cohort_rows(st, spec$cohorts[i], "A")
+    if (chained_reference_restricted(ref)) a_rows <- a_rows[chained_reference_eligible(ref, spec$reference, a_rows)]
     if (length(a_rows)) for (s0 in seq.int(1L, length(a_rows), by = ctrl$max_chunk_rows)) {
       rr <- a_rows[seq.int(s0, min(length(a_rows), s0 + ctrl$max_chunk_rows - 1L))]
       hit <- cp04_pair_rows(reader, rr, spec$pair, TRUE)
@@ -241,6 +249,12 @@ fit_reference_ipw_backend <- function(reader, link_views, control, glm_control, 
   bound <- metadata + model_bound
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "reference IPW fits")
   supports <- lapply(specs, function(s) reference_ipw_support(reader, s, reference, ctrl))
+  # Issue #16: a restricted model's observed risk set is counted inside its
+  # eligibility context (the owner views count the full roster).
+  if (chained_reference_restricted(reference)) for (m in seq_len(Tm)) {
+    if (reference$recipes$eligibility_index[models[[m]]$reference] != 0L)
+      models[[m]]$n_observers <- as.integer(sum(vapply(models[[m]]$support_ids, function(j) supports[[j]]$n_pair, integer(1))))
+  }
   fits <- lapply(seq_len(Tm), function(m) {
     sp <- models[[m]]
     if (custom) reference_ipw_custom_fit(reader, sp, supports, reference, custom_est_method, custom_dots,
@@ -306,9 +320,11 @@ evaluate_reference_ipw_if_chunk <- function(backend, rows, links, scale = "frame
   B <- length(rows); N <- st$N
   ci <- st$cohort_index[rows]; A <- st$a_index[rows] > 0L
   up <- matrix(0, B, length(pre$sids)); hits <- vector("list", length(pre$sids))
+  restricted <- chained_reference_restricted(ref)
   for (j in seq_along(pre$sids)) {
     s <- backend$support_specs[[pre$sids[j]]]; u <- backend$supports[[pre$sids[j]]]
-    ia <- which(ci == s$cohort & A)
+    ia <- if (restricted) which(ci == s$cohort & A & chained_reference_eligible(ref, s$reference, rows)) else
+      which(ci == s$cohort & A)
     if (!length(ia)) { hits[[j]] <- list(obs = integer(), dy = numeric()); next }
     hit <- cp04_pair_rows(reader, rows[ia], s$pair, TRUE)
     W <- chained_reference_weight(ref, s$reference, rows[ia])

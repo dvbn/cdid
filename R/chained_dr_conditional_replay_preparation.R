@@ -23,6 +23,21 @@ dr_conditional_replay_preparation <- function(backend, links, B) {
   # The original map admission precedes even the temporary old envelope maps.
   cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
     maps, c(backend$accounting$work_ops_bound, 64 * maps), 0, "separate DR dependency metadata")
+  can_cache <- cdid_are_default_fns(c(
+    "dr_separate_if_envelope",
+    "dr_conditional_separate_ordinary_if_envelope",
+    "dr_conditional_separate_ordinary_inventory",
+    "selection_if_budget",
+    "cp04_budget"
+  ))
+  if (can_cache) {
+    hit <- get0("dr_cond_prep_cache", envir = cdid_sel_cache, inherits = FALSE)
+    if (is.list(hit) && identical(hit$backend_ref, .subset2(backend, "ref")) &&
+        gmm_sexp_aliases(hit$backend, backend) && identical(hit$B, B) &&
+        identical(hit$links, links)) {
+      return(hit$plan)
+    }
+  }
   full <- dr_separate_if_envelope(backend, B, links, FALSE)
   tail_B <- N %% B; if (!tail_B) tail_B <- B
   sel <- backend$selection_backend
@@ -88,7 +103,17 @@ dr_conditional_replay_preparation <- function(backend, links, B) {
   plan$entries <- unname(cp04_payload(plan)["entries"]) + 64
   if (plan$entries > retained)
     dr_corollary1_abort("Conditional DR preparation payload bound underestimated.", "bound")
-  ipw_owner_seal(plan, "dr_conditional_replay_preparation")
+  sealed <- ipw_owner_seal(plan, "dr_conditional_replay_preparation")
+  if (can_cache) {
+    assign("dr_cond_prep_cache", list(
+      backend = backend,
+      backend_ref = .subset2(backend, "ref"),
+      B = B,
+      links = links,
+      plan = sealed
+    ), envir = cdid_sel_cache)
+  }
+  sealed
 }
 
 dr_conditional_replay_check <- function(plan, backend, links, B) {

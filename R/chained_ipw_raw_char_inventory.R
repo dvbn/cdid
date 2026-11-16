@@ -13,8 +13,29 @@ ipw_raw_record_char_inventory <- function(metadata, frame, aux, control,
   ipw_owner_safe_sum(c(retained, floor), envelope$max_matrix_entries,
     "raw-IPW character inventory initial scratch")
   peak <- floor; scan_work <- 0
+  fast_inv_ok <- is.list(envelope) &&
+    is.numeric(envelope$max_matrix_entries) && length(envelope$max_matrix_entries) == 1L &&
+    !is.na(envelope$max_matrix_entries) &&
+    is.numeric(envelope$max_work_ops) && length(envelope$max_work_ops) == 1L &&
+    !is.na(envelope$max_work_ops) &&
+    is.numeric(retained) && length(retained) == 1L && is.finite(retained) && retained >= 0 &&
+    is.numeric(work) && length(work) == 1L && is.finite(work) && work >= 0 &&
+    exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns(c("ipw_owner_safe_sum", "ipw_owner_safe_product"))
   scan <- function(x) {
     v <- ipw_fitted_view_char_bytes(x, control)
+    if (fast_inv_ok) {
+      cand_peak <- max(peak, floor + v$charged_slots)
+      cand_sw <- scan_work + v$work_ops_bound
+      if (is.finite(cand_peak) && retained + cand_peak <= 4503599627370495 &&
+          retained + cand_peak <= envelope$max_matrix_entries &&
+          is.finite(cand_sw) && work + cand_sw <= 4503599627370495 &&
+          work + cand_sw <= envelope$max_work_ops) {
+        peak <<- cand_peak
+        scan_work <<- cand_sw
+        return(v)
+      }
+    }
     peak <<- max(peak, floor + v$charged_slots)
     ipw_owner_safe_sum(c(retained, peak), envelope$max_matrix_entries,
       "raw-IPW character inventory source scratch")

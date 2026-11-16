@@ -340,8 +340,20 @@ ipw_owner_sorted_lookup_vectorizable <- function(x, sorted_vec, left, right) {
 ipw_owner_match_sorted_double <- function(x, sorted_vec, left = 1, right = length(sorted_vec)) {
   m <- length(x)
   if (m > 0L && ipw_owner_sorted_lookup_vectorizable(x, sorted_vec, left, right)) return(match(x, sorted_vec))
+  if (m == 0L || left > right) {
+    return(if (length(sorted_vec) <= .Machine$integer.max) rep.int(NA_integer_, m) else rep.int(NA_real_, m))
+  }
+  if (m >= 64L) {
+    fk_fn <- get0("cdid_fast_kernel", mode = "function", inherits = TRUE)
+    if (!is.null(fk_fn)) {
+      fk <- fk_fn("C_cdid_match_sorted_double")
+      if (!is.null(fk)) {
+        res <- fk(x, sorted_vec, left, right)
+        if (!is.null(res)) return(res)
+      }
+    }
+  }
   out <- if (length(sorted_vec) <= .Machine$integer.max) rep.int(NA_integer_, m) else rep.int(NA_real_, m)
-  if (m == 0L || left > right) return(out)
   for (i in seq_len(m)) {
     lo <- as.double(left); hi <- as.double(right); target <- x[i]
     while (lo <= hi) {
@@ -1112,6 +1124,10 @@ construct_ipw_panel_owner <- function(
 
   # 2. Preflight BEFORE scanning any column values or sorting
   preflight <- preflight_ipw_panel_owner(n_rows = n, control = ctrl)
+  if (exists("cdid_fast_panel_owner", mode = "function", inherits = TRUE)) {
+    fast_po <- cdid_fast_panel_owner(data, hdr, preflight, owner_id)
+    if (!is.null(fast_po)) return(fast_po)
+  }
   step <- preflight$effective_chunk_rows
 
   # 3. Chunked raw value validation (NO global pairwise outcome subtraction!)
@@ -1390,6 +1406,13 @@ construct_ipw_panel_owner_prepared <- function(data, idname, tname, yname, gname
 # (shared by both constructors; unchanged fields, counts, postings and seal).
 ipw_panel_owner_assemble <- function(owner_id, ctrl, preflight, cols, n, id_is_num, id_storage, id_byte_metadata,
                                      ids_key, nu, ui, time_ord, y_ord, g_ord, validation_chunks, actual_ops) {
+  if (exists("cdid_fast_panel_assemble", mode = "function", inherits = TRUE)) {
+    fast_asm <- cdid_fast_panel_assemble(
+      owner_id, ctrl, preflight, cols, n, id_is_num, id_storage, id_byte_metadata,
+      ids_key, nu, ui, time_ord, y_ord, g_ord, validation_chunks, actual_ops
+    )
+    if (!is.null(fast_asm)) return(fast_asm)
+  }
   # Preserve original integer storage if input ID was integer, else canonical double/character
   ids <- if (identical(id_storage, "integer")) as.integer(ids_key) else ids_key
   all_times <- sort(unique(time_ord), method = "radix")
@@ -1767,6 +1790,13 @@ construct_ipw_frame_owner <- function(
     n_a_observed_rows = panel_owner$n_a_observed_rows,
     control = ctrl
   )
+  if (exists("cdid_fast_frame_owner", mode = "function", inherits = TRUE)) {
+    fast_fo <- cdid_fast_frame_owner(
+      panel_owner, id, Z, weights, frame_g, allow_frame_only,
+      frame_id, design_on_A_only, hdr, preflight
+    )
+    if (!is.null(fast_fo)) return(fast_fo)
+  }
   step <- preflight$effective_chunk_rows
 
   # 3. Validate id, Z, weights, frame_g in bounded chunks
@@ -2086,7 +2116,8 @@ ipw_frame_owner_assemble <- function(panel_owner, id, Z, weights, frame_g, ctrl,
     w_a <- if (is_canonical_a_input) w_all else as.double(w_all[a_pos_in_supplied])
   }
 
-  sum_w_a <- sum(w_a)
+  unit_weights_on_a <- !weights_supplied || all(w_a == 1.0)
+  sum_w_a <- if (unit_weights_on_a) as.double(n_a) else sum(w_a)
   if (!is.finite(sum_w_a) || sum_w_a <= 0) {
     cdid_ipw_owner_abort(
       "Total A-unit mechanical case weight must be finite and positive.",
@@ -2096,14 +2127,18 @@ ipw_frame_owner_assemble <- function(panel_owner, id, Z, weights, frame_g, ctrl,
 
   a_cohorts <- panel_owner$a_cohorts
   a_cohort_index <- panel_owner$a_cohort_index
-  # Stable grouping preserves each old sum's exact input order, avoiding N scans
-  # for every global cohort (which may outnumber dates and approach N).
-  cohort_order <- order(a_cohort_index, method = "radix")
-  cohort_end <- cumsum(as.double(panel_owner$cohort_a_count))
-  cohort_start <- cohort_end - panel_owner$cohort_a_count + 1
-  cohort_a_weight <- vapply(seq_along(a_cohorts), function(j) {
-    sum(w_a[cohort_order[seq.int(cohort_start[j], cohort_end[j])]])
-  }, numeric(1L))
+  if (unit_weights_on_a) {
+    cohort_a_weight <- as.double(panel_owner$cohort_a_count)
+  } else {
+    # Stable grouping preserves each old sum's exact input order, avoiding N scans
+    # for every global cohort (which may outnumber dates and approach N).
+    cohort_order <- order(a_cohort_index, method = "radix")
+    cohort_end <- cumsum(as.double(panel_owner$cohort_a_count))
+    cohort_start <- cohort_end - panel_owner$cohort_a_count + 1
+    cohort_a_weight <- vapply(seq_along(a_cohorts), function(j) {
+      sum(w_a[cohort_order[seq.int(cohort_start[j], cohort_end[j])]])
+    }, numeric(1L))
+  }
   if (any(!is.finite(cohort_a_weight) | cohort_a_weight <= 0)) {
     cdid_ipw_owner_abort(
       "Cohort A-unit weight sums must be finite and positive.",
@@ -2114,21 +2149,36 @@ ipw_frame_owner_assemble <- function(panel_owner, id, Z, weights, frame_g, ctrl,
 
   # Preserve singleton, panel-unobserved, and optional frame-only unit metadata
   nu <- panel_owner$n_total_units
-  unit_weights_all <- rep(NA_real_, nu)
-  if (length(in_panel_sup) > 0L) {
-    unit_weights_all[unit_pos_of_supplied[in_panel_sup]] <- w_all[in_panel_sup]
+  if (length(absent_from_panel) == 0L && identical(unit_pos_of_supplied, seq_len(nu))) {
+    unit_weights_all <- w_all
+  } else {
+    unit_weights_all <- rep(NA_real_, nu)
+    if (length(in_panel_sup) > 0L) {
+      unit_weights_all[unit_pos_of_supplied[in_panel_sup]] <- w_all[in_panel_sup]
+    }
   }
   actual_ops <- actual_ops + 2 * n_a + nu
 
-  frame_only_units <- data.frame(
-    supplied_pos = absent_from_panel,
-    id = id[absent_from_panel],
-    g = if (!is.null(frame_g)) as.double(frame_g[absent_from_panel]) else rep(NA_real_, length(absent_from_panel)),
-    weight = w_all[absent_from_panel],
-    n_rows = rep(0L, length(absent_from_panel)),
-    n_obs = rep(0L, length(absent_from_panel)),
-    stringsAsFactors = FALSE
-  )
+  frame_only_units <- if (exists("cdid_fast_df", mode = "function", inherits = TRUE)) {
+    cdid_fast_df(list(
+      supplied_pos = absent_from_panel,
+      id = id[absent_from_panel],
+      g = if (!is.null(frame_g)) as.double(frame_g[absent_from_panel]) else rep(NA_real_, length(absent_from_panel)),
+      weight = w_all[absent_from_panel],
+      n_rows = rep(0L, length(absent_from_panel)),
+      n_obs = rep(0L, length(absent_from_panel))
+    ))
+  } else {
+    data.frame(
+      supplied_pos = absent_from_panel,
+      id = id[absent_from_panel],
+      g = if (!is.null(frame_g)) as.double(frame_g[absent_from_panel]) else rep(NA_real_, length(absent_from_panel)),
+      weight = w_all[absent_from_panel],
+      n_rows = rep(0L, length(absent_from_panel)),
+      n_obs = rep(0L, length(absent_from_panel)),
+      stringsAsFactors = FALSE
+    )
+  }
 
   stopifnot(actual_ops <= preflight$work_ops_bound)
 
@@ -2949,13 +2999,19 @@ construct_ipw_nuisance_view <- function(
     cand_ops <- cand_ops + 1
   }
 
-  sup_info <- ipw_owner_chunked_pair_support(
-    frame_owner = frame_owner,
-    pair_desc = pair_desc,
-    coh_desc = coh_desc,
-    step = step,
-    require_support = require_support
-  )
+  fast_sup_fn <- get0("cdid_fast_owner_pair_support", mode = "function", inherits = TRUE)
+  sup_info <- if (!is.null(fast_sup_fn)) {
+    fast_sup_fn(frame_owner, pair_desc, coh_desc, step, require_support)
+  } else NULL
+  if (is.null(sup_info)) {
+    sup_info <- ipw_owner_chunked_pair_support(
+      frame_owner = frame_owner,
+      pair_desc = pair_desc,
+      coh_desc = coh_desc,
+      step = step,
+      require_support = require_support
+    )
+  }
   actual_ops <- sup_info$ops + cand_ops
   stopifnot(actual_ops <= preflight$work_ops_bound)
 
@@ -3472,13 +3528,19 @@ construct_ipw_link_view <- function(
   }
   if (is.null(sup_info)) {
     if (link_context) construction_context$link_scans <- construction_context$link_scans + 1
-    sup_info <- ipw_owner_chunked_pair_support(
-      frame_owner = frame_owner,
-      pair_desc = pair_desc,
-      coh_desc = coh_desc,
-      step = step,
-      require_support = require_support
-    )
+    fast_sup_fn <- get0("cdid_fast_owner_pair_support", mode = "function", inherits = TRUE)
+    if (!is.null(fast_sup_fn)) {
+      sup_info <- fast_sup_fn(frame_owner, pair_desc, coh_desc, step, require_support)
+    }
+    if (is.null(sup_info)) {
+      sup_info <- ipw_owner_chunked_pair_support(
+        frame_owner = frame_owner,
+        pair_desc = pair_desc,
+        coh_desc = coh_desc,
+        step = step,
+        require_support = require_support
+      )
+    }
   }
 
   link_view <- structure(

@@ -112,12 +112,20 @@ selection_use_legacy_consumer <- function(reader, selection_model = "pair_logit"
 # and per-pair-cohort channel maps for a fitted cdid_selection_models object.
 # D60: a recipe-indexed fit has one repeat-rate coordinate a_k^{g,U} per
 # (cohort, recipe) of its pair-cohorts (`rates_ref` gives each one's recipe).
-build_selection_upstream_map <- function(sel_fit, cohorts_a = NULL) {
+build_selection_upstream_map <- function(sel_fit, cohorts_a = NULL, extra_rates_kr = NULL) {
   if (!inherits(sel_fit, "cdid_selection_models_table")) validate_selection_models(sel_fit)
   pc_ref <- if (is.null(sel_fit$reference_ref)) NULL else vapply(sel_fit$pair_cohorts, `[[`, integer(1), "reference")
   rates_ref <- NULL
-  if (!is.null(pc_ref)) {
-    kr <- unique(data.frame(k = vapply(sel_fit$pair_cohorts, `[[`, integer(1), "cohort"), r = pc_ref))
+  if (!is.null(pc_ref) || !is.null(extra_rates_kr)) {
+    base_kr <- if (!is.null(pc_ref)) {
+      data.frame(k = vapply(sel_fit$pair_cohorts, `[[`, integer(1), "cohort"), r = pc_ref)
+    } else {
+      data.frame(k = integer(0), r = integer(0))
+    }
+    if (!is.null(extra_rates_kr)) {
+      base_kr <- rbind(base_kr, data.frame(k = as.integer(extra_rates_kr$k), r = as.integer(extra_rates_kr$r)))
+    }
+    kr <- unique(base_kr)
     kr <- kr[order(kr$k, kr$r, method = "radix"), , drop = FALSE]
     cohorts_a <- kr$k; rates_ref <- as.integer(kr$r)
   } else if (is.null(cohorts_a)) {
@@ -347,9 +355,34 @@ selection_blocks_diagnostic_list <- function(sel_fit) {
 # 1. Chained IPW with General Selection Models
 # ------------------------------------------------------------------------------
 
+# Issue #16: observed risk-set count of one model inside its recipe's
+# eligibility context: eligible A rows of the model cohorts observed at both
+# pair dates. The link-view count (full roster) stays the admission and
+# allocation-planning bound; this is the count the restricted fit delivers.
+cp04_reference_risk_count <- function(reader, spec, reference, ctrl) {
+  st <- reader$state; n <- 0L
+  for (k in spec$cohorts) {
+    a_rows <- chained_reference_cohort_rows(st, k, "A")
+    a_rows <- a_rows[chained_reference_eligible(reference, spec$reference, a_rows)]
+    if (length(a_rows)) for (s0 in seq.int(1L, length(a_rows), by = ctrl$max_chunk_rows)) {
+      rr <- a_rows[seq.int(s0, min(length(a_rows), s0 + ctrl$max_chunk_rows - 1L))]
+      n <- n + as.integer(sum(cp04_pair_rows(reader, rr, spec$pair)$S == 1))
+    }
+  }
+  n
+}
+
 cp04_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, glm_control, ctrl, reference = NULL) {
   st <- reader$state
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+  # Issue #16: a restricted recipe's risk set is its eligible observers; the
+  # native treatment kernel scans the full roster and is bypassed for it.
+  restricted <- chained_reference_recipe_restricted(reference, spec$reference)
+  fast <- if (restricted) NULL else cdid_fast_sel_trt_fit(
+    2L, reader, spec, sel_fit, up_map, glm_control, reference,
+    cols_info = list(Z_a = if (is.null(reference)) frame$Z_a else NULL)
+  )
+  if (!is.null(fast)) return(fast)
   p <- if (is.null(reference)) frame$n_covariates else length(reference$x_columns)
   m <- length(spec$cohorts)
   n <- spec$n_observers
@@ -366,8 +399,10 @@ cp04_selection_treatment_fit <- function(reader, spec, sel_fit, up_map, glm_cont
   for (start in seq.int(1L, st$N, by = ctrl$max_chunk_rows)) {
     rows <- seq.int(start, min(st$N, start + ctrl$max_chunk_rows - 1L))
     ci <- match(st$cohort_index[rows], spec$cohorts)
-    rows <- rows[!is.na(ci)]
-    ci <- ci[!is.na(ci)]
+    in_risk <- !is.na(ci)
+    if (restricted) in_risk <- in_risk & chained_reference_eligible(reference, spec$reference, rows)
+    rows <- rows[in_risk]
+    ci <- ci[in_risk]
     if (!length(rows)) next
     hit <- cp04_pair_rows(reader, rows, spec$pair, TRUE)
     keep <- which(hit$S == 1)
@@ -566,6 +601,10 @@ fit_cp04_selection_models <- function(reader, link_views, control = ipw_owner_co
   cp04_budget(ctrl, c(base_retained, trt_models_bound), trt_scratch, c(cum_work, external_work_ops),
               sel_fit$accounting$owned_entries + trt_models_bound, "CP04 selection-models fits")
 
+  # Issue #16: a restricted model allocates and verifies its actual eligible
+  # observed risk set; the view counts above remain the admission bounds.
+  for (j in seq_along(ts)) if (chained_reference_recipe_restricted(reference, ts[[j]]$reference))
+    ts[[j]]$n_observers <- cp04_reference_risk_count(reader, ts[[j]], reference, ctrl)
   treatments <- lapply(ts, function(s) cp04_selection_treatment_fit(reader, s, sel_fit, up_map, gc, ctrl, reference))
   selections <- selection_blocks_diagnostic_list(sel_fit)
   selection_specs <- sel_fit$block_specs
@@ -624,7 +663,9 @@ fit_cp04_selection_models <- function(reader, link_views, control = ipw_owner_co
   state$accounting$retained_bound <- max(state$accounting$retained_bound, state$accounting$borrowed_entries + actual)
   cp04_budget(ctrl, c(state$accounting$borrowed_entries, actual), state$accounting$fit_scratch_bound,
               c(cum_work, external_work_ops), actual, "retained CP04 selection-models backend")
-  ipw_owner_seal(state, "cp04_backend")
+  sealed <- cdid_fast_seal(state, "cp04_backend")
+  cdid_sel_record_validated(sealed, "cp04_backend", reader, frame, panel, reader$frame_ref)
+  sealed
 }
 
 cp04_selection_if_budget <- function(backend, B, links, details = FALSE) {
@@ -696,26 +737,59 @@ evaluate_cp04_selection_if_chunk <- function(backend, rows, links, scale = "fram
   validate_cp04_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
-  if (!is.numeric(rows) || is.object(rows) || !is.null(dim(rows)) || !length(rows) ||
-      anyNA(rows) || any(rows != floor(rows)) || any(rows < 1 | rows > st$N) ||
-      anyDuplicated(rows) || length(rows) > backend$control$max_chunk_rows ||
-      !is.numeric(links) || is.object(links) || !is.null(dim(links)) || !length(links) ||
-      anyNA(links) || any(links != floor(links)) || any(links < 1 | links > length(backend$links)) ||
-      anyDuplicated(links) || !identical(details, isTRUE(details)) ||
+  if (!cdid_sel_valid_idx(rows, st$N) || length(rows) > backend$control$max_chunk_rows ||
+      !cdid_sel_valid_idx(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
       !is.character(scale) || length(scale) != 1L || is.na(scale) || !scale %in% c("frame", "core"))
     cp04_abort("Invalid explicit IF row/link batch, scale or details flag.")
 
-  pre <- cp04_selection_if_budget(backend, length(rows), links, details)
+  B <- length(rows)
+  meta <- if (!details && cdid_are_default_fns(c("cp04_selection_if_budget", "cp04_budget")))
+    cdid_sel_get_if_meta(backend, B, links, "cp04_sel_if_meta") else NULL
+  if (is.null(meta)) {
+    pre <- cp04_selection_if_budget(backend, B, links, details)
+    link_names <- vapply(backend$links[links], `[[`, character(1), "link_id")
+    if (!details && cdid_are_default_fns(c("cp04_selection_if_budget", "cp04_budget"))) {
+      cdid_sel_set_if_meta(backend, B, links, pre, link_names, "cp04_sel_if_meta")
+    }
+  } else {
+    pre <- meta$pre
+    link_names <- meta$link_names
+  }
   tids <- pre$tids
   sids <- pre$sids
   uids <- pre$uids
-  B <- length(rows)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
-  p <- if (is.null(backend$reference_ref)) frame$n_covariates else length(chained_backend_reference(backend)$x_columns)
+  ref <- chained_backend_reference(backend)
+  # Issue #16: the native IF kernel is not eligibility-aware.
+  restricted <- chained_reference_restricted(ref)
+  if (!details && !restricted && is.null(backend$layout) && is.null(backend$pair_outcomes)) {
+    fast_if <- cdid_fast_sel_if_chunk(2L, backend, reader, frame, ref, rows, links, scale, pre, link_names)
+    if (!is.null(fast_if)) {
+      out <- list(
+        rows = rows,
+        id = st$id[rows],
+        links = links,
+        phi = fast_if$phi,
+        scale = scale,
+        normalization_count = if (scale == "core") st$n_A else st$N,
+        diagnostics = list(
+          n_selection_score_evaluations = length(pre$active_cells),
+          n_selection_block_evaluations = length(pre$active_blocks),
+          n_treatment_score_evaluations = length(tids),
+          output_entries_bound = pre$output,
+          concurrent_scratch_bound = pre$scratch,
+          work_ops_bound = pre$work
+        )
+      )
+      if (unname(cp04_payload(out)["entries"]) > pre$output)
+        cp04_abort("IF output bound underestimated.", "bound")
+      return(out)
+    }
+  }
+  p <- if (is.null(ref)) frame$n_covariates else length(ref$x_columns)
   sel_fit <- backend$selection_backend
   up_map <- backend$up_map
 
-  ref <- chained_backend_reference(backend)
   ci <- st$cohort_index[rows]
   w <- if (is.null(ref)) st$w[rows] else rep(NA_real_, B)
   A <- as.double(st$a_index[rows] > 0L)
@@ -737,6 +811,7 @@ evaluate_cp04_selection_if_chunk <- function(backend, rows, links, scale = "fram
     upstream <- up[, u_pos, drop = FALSE]
 
     ci_in <- which(ci %in% spec$cohorts)
+    if (restricted) ci_in <- ci_in[chained_reference_eligible(ref, spec$reference, rows[ci_in])]
     hit_all <- if (length(ci_in)) {
       if (is.null(pair_op)) cp04_pair_rows(reader, rows[ci_in], spec$pair, TRUE) else
         pair_op$pair(rows[ci_in], spec$pair, TRUE)
@@ -861,6 +936,12 @@ or_selection_moments_add <- function(M, z, dy, q, T_logit) {
 }
 
 or_selection_support <- function(reader, spec, sel_fit, up_map, q_id, recipe, ctrl, reference = NULL) {
+  # Issue #16: a restricted recipe's support is its eligible observed rows;
+  # the native support kernel scans the full cohort and is bypassed for it.
+  restricted <- chained_reference_recipe_restricted(reference, spec$reference)
+  fast <- if (restricted) NULL else
+    cdid_fast_sel_support_collect(2L, reader, spec, sel_fit, up_map, q_id, recipe, ctrl, reference)
+  if (!is.null(fast)) return(fast)
   st <- reader$state
   a <- if (is.null(reference)) st$a[spec$cohort] else chained_reference_stat(reference, spec$reference, spec$cohort, "a")
   m <- recipe$p + 2L
@@ -875,6 +956,8 @@ or_selection_support <- function(reader, spec, sel_fit, up_map, q_id, recipe, ct
   first <- st$cohort_start[spec$cohort]; last <- st$cohort_end[spec$cohort]
   for (start in seq.int(first, last, by = ctrl$max_chunk_rows)) {
     rows <- st$cohort_order[seq.int(start, min(last, start + ctrl$max_chunk_rows - 1))]
+    if (restricted) rows <- rows[chained_reference_eligible(reference, spec$reference, rows)]
+    if (!length(rows)) next
     hit <- cp04_pair_rows(reader, rows, spec$pair, TRUE)
     obs <- which(hit$S == 1)
     if (!length(obs)) next
@@ -897,57 +980,79 @@ or_selection_support <- function(reader, spec, sel_fit, up_map, q_id, recipe, ct
     clipping = clip)
 }
 
-or_selection_forcing <- function(recipe, fitted, supports, pools, channels, D, N) {
+or_selection_forcing <- function(recipe, fitted, supports, pools, channels, D, N,
+                                 include_score_means = FALSE, local_only = FALSE) {
   keep <- fitted$keep
   p <- length(keep)
   m <- recipe$p + 2L
-  beta_total <- matrix(0, p, D)
-  energy_total <- numeric(D)
+  beta_total <- if (local_only) NULL else matrix(0, p, D)
+  energy_total <- if (local_only) NULL else numeric(D)
   regressions <- fitted$regressions
 
   for (b in seq_along(pools)) {
     sids <- pools[[b]]$support_ids
     rec <- regressions[[b]]
-    fa <- fe <- numeric(D)
-    fb <- matrix(0, p, D)
+    ids <- sort.int(unique(unlist(channels[sids], use.names = FALSE)))
+    n_id <- length(ids)
+    fa <- fe <- if (local_only) numeric(n_id) else numeric(D)
+    fb <- if (local_only) matrix(0, p, n_id) else matrix(0, p, D)
     cr <- numeric(m)
     cr[1L] <- -rec$alpha
     cr[1L + keep] <- -rec$L * fitted$beta
     cr[m] <- 1
+    mean_alpha <- 0
+    mean_beta <- if (include_score_means) numeric(p) else NULL
     for (s in sids) {
       u <- supports[[s]]
-      ka <- channels[[s]][1L]
-      kl <- channels[[s]][-1L]
+      ch_s <- channels[[s]]
+      if (local_only) {
+        pos <- match(ch_s, ids)
+        ka <- pos[1L]; kl <- pos[-1L]
+      } else {
+        ka <- ch_s[1L]; kl <- ch_s[-1L]
+      }
       g <- or_pooled_factor_moments(recipe, u$design$summary, keep, rec$alpha, fitted$beta)
       if (recipe$intercept) {
-        fa[ka] <- fa[ka] + g$g[1L] / (N * u$a)
-        fb[, ka] <- fb[, ka] + (g$g[-1L] - rec$mean_d * g$g[1L]) / (N * u$a)
+        ga <- g$g[1L]
+        gb <- g$g[-1L] - rec$mean_d * ga
+        fa[ka] <- fa[ka] + ga / (N * u$a)
+        fb[, ka] <- fb[, ka] + gb / (N * u$a)
       } else {
-        fb[, ka] <- fb[, ka] + g$g / (N * u$a)
+        ga <- 0
+        gb <- g$g
+        fb[, ka] <- fb[, ka] + gb / (N * u$a)
+      }
+      if (include_score_means) {
+        mean_alpha <- mean_alpha + ga / N
+        mean_beta <- mean_beta + gb / N
       }
       fe[ka] <- fe[ka] + g$e2 / (N * u$a)
 
       if (length(kl) > 0L) {
-        Mr <- vapply(seq_along(kl), function(j) as.vector(u$moments[, , j] %*% cr), numeric(m))
-        if (!is.matrix(Mr)) Mr <- matrix(Mr, nrow = m, ncol = length(kl))
+        Mr <- matrix(crossprod(matrix(u$moments, nrow = m), cr), nrow = m, ncol = length(kl))
         if (recipe$intercept) {
           fa[kl] <- fa[kl] + Mr[1L, ] / N
           fb[, kl] <- fb[, kl] + (rec$L * Mr[1L + keep, , drop = FALSE] -
-            outer(rec$mean_d, Mr[1L, ])) / N
+            tcrossprod(rec$mean_d, Mr[1L, ])) / N
         } else {
           fb[, kl] <- fb[, kl] + rec$L * Mr[1L + keep, , drop = FALSE] / N
         }
         fe[kl] <- fe[kl] + colSums(cr * Mr) / N
       }
     }
-    ids <- sort(unique(unlist(channels[sids])))
     cp04_finite(c(fa, fb, fe), "Corollary 1 regression forcing")
     regressions[[b]]$channel_ids <- ids
-    regressions[[b]]$forcing_alpha <- fa[ids]
-    regressions[[b]]$forcing_beta <- fb[, ids, drop = FALSE]
-    regressions[[b]]$forcing_energy <- fe[ids]
-    beta_total <- beta_total + fb
-    energy_total <- energy_total + fe
+    regressions[[b]]$forcing_alpha <- if (local_only) fa else fa[ids]
+    regressions[[b]]$forcing_beta <- if (local_only) fb else fb[, ids, drop = FALSE]
+    regressions[[b]]$forcing_energy <- if (local_only) fe else fe[ids]
+    if (include_score_means) {
+      regressions[[b]]$score_mean_alpha <- mean_alpha
+      regressions[[b]]$score_mean_beta <- mean_beta
+    }
+    if (!local_only) {
+      beta_total <- beta_total + fb
+      energy_total <- energy_total + fe
+    }
   }
   list(regressions = regressions, beta = beta_total, energy = energy_total)
 }
@@ -966,8 +1071,7 @@ or_selection_link <- function(recipe, fitted, u, rec, N) {
     cr[1L] <- -rec$alpha
     cr[1L + keep] <- -rec$L * fitted$beta
     cr[m] <- 1
-    Mr <- vapply(seq_len(dq), function(j) as.vector(u$moments[, , j] %*% cr), numeric(m))
-    if (!is.matrix(Mr)) Mr <- matrix(Mr, nrow = m, ncol = dq)
+    Mr <- matrix(crossprod(matrix(u$moments, nrow = m), cr), nrow = m, ncol = dq)
     ans <- list(
       mu = lm$mu, c = lm$c, d = d, numerator = num,
       rate_loading = c(lm$residual / (N * u$a * d),
@@ -986,7 +1090,7 @@ or_selection_link <- function(recipe, fitted, u, rec, N) {
       design_loading = matrix(lm$c * d / u$a, p, 1L)
     )
   }
-  cp04_finite(unlist(ans), "Corollary 1 link moments")
+  cp04_finite(unlist(ans, use.names = FALSE), "Corollary 1 link moments")
   ans
 }
 
@@ -996,13 +1100,16 @@ or_selection_assemble <- function(recipe, supports, pools, links, channels, D, r
     support_ids = pools[[b]]$support_ids,
     L = pools[[b]]$transitions
   ))
-  fitted <- or_pooled_fit_blocks(
-    recipe,
-    lapply(supports, function(u) list(summary = u$design$summary, scale = 1, colmax = u$design$colmax)),
-    blocks,
-    lapply(links, function(l) list(regression = l$regression, support_id = l$support_id)),
-    rank_tol, N, visit_rows, "corollary1"
-  )
+  fitted <- cdid_sel_fast_or_pooled_fit(recipe, supports, blocks, rank_tol, N)
+  if (is.null(fitted)) {
+    fitted <- or_pooled_fit_blocks(
+      recipe,
+      lapply(supports, function(u) list(summary = u$design$summary, scale = 1, colmax = u$design$colmax)),
+      blocks,
+      lapply(links, function(l) list(regression = l$regression, support_id = l$support_id)),
+      rank_tol, N, visit_rows, "corollary1"
+    )
+  }
   forcing <- or_selection_forcing(recipe, fitted, supports, pools, channels, D, N)
   for (i in seq_along(links)) {
     l <- links[[i]]
@@ -1078,9 +1185,12 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
     "Corollary 1 OR metadata")
 
   records <- list()
-  for (ell in seq_along(link_views)) {
+  use_inc_pay <- cdid_are_default_fns(c("or_baseline_payload_append", "or_baseline_payload_verify", "cp04_payload"))
+  charge_pay <- if (use_inc_pay) list(n = 0L, records = c(entries = 0, char_bytes = 0)) else NULL
+  lv_ok <- cdid_fast_validate_link_views(link_views, frame)
+  for (ell in seq_len(L)) {
     v <- link_views[[ell]]
-    validate_ipw_link_view(v, frame_owner = frame)
+    if (!lv_ok) validate_ipw_link_view(v, frame_owner = frame)
     source <- v$functional_key
     if (!gmm_scalar_character(source) || !startsWith(source, "cmpcat:"))
       or_corollary1_abort("Corollary 1 OR requires the supplied comparison-catalog functional key.")
@@ -1115,10 +1225,17 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
       records[[ell]]$functional_key <- paste0(records[[ell]]$functional_key, "|reference:",
         reference$recipes$key[reference$view_recipe[ell]])
     }
-    cp04_budget(ctrl, c(base, header), header + cp04_payload(records)["entries"],
-      c(external_work_ops, 128 * L * L * (J + 1) + 64 * cp04_payload(records)["char_bytes"]),
-      header + cp04_payload(records)["entries"], "Corollary 1 catalog metadata")
+    if (use_inc_pay) {
+      charge_pay <- or_baseline_payload_append(charge_pay, records, or_corollary1_abort)
+      tot_pay <- charge_pay$total
+    } else {
+      tot_pay <- cp04_payload(records)
+    }
+    cp04_budget(ctrl, c(base, header), header + tot_pay["entries"],
+      c(external_work_ops, 128 * L * L * (J + 1) + 64 * tot_pay["char_bytes"]),
+      header + tot_pay["entries"], "Corollary 1 catalog metadata")
   }
+  if (use_inc_pay) or_baseline_payload_verify(charge_pay, records, or_corollary1_abort)
   ids <- vapply(records, function(x) if (is.null(x$link_id)) "" else x$link_id, character(1))
   if (any(!nzchar(ids)) || anyDuplicated(ids))
     or_corollary1_abort("Distinct nonempty link IDs required.")
@@ -1166,10 +1283,13 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
   up_map <- build_selection_upstream_map(sel_fit, cohorts_a = cohorts_a)
   n_a <- up_map$n_a
   D <- up_map$D
-  q_of_s <- vapply(specs, function(s) {
-    resolve_pair_cohort_id(sel_fit, if (is.null(s$reference)) list(pair = s$pair, cohort = s$cohort) else
-      list(pair = s$pair, cohort = s$cohort, reference = s$reference))
-  }, integer(1))
+  q_of_s <- cdid_fast_resolve_q_of_s(sel_fit, specs)
+  if (is.null(q_of_s)) {
+    q_of_s <- vapply(specs, function(s) {
+      resolve_pair_cohort_id(sel_fit, if (is.null(s$reference)) list(pair = s$pair, cohort = s$cohort) else
+        list(pair = s$pair, cohort = s$cohort, reference = s$reference))
+    }, integer(1))
+  }
   channels <- lapply(seq_len(S), function(s) up_map$pair_channels[[q_of_s[s]]])
 
   upstream <- list(
@@ -1292,28 +1412,76 @@ fit_or_selection_models <- function(reader, link_views, control, glm_control, ra
   obj$accounting$owned_entries <- actual
   obj$accounting$retained_bound <- max(obj$accounting$retained_bound, base + actual)
   cp04_budget(ctrl, c(base, actual), scratch, c(work, external_work_ops), actual, "retained Corollary 1 OR selection-models")
-  ipw_owner_seal(obj, "or_corollary1_backend")
+  sealed <- cdid_fast_seal(obj, "or_corollary1_backend")
+  cdid_sel_record_validated(
+    sealed, "or_corollary1_backend", reader, frame,
+    get("panel_owner", reader$panel_ref, inherits = FALSE),
+    reader$frame_ref
+  )
+  sealed
 }
 
 evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE) {
   validate_or_corollary1_backend(backend)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
-  valid_index <- function(x, n) is.numeric(x) && !is.object(x) && is.null(dim(x)) &&
-    length(x) > 0L && all(is.finite(x)) && all(x == floor(x)) &&
-    all(x >= 1 & x <= n) && !anyDuplicated(x)
-  if (!valid_index(rows, st$N) || length(rows) > backend$control$max_chunk_rows ||
-      !valid_index(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
+  if (!cdid_sel_valid_idx(rows, st$N) || length(rows) > backend$control$max_chunk_rows ||
+      !cdid_sel_valid_idx(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
       !is.character(scale) || length(scale) != 1L || is.na(scale) || !scale %in% c("frame", "core"))
     or_corollary1_abort("Invalid explicit IF row/link batch, scale or details flag.")
 
-  pre <- or_corollary1_if_budget(backend, length(rows), links, details)
   B <- length(rows)
+  meta <- if (!details && cdid_are_default_fns(c("or_corollary1_if_budget", "cp04_budget")))
+    cdid_sel_get_if_meta(backend, B, links, "or_sel_if_meta") else NULL
+  if (is.null(meta)) {
+    pre <- or_corollary1_if_budget(backend, B, links, details)
+    link_names <- vapply(backend$links[links], `[[`, character(1), "link_id")
+    if (!details && cdid_are_default_fns(c("or_corollary1_if_budget", "cp04_budget"))) {
+      cdid_sel_set_if_meta(backend, B, links, pre, link_names, "or_sel_if_meta")
+    }
+  } else {
+    pre <- meta$pre
+    link_names <- meta$link_names
+  }
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   separate <- or_selection_separate(backend)
+  ref <- chained_backend_reference(backend)
+  # Issue #16: the native IF kernel is not eligibility-aware.
+  restricted <- chained_reference_restricted(ref)
+  if (!details && !restricted && is.null(backend$layout) && is.null(backend$pair_outcomes)) {
+    fast_if <- cdid_fast_sel_if_chunk(5L, backend, reader, frame, ref, rows, links, scale, pre, link_names)
+    if (!is.null(fast_if)) {
+      out <- list(
+        rows = rows,
+        id = st$id[rows],
+        links = links,
+        phi = fast_if$phi,
+        scale = scale,
+        normalization_count = if (scale == "core") st$n_A else st$N,
+        diagnostics = list(
+          n_rate_score_evaluations = sum(pre$uids <= backend$upstream$n_a),
+          n_selection_score_evaluations = fast_if$n_act_cells,
+          n_selection_block_evaluations = fast_if$n_act_blocks,
+          n_upstream_coordinates = length(pre$uids),
+          n_regression_score_evaluations = length(union(pre$gids, pre$beta_gids)),
+          n_global_beta_blocks = length(pre$beta_gids),
+          output_entries_bound = pre$output,
+          concurrent_scratch_bound = pre$scratch,
+          work_ops_bound = pre$work
+        )
+      )
+      if (separate) {
+        out$diagnostics$outcome_pooling <- "separate"
+        out$diagnostics$n_global_beta_blocks <- 0L
+        out$diagnostics$n_local_beta_blocks <- length(pre$beta_gids)
+      }
+      if (unname(cp04_payload(out)["entries"]) > pre$output)
+        or_corollary1_abort("IF output bound underestimated.", "bound")
+      return(out)
+    }
+  }
   kept <- if (separate) backend$outcome_recipe$slope_index else
     backend$outcome_recipe$slope_index[backend$shared$keep]
-  ref <- chained_backend_reference(backend)
   ci <- st$cohort_index[rows]
   # D60: no common weight; supports read their recipe's W_g on observed rows.
   w <- if (is.null(ref)) st$w[rows] else rep(NA_real_, B)
@@ -1336,6 +1504,7 @@ evaluate_or_selection_if_chunk <- function(backend, rows, links, scale = "frame"
     sp <- backend$support_specs[[sid]]
     q <- backend$q_of_s[sid]
     ix <- which(ci == sp$cohort & U)
+    if (restricted) ix <- ix[chained_reference_eligible(ref, sp$reference, rows[ix])]
     hit <- if (is.null(pair_op)) cp04_pair_rows(reader, rows[ix], sp$pair, TRUE) else
       pair_op$pair(rows[ix], sp$pair, TRUE)
     obs <- which(hit$S == 1)

@@ -2,9 +2,20 @@
 # standard R CMD check. Covers all supported public estimators, options,
 # inference modes, ordinary-mode delegation, and refusal gates against
 # accepted independent finite-sample references and frozen oracle fixtures.
-# The complete 172-file development and Monte Carlo suite remains packaged in
-# tests/testthat/ and runs unfiltered (filter = NULL) in CI and via
-# validation/run_full_tests.R.
+# The unfiltered installed suite recomputes every reference. The bounded
+# driver supplies saved independent outputs for the fixed finite refits.
+
+cran_regression_oracle <- (function(env) {
+  # testthat puts its test-file environments inside the driver-supplied
+  # environment. Only look there, before reaching the package or global scope.
+  while (!isNamespace(env) && !identical(env, globalenv()) &&
+         !identical(env, emptyenv())) {
+    provider <- get0("cran_regression_oracle", envir = env, inherits = FALSE)
+    if (!is.null(provider)) return(provider)
+    env <- parent.env(env)
+  }
+  function(case, compute) compute
+})(environment())
 
 cran_ref_env <- new.env(parent = globalenv())
 sys.source(testthat::test_path("reference", "cp03_public_tiny_reference.R"), envir = cran_ref_env)
@@ -401,7 +412,8 @@ cran_compare_mp_to_ref <- function(fit, ref, frame_ids, tol_att = 1e-11, tol_if 
 
 test_that("exported interface, native entry points, ordinary delegation, and scope gates hold", {
   exports <- sort(getNamespaceExports("cdid"))
-  expect_identical(exports, sort(c("att_gt", "aggte", "conditional_did_pretest", "ggdid", "tidy", "glance")))
+  expect_identical(exports, sort(c("att_gt", "aggte", "chain_report", "conditional_did_pretest", "ggdid", "tidy", "glance",
+                                   "nuisance_models")))
 
   dlls <- getLoadedDLLs()
   expect_true("cdid" %in% names(dlls))
@@ -619,11 +631,11 @@ test_that("selection IPW matches sp_ref_public_reference across logit models, po
   ))
   fit_b <- do.call(cdid::att_gt, args_b)
   raw_b <- fx_b$raw; raw_b$rho <- fx_b$frame$rho
-  ref_b <- cran_ref_env$sp_ref_public_reference(
+  ref_b <- cran_regression_oracle("selection-b", cran_ref_env$sp_ref_public_reference(
     raw_b, est_method = "ipw", selection_model = "pair_logit",
     selection_pooling = "within_cohort", route = "B",
     control_group = "notyettreated", pt_assumption = "all", pt_start = 1, base_period = "universal"
-  )
+  ))
   cran_compare_mp_to_ref(fit_b, ref_b, fx_b$frame$id)
 
   # Case 2: independent_period_logit, across_cohorts, universe = "F", NT, varying base
@@ -633,11 +645,11 @@ test_that("selection IPW matches sp_ref_public_reference across logit models, po
     est_method = "ipw"
   )
   fit_f <- do.call(cdid::att_gt, fx_f$args)
-  ref_f <- cran_ref_env$sp_ref_public_reference(
+  ref_f <- cran_regression_oracle("selection-f", cran_ref_env$sp_ref_public_reference(
     fx_f$raw, est_method = "ipw", selection_model = "independent_period_logit",
     selection_pooling = "across_cohorts", route = "F",
     control_group = "nevertreated", pt_assumption = "post", base_period = "varying"
-  )
+  ))
   cran_compare_mp_to_ref(fit_f, ref_f, fx_f$frame$id)
 
   # Case 3: legacy alias selection = "corollary1" on universe = "A" matches "conditional_mtar"
@@ -665,10 +677,10 @@ test_that("pooled and separate outcome regression (OR) match independent referen
     control_group = "notyettreated", anticipation = 1L, base_period = "universal"
   ))
   fit_or_pool <- do.call(cdid::att_gt, args_or_pool)
-  ref_or_pool <- cran_ref_env$cp06_pooled_public_or_reference(
+  ref_or_pool <- cran_regression_oracle("pooled-or", cran_ref_env$cp06_pooled_public_or_reference(
     fx_or_pool$raw, route = "none", control_group = "notyettreated",
     anticipation = 1L, base_period = "universal"
-  )
+  ))
   # Current pretrends are direct auxiliary comparisons at every t < g, including
   # the anticipation window ref_g < t < g (R/chained_ipw_pipeline.R:18-56).
   # The legacy oracle's cells_from_mu uses a GMM coordinate for that window
@@ -710,17 +722,19 @@ test_that("pooled and separate outcome regression (OR) match independent referen
   )
   fit_or_sel <- do.call(cdid::att_gt, fx_or_sel$args)
   raw_or_b <- fx_or_sel$raw; raw_or_b$rho <- fx_or_sel$frame$rho
-  ref_or_sel <- cran_ref_env$sp_ref_public_reference(
+  ref_or_sel <- cran_regression_oracle("pooled-or-selection", cran_ref_env$sp_ref_public_reference(
     raw_or_b, est_method = "reg", selection_model = "pair_logit",
     selection_pooling = "across_cohorts", route = "B", control_group = "nevertreated"
-  )
+  ))
   cran_compare_mp_to_ref(fit_or_sel, ref_or_sel, fx_or_sel$frame$id)
 
   # Separate OR (default outcome_pooling = "separate") under baseline MTAR and conditional MTAR
   fx_or_sep <- cran_cp06_fixture(route = "none", est_method = "reg", outcome_pooling = "separate")
   args_or_sep <- utils::modifyList(fx_or_sep$args, list(control_group = "notyettreated"))
   fit_or_sep <- do.call(cdid::att_gt, args_or_sep)
-  ref_or_sep <- cran_separate_reference(fx_or_sep$raw, est_method = "reg", route = "none", control_group = "notyettreated")
+  ref_or_sep <- cran_regression_oracle("separate-or", cran_separate_reference(
+    fx_or_sep$raw, est_method = "reg", route = "none", control_group = "notyettreated"
+  ))
   cran_compare_mp_to_ref(fit_or_sep, ref_or_sep, fx_or_sep$frame$id)
 
   # Verify that separate and pooled OR differ when multiple comparison blocks have distinct slopes
@@ -734,10 +748,10 @@ test_that("pooled and separate outcome regression (OR) match independent referen
     est_method = "reg", outcome_pooling = "separate"
   )
   fit_or_sep_sel <- do.call(cdid::att_gt, fx_or_sep_sel$args)
-  ref_or_sep_sel <- cran_separate_reference(
+  ref_or_sep_sel <- cran_regression_oracle("separate-or-selection", cran_separate_reference(
     fx_or_sep_sel$raw, est_method = "reg", route = "F",
     selection_model = "independent_period_logit", selection_pooling = "within_cohort"
-  )
+  ))
   cran_compare_mp_to_ref(fit_or_sep_sel, ref_or_sep_sel, fx_or_sep_sel$frame$id)
 })
 
@@ -748,10 +762,10 @@ test_that("pooled and separate doubly robust (DR) estimators match independent r
     control_group = "notyettreated", pt_assumption = "all", pt_start = 2, base_period = "universal"
   ))
   fit_dr_base <- do.call(cdid::att_gt, args_dr_base)
-  ref_dr_base <- cran_ref_env$cp07_public_dr_reference(
+  ref_dr_base <- cran_regression_oracle("pooled-dr", cran_ref_env$cp07_public_dr_reference(
     fx_dr_base$raw, route = "none", control_group = "notyettreated",
     pt_assumption = "all", pt_start = 2, base_period = "universal"
-  )
+  ))
   cran_compare_mp_to_ref(fit_dr_base, ref_dr_base, fx_dr_base$frame$id)
 
   # Pooled DR under conditional MTAR (pair_logit, within_cohort, universe = "B")
@@ -762,10 +776,10 @@ test_that("pooled and separate doubly robust (DR) estimators match independent r
   )
   fit_dr_b <- do.call(cdid::att_gt, fx_dr_b$args)
   raw_dr_b <- fx_dr_b$raw; raw_dr_b$rho <- fx_dr_b$frame$rho
-  ref_dr_b <- cran_ref_env$cp07_public_dr_reference(
+  ref_dr_b <- cran_regression_oracle("pooled-dr-selection", cran_ref_env$cp07_public_dr_reference(
     raw_dr_b, route = "B", selection_model = "pair_logit",
     selection_pooling = "within_cohort", control_group = "nevertreated"
-  )
+  ))
   cran_compare_mp_to_ref(fit_dr_b, ref_dr_b, fx_dr_b$frame$id)
 
   # Separate DR (default outcome_pooling = "separate") under conditional MTAR
@@ -780,10 +794,10 @@ test_that("pooled and separate doubly robust (DR) estimators match independent r
   fit_dr_sep <- do.call(cdid::att_gt, fx_dr_sep$args)
   expect_identical(fit_dr_sep$DIDparams$est_method, "dr")
   expect_identical(fit_dr_sep$DIDparams$outcome_pooling, "separate")
-  ref_dr_sep <- cran_separate_reference(
+  ref_dr_sep <- cran_regression_oracle("separate-dr-selection", cran_separate_reference(
     fx_dr_sep$raw, est_method = "dr", route = "F",
     selection_model = "independent_period_logit", selection_pooling = "across_cohorts"
-  )
+  ))
   cran_compare_mp_to_ref(fit_dr_sep, ref_dr_sep, fx_dr_sep$frame$id)
 
   # Separate DR with chunk_rows override and intercept-only DR == IPW identity
@@ -916,7 +930,7 @@ test_that("time-varying covariates and fix_weights anchors match independent d60
       d_cpt, route = rt, formula = ~x + z, sformula = ~sx + sz,
       fix_weights = fw, control_group = "notyettreated"
     )
-    ref_d60 <- cran_ref_env$d60r_if(S, eps = 1e-4)
+    ref_d60 <- cran_regression_oracle(paste0("dated-", fw), cran_ref_env$d60r_if(S, eps = 1e-4))
     mp_d60 <- cdid::att_gt(
       yname = "y", tname = "time", idname = "id", gname = "G",
       xformla = ~x + z, selection = "conditional_mtar",

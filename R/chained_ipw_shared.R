@@ -488,7 +488,7 @@ validate_ipw_design_for_classes <- function(design, n_links, design_link_index) 
     bad(conditionMessage(e))
   })
   valid_roles <- if (has_cal) {
-    c("reference", "pre", "anticipation_nuisance", "anticipation", "post_nuisance", "post")
+    c("reference", "pre", "pre_shared", "anticipation_nuisance", "anticipation", "post_nuisance", "post")
   } else {
     c("reference", "pre", "post_nuisance", "post")
   }
@@ -531,7 +531,7 @@ validate_ipw_design_incidence <- function(design) {
   if (anyDuplicated(v_tuple)) {
     bad("Duplicate intrinsic vertex coordinates/roles in `design$vertices`.")
   }
-  shared_v <- V$role %in% c("reference", "anticipation", "post")
+  shared_v <- V$role %in% c("reference", "pre_shared", "anticipation", "post")
   if (any(!is.na(V$functional_key[shared_v])) ||
       any(is.na(V$functional_key[!shared_v]) | !nzchar(V$functional_key[!shared_v]))) {
     bad("Vertex `functional_key` disagrees with its shared/private role.")
@@ -585,6 +585,7 @@ validate_ipw_design_incidence <- function(design) {
         !identical(targets$param_index, V$param_index[post_vertices])) {
       bad("Post target rows differ from their intrinsic causal vertices.")
     }
+    is_pt_ctrl_cal <- identical(cspec$pt_assumption, "ctrl")
     for (v in seq_len(nrow(V))) {
       r_v <- tryCatch(calendar_reference_date(V$g[v], cspec$calendar, cspec$anticipation),
                       cdid_error = function(e) bad(conditionMessage(e)))
@@ -594,7 +595,7 @@ validate_ipw_design_incidence <- function(design) {
       ok_v <- if (V$time[v] == r_v) {
         identical(rv, "reference")
       } else if (cmp_v < 0L) {
-        identical(rv, "pre")
+        if (is_pt_ctrl_cal && V$time[v] >= cspec$pt_start) identical(rv, "pre_shared") else identical(rv, "pre")
       } else if (V$time[v] < V$g[v]) {
         rv %in% c("anticipation", "anticipation_nuisance")
       } else {
@@ -611,6 +612,7 @@ validate_ipw_design_incidence <- function(design) {
     }
   }
   is_pt_all <- !is.null(design$calendar_spec) && identical(design$calendar_spec$pt_assumption, "all")
+  is_pt_ctrl <- !is.null(design$calendar_spec) && identical(design$calendar_spec$pt_assumption, "ctrl")
   is_anchor_v <- if (is_pt_all) {
     V$role == "reference" | (V$role == "pre" & V$time >= design$calendar_spec$pt_start)
   } else {
@@ -623,7 +625,7 @@ validate_ipw_design_incidence <- function(design) {
     }
   }
   if (!is.null(design$calendar_spec)) {
-    pt_start_val <- if (is_pt_all) design$calendar_spec$pt_start else Inf
+    pt_start_val <- if (is_pt_all || is_pt_ctrl) design$calendar_spec$pt_start else Inf
     for (side in 1:2) {
       rc_col <- if (side == 1L) "s_coordinate_role" else "t_coordinate_role"
       if (rc_col %in% names(L)) {
@@ -634,6 +636,7 @@ validate_ipw_design_incidence <- function(design) {
         ok_rc <- (rv == "reference" & rc_val == "reference") |
           (rv == "pre" & rc_val %in% c("pre", "pre_nuisance")) |
           (rv == "pre" & is_pt_all & uv >= pt_start_val & rc_val == "pre_pt_all_zero") |
+          (rv == "pre_shared" & is_pt_ctrl & uv >= pt_start_val & rc_val %in% c("pre", "pre_nuisance", "pre_pt_ctrl_shared")) |
           (rv == "anticipation" & rc_val %in% c("anticipation", "anticipation_att")) |
           (rv == "anticipation_nuisance" & rc_val == "anticipation_nuisance") |
           (rv == "post" & rc_val %in% c("post", "post_att")) |
@@ -724,12 +727,12 @@ certify_ipw_structural_classes <- function(session, links, design, design_link_i
   sref <- validate_ipw_shared_session(session)
   context <- sref$context
   if (!is.character(weighting) || length(weighting) != 1L || is.na(weighting) ||
-      !weighting %in% c("optimal", "identity")) {
-    cdid_abort("`weighting` must be exactly \"optimal\" or \"identity\".", c("cdid_ipw_input_error"))
+      !weighting %in% c("optimal", "identity", "within")) {
+    cdid_abort("`weighting` must be \"optimal\", \"identity\", or \"within\".", c("cdid_ipw_input_error"))
   }
-  if (!identical(weighting, "optimal")) {
+  if (!weighting %in% c("optimal", "within")) {
     cdid_abort(
-      "Structural reduction is licensed only for optimal weighting; identity weighting keeps every row.",
+      "Structural reduction is licensed only for optimal or within weighting; identity weighting keeps every row.",
       c("cdid_ipw_reduction_weighting_error", "cdid_ipw_certificate_error")
     )
   }
@@ -804,6 +807,7 @@ certify_ipw_structural_classes <- function(session, links, design, design_link_i
   cspec <- design$calendar_spec
   has_cal <- !is.null(cspec)
   is_pt_all <- FALSE
+  is_pt_ctrl <- FALSE
   vs <- DL$start_vertex_index[dli]
   vt <- DL$end_vertex_index[dli]
   fk <- DL$functional_key[dli]
@@ -824,6 +828,7 @@ certify_ipw_structural_classes <- function(session, links, design, design_link_i
       map_bad("Design `calendar_spec` differs from its canonical validated representation.")
     }
     is_pt_all <- identical(cspec$pt_assumption, "all")
+    is_pt_ctrl <- identical(cspec$pt_assumption, "ctrl")
   }
   # One typed parse per distinct design pool string (CP08 scaling action 1).
   dl_pools <- if (has_cal && "control_pool" %in% names(DL)) design_pool_cache(DL$control_pool) else NULL
@@ -877,7 +882,7 @@ certify_ipw_structural_classes <- function(session, links, design, design_link_i
         role <- if (u == DL$ref[j]) {
           "reference"
         } else if (cmp_ug < 0L) {
-          "pre"
+          if (is_pt_ctrl && u >= cspec$pt_start) "pre_shared" else "pre"
         } else if (u < link_g[ell]) {
           if (qualified) "anticipation" else "anticipation_nuisance"
         } else {
@@ -890,7 +895,9 @@ certify_ipw_structural_classes <- function(session, links, design, design_link_i
           ok_rc <- if (u == DL$ref[j]) {
             identical(rc_val, "reference")
           } else if (cmp_ug < 0L) {
-            rc_val %in% c("pre", "pre_nuisance") || (is_pt_all && u >= cspec$pt_start && identical(rc_val, "pre_pt_all_zero"))
+            rc_val %in% c("pre", "pre_nuisance") ||
+              (is_pt_all && u >= cspec$pt_start && identical(rc_val, "pre_pt_all_zero")) ||
+              (is_pt_ctrl && u >= cspec$pt_start && identical(rc_val, "pre_pt_ctrl_shared"))
           } else if (u < link_g[ell]) {
             if (qualified) rc_val %in% c("anticipation", "anticipation_att") else identical(rc_val, "anticipation_nuisance")
           } else {

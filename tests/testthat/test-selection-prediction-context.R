@@ -156,6 +156,13 @@ testthat::test_that("successful exit keeps live DLL verification and closes on f
 testthat::test_that("stored observer predictions give the same treatment derivatives as recomputation", {
   a <- spc_case()
   gc <- list(epsilon = 1e-13, maxit = 60L, trace = FALSE)
+  # Stored and recomputed predictions can feed different floating-point
+  # contractions. Keep all unlisted scores and model metadata exact.
+  common_model_scores <- c("beta", "gamma", "coordinates", "coordinates_full",
+    "psi_ps", "psi_ipw", "normalizers_A")
+  score_leaves <- c("$/phi", "$/details/psi_ps", "$/details/psi_ipw",
+    paste0("$/details/models/1/", c(common_model_scores, "psi_dr")),
+    paste0("$/details/models/2/", common_model_scores))
   for (model in c("pair_logit", "independent_period_logit")) {
     sel <- spc_fit(a, model, "within_cohort")
     fit <- function(mode) spc_ns("fit_dr_corollary1")(a$reader, a$views, a$control, gc, 1e-10,
@@ -176,12 +183,13 @@ testthat::test_that("stored observer predictions give the same treatment derivat
         fit(mode)
       }
       repeated <- recompute()
-      testthat::expect_identical(reused$treatments, repeated$treatments)
+      testthat::expect_true(roundoff_identical(reused$treatments, repeated$treatments,
+        c("$/1/cross", "$/2/cross")))
       testthat::expect_identical(reused$links, repeated$links)
       fn <- spc_ns("evaluate_dr_corollary1_if_chunk")
       for (details in c(FALSE, TRUE)) for (rows in list(1:5, 25:28))
-        testthat::expect_identical(fn(reused, rows, 2:1, details = details),
-          fn(repeated, rows, 2:1, details = details))
+        testthat::expect_true(roundoff_identical(fn(reused, rows, 2:1, details = details),
+          fn(repeated, rows, 2:1, details = details), score_leaves))
     }
   }
 })

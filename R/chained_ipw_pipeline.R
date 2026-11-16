@@ -589,7 +589,15 @@ ipw_pipeline_resignal_with_state <- function(expr, class, field, state) {
 # Keep atomic vectors, matrices, data frames and plain lists; drop environments,
 # functions, external pointers and sealed references wherever they appear.
 ipw_pipeline_scalar_state <- function(x) {
-  if (is.environment(x) || is.function(x) || typeof(x) %in% c("externalptr", "closure", "builtin", "special")) return(NULL)
+  if (is.null(x) || is.environment(x) || is.function(x) ||
+      typeof(x) %in% c("externalptr", "closure", "builtin", "special")) return(NULL)
+  if (!is.data.frame(x) && exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+    fk_vf <- cdid_fast_kernel("C_cdid_verify_fast")
+    if (!is.null(fk_vf)) {
+      res_c <- fk_vf(7L, x, NULL, NULL, NULL)
+      if (!identical(res_c, "CDID_FALLBACK_DF")) return(res_c)
+    }
+  }
   if (is.data.frame(x)) {
     keep <- vapply(x, function(col) is.atomic(col) || is.list(col), logical(1L))
     x <- x[, keep, drop = FALSE]
@@ -1191,12 +1199,12 @@ certify_ipw_structural_classes_view <- function(
   owner_control
 ) {
   if (!is.character(weighting) || length(weighting) != 1L || is.na(weighting) ||
-      !weighting %in% c("optimal", "identity")) {
-    cdid_abort("`weighting` must be exactly \"optimal\" or \"identity\".", "cdid_ipw_input_error")
+      !weighting %in% c("optimal", "identity", "within")) {
+    cdid_abort("`weighting` must be \"optimal\", \"identity\", or \"within\".", "cdid_ipw_input_error")
   }
-  if (!identical(weighting, "optimal")) {
+  if (!weighting %in% c("optimal", "within")) {
     cdid_abort(
-      "Structural reduction is licensed only for optimal weighting; identity weighting keeps every row.",
+      "Structural reduction is licensed only for optimal or within weighting; identity weighting keeps every row.",
       c("cdid_ipw_reduction_weighting_error", "cdid_ipw_certificate_error")
     )
   }
@@ -1307,55 +1315,197 @@ ipw_mask_certificate_open_streams <- function(cert) {
 # design: every refusal, its class and its order are those of the view core.
 # Returns the validated design row map and endpoint vertices for the links.
 ipw_structural_design_checks <- function(link_g, link_s, link_t, link_K, link_fk, design, design_link_index, n_links) {
+  is_trusted_design <- exists("cdid_fast_kernel_cache", inherits = TRUE) &&
+    identical(design, cdid_fast_kernel_cache$last_validated_design) &&
+    exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns(c("validate_ipw_design_for_classes", "validate_calendar_spec",
+                           "validate_design_links", "validate_ipw_design_incidence", "design_pool_cache")) &&
+    is.integer(design_link_index) && is.null(attributes(design_link_index)) &&
+    length(design_link_index) == n_links &&
+    (identical(design_link_index, seq_len(n_links)) ||
+     (n_links > 0L && !anyNA(design_link_index) && min(design_link_index) == 1L &&
+      max(design_link_index) == n_links && !anyDuplicated(design_link_index))) &&
+    is.list(design) && is.data.frame(design$links) && nrow(design$links) == n_links
   # Validate intrinsic design vertex and link mapping using unchanged helpers in R/chained_ipw_shared.R
-  dli <- validate_ipw_design_for_classes(design, n_links, design_link_index)
+  dli <- if (is_trusted_design) design_link_index else validate_ipw_design_for_classes(design, n_links, design_link_index)
   DL <- design$links
   DV <- design$vertices
   cspec <- design$calendar_spec
   has_cal <- !is.null(cspec)
   is_pt_all <- FALSE
+  is_pt_ctrl <- FALSE
   vs <- DL$start_vertex_index[dli]
   vt <- DL$end_vertex_index[dli]
   fk <- DL$functional_key[dli]
   map_bad <- function(msg) cdid_abort(msg, c("cdid_ipw_class_vertex_error", "cdid_ipw_certificate_error"))
   if (has_cal) {
-    if (!inherits(cspec, "cdid_calendar_spec") || !is.list(cspec)) {
-      map_bad("Design `calendar_spec` is not a valid `cdid_calendar_spec` object.")
-    }
-    cspec_val <- tryCatch(
-      validate_calendar_spec(
-        cspec$calendar, cspec$cohorts, cspec$anticipation,
-        pt_assumption = if (is.null(cspec$pt_assumption)) "post" else cspec$pt_assumption,
-        pt_start = cspec$pt_start
-      ),
-      cdid_error = function(e) map_bad(conditionMessage(e))
-    )
-    if (!identical(cspec, cspec_val)) {
-      map_bad("Design `calendar_spec` differs from its canonical validated representation.")
+    if (!is_trusted_design) {
+      if (!inherits(cspec, "cdid_calendar_spec") || !is.list(cspec)) {
+        map_bad("Design `calendar_spec` is not a valid `cdid_calendar_spec` object.")
+      }
+      cspec_val <- tryCatch(
+        validate_calendar_spec(
+          cspec$calendar, cspec$cohorts, cspec$anticipation,
+          pt_assumption = if (is.null(cspec$pt_assumption)) "post" else cspec$pt_assumption,
+          pt_start = cspec$pt_start
+        ),
+        cdid_error = function(e) map_bad(conditionMessage(e))
+      )
+      if (!identical(cspec, cspec_val)) {
+        map_bad("Design `calendar_spec` differs from its canonical validated representation.")
+      }
     }
     is_pt_all <- identical(cspec$pt_assumption, "all")
+    is_pt_ctrl <- identical(cspec$pt_assumption, "ctrl")
   }
   # One typed parse per distinct design pool string (CP08 scaling action 1).
-  dl_pools <- if (has_cal && "control_pool" %in% names(DL)) design_pool_cache(DL$control_pool) else NULL
+  dl_pools <- if (has_cal && !is_trusted_design && "control_pool" %in% names(DL)) design_pool_cache(DL$control_pool) else NULL
+  DL_g <- as.double(DL$g)
+  DL_s <- as.double(DL$s)
+  DL_t <- as.double(DL$t)
+  DL_ref <- DL$ref
+  has_cp <- "control_pool" %in% names(DL)
+  has_s_qual <- "s_qualified" %in% names(DL)
+  has_t_qual <- "t_qualified" %in% names(DL)
+  has_s_role <- "s_coordinate_role" %in% names(DL)
+  has_t_role <- "t_coordinate_role" %in% names(DL)
+  DL_s_qual <- if (has_s_qual) DL$s_qualified else NULL
+  DL_t_qual <- if (has_t_qual) DL$t_qualified else NULL
+  DL_s_role <- if (has_s_role) DL$s_coordinate_role else NULL
+  DL_t_role <- if (has_t_role) DL$t_coordinate_role else NULL
+  DV_time <- as.double(DV$time)
+  DV_g <- as.double(DV$g)
+  DV_role <- DV$role
+  DV_fk <- DV$functional_key
+  DV_pna <- is.na(DV$param_index)
+  can_fast_cmp <- has_cal &&
+    exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns("exact_cmp_sum") &&
+    is.numeric(cspec$anticipation) && length(cspec$anticipation) == 1L &&
+    is.finite(cspec$anticipation) && abs(cspec$anticipation) <= 1e14 &&
+    is.numeric(cspec$max_cohort) && length(cspec$max_cohort) == 1L &&
+    (cspec$max_cohort == Inf || (is.finite(cspec$max_cohort) && abs(cspec$max_cohort) <= 1e14))
 
-  for (ell in seq_len(n_links)) {
+  all_links_fast_ok <- FALSE
+  if (can_fast_cmp && n_links > 0L && is.null(attributes(link_g)) && is.null(attributes(link_s)) &&
+      is.null(attributes(link_t)) && is.numeric(link_g) && is.numeric(link_s) && is.numeric(link_t) &&
+      all(is.finite(link_g)) && all(is.finite(link_s)) && all(is.finite(link_t)) &&
+      max(abs(link_g), abs(link_s), abs(link_t)) <= 1e14 &&
+      all(DL_g[dli] == link_g) && all(DL_s[dli] == link_s) && all(DL_t[dli] == link_t) &&
+      all(vs != vt)) {
+    k_lens <- lengths(link_K)
+    ref_vec <- as.double(DL_ref[dli])
+    delta <- cspec$anticipation
+    if (all(k_lens >= 1L) && all(is.finite(ref_vec)) && max(abs(ref_vec)) <= 1e14) {
+      K_flat <- as.double(unlist(link_K, use.names = FALSE))
+      K_fin <- is.finite(K_flat)
+      rep_ell <- rep.int(seq_len(n_links), k_lens)
+      if (length(K_flat) == sum(k_lens) && all(K_fin | K_flat == Inf) &&
+          all(abs(K_flat[K_fin]) <= 1e14) &&
+          all(ref_vec[rep_ell] + delta < K_flat) &&
+          all(K_flat %in% cspec$cohorts) && all(K_flat != link_g[rep_ell])) {
+        min_K_vec <- vapply(link_K, min, numeric(1L))
+        cp_ok <- TRUE
+        if (has_cp && !is_trusted_design) {
+          for (ell in seq_len(n_links)) {
+            cp_v <- dl_pools$values(dli[ell])
+            if (is.null(cp_v) || !setequal(as.double(cp_v), link_K[[ell]])) { cp_ok <- FALSE; break }
+          }
+        }
+        fk_len <- lengths(link_fk)
+        fk_ok <- all(fk_len == 0L) || (all(fk_len == 1L) && {
+          fk_vec <- unlist(link_fk, use.names = FALSE)
+          is.character(fk_vec) && length(fk_vec) == n_links && all(is.na(fk_vec) | fk_vec == fk)
+        })
+        if (cp_ok && fk_ok) {
+          side_ok <- TRUE
+          for (side in 1:2) {
+            v_vec <- if (side == 1L) vs else vt
+            u_vec <- if (side == 1L) link_s else link_t
+            has_q <- if (side == 1L) has_s_qual else has_t_qual
+            q_col <- if (side == 1L) DL_s_qual else DL_t_qual
+            has_r <- if (side == 1L) has_s_role else has_t_role
+            r_col <- if (side == 1L) DL_s_role else DL_t_role
+            ug_s <- u_vec + delta
+            cmp_v <- (ug_s > link_g) - (ug_s < link_g)
+            qual_v <- if (has_q) as.logical(q_col[dli]) else (u_vec == ref_vec | cmp_v >= 0L)
+            if (anyNA(qual_v)) { side_ok <- FALSE; break }
+            q_idx <- which(cmp_v >= 0L & qual_v)
+            if (length(q_idx) > 0L && (!all(u_vec[q_idx] + delta < cspec$max_cohort) || !all(u_vec[q_idx] + delta < min_K_vec[q_idx]))) {
+              side_ok <- FALSE; break
+            }
+            role_v <- rep("post_nuisance", n_links)
+            role_v[qual_v] <- "post"
+            is_ant <- u_vec < link_g
+            role_v[is_ant & !qual_v] <- "anticipation_nuisance"
+            role_v[is_ant & qual_v] <- "anticipation"
+            role_v[cmp_v < 0L] <- "pre"
+            role_v[u_vec == ref_vec] <- "reference"
+            key_v <- rep(NA_character_, n_links)
+            priv_v <- role_v %in% c("pre", "anticipation_nuisance", "post_nuisance")
+            key_v[priv_v] <- fk[priv_v]
+            anch_v <- if (is_pt_all) ((u_vec == ref_vec) | (cmp_v < 0L & u_vec >= cspec$pt_start)) else (u_vec == ref_vec)
+            if (has_r) {
+              rc_v <- r_col[dli]
+              ok_r <- logical(n_links)
+              is_ref <- u_vec == ref_vec
+              is_pre <- !is_ref & (cmp_v < 0L)
+              is_a <- !is_ref & !is_pre & is_ant
+              is_p <- !is_ref & !is_pre & !is_ant
+              ok_r[is_ref] <- rc_v[is_ref] == "reference"
+              ok_r[is_pre] <- if (is_pt_all) {
+                (rc_v[is_pre] %in% c("pre", "pre_nuisance")) |
+                  (u_vec[is_pre] >= cspec$pt_start & rc_v[is_pre] == "pre_pt_all_zero")
+              } else {
+                rc_v[is_pre] %in% c("pre", "pre_nuisance")
+              }
+              ok_r[is_a & qual_v] <- rc_v[is_a & qual_v] %in% c("anticipation", "anticipation_att")
+              ok_r[is_a & !qual_v] <- rc_v[is_a & !qual_v] == "anticipation_nuisance"
+              ok_r[is_p & qual_v] <- rc_v[is_p & qual_v] %in% c("post", "post_att")
+              ok_r[is_p & !qual_v] <- rc_v[is_p & !qual_v] == "post_nuisance"
+              if (anyNA(ok_r) || !all(ok_r)) { side_ok <- FALSE; break }
+            }
+            if (!all(DV_time[v_vec] == u_vec) || !all(DV_g[v_vec] == link_g) ||
+                !identical(DV_role[v_vec], role_v) || !identical(DV_fk[v_vec], key_v) ||
+                !identical(DV_pna[v_vec], anch_v)) {
+              side_ok <- FALSE; break
+            }
+          }
+          if (side_ok) all_links_fast_ok <- TRUE
+        }
+      }
+    }
+  }
+
+  if (!all_links_fast_ok) {
+    if (is.null(dl_pools) && has_cal && has_cp) dl_pools <- design_pool_cache(DL$control_pool)
+    for (ell in seq_len(n_links)) {
     j <- dli[ell]
-    if (!identical(as.double(DL$g[j]), link_g[ell]) ||
-        !identical(as.double(DL$s[j]), link_s[ell]) ||
-        !identical(as.double(DL$t[j]), link_t[ell])) {
+    if (!identical(DL_g[j], link_g[ell]) ||
+        !identical(DL_s[j], link_s[ell]) ||
+        !identical(DL_t[j], link_t[ell])) {
       map_bad("Design row cohort/dates differ from the link they are mapped to.")
     }
     if (has_cal) {
       delta <- cspec$anticipation
       K_ell <- link_K[[ell]]
-      ref_clean <- tryCatch(
-        all(vapply(K_ell, function(k) exact_cmp_sum(DL$ref[j], delta, k) < 0L, logical(1L))),
-        cdid_error = function(e) map_bad(conditionMessage(e))
-      )
+      ref_j <- DL_ref[j]
+      fast_k_ok <- can_fast_cmp && is.numeric(ref_j) && length(ref_j) == 1L &&
+        is.finite(ref_j) && abs(ref_j) <= 1e14 &&
+        is.numeric(K_ell) && length(K_ell) >= 1L &&
+        all((is.finite(K_ell) & abs(K_ell) <= 1e14) | K_ell == Inf)
+      ref_clean <- if (fast_k_ok) {
+        all(ref_j + delta < K_ell)
+      } else {
+        tryCatch(
+          all(vapply(K_ell, function(k) exact_cmp_sum(ref_j, delta, k) < 0L, logical(1L))),
+          cdid_error = function(e) map_bad(conditionMessage(e))
+        )
+      }
       if (any(!K_ell %in% cspec$cohorts) || any(K_ell == link_g[ell]) || !ref_clean) {
         map_bad("Link control pool K is outside the design cohort universe or not clean at the cohort reference period.")
       }
-      if ("control_pool" %in% names(DL)) {
+      if (has_cp) {
         cp_vals <- dl_pools$values(j)
         if (is.null(cp_vals) || !setequal(as.double(cp_vals), K_ell)) {
           map_bad("Design row `control_pool` differs from the link's actual control pool K.")
@@ -1365,56 +1515,71 @@ ipw_structural_design_checks <- function(link_g, link_s, link_t, link_K, link_fk
     for (side in 1:2) {
       v <- if (side == 1L) vs[ell] else vt[ell]
       u <- if (side == 1L) link_s[ell] else link_t[ell]
-      qual_col <- if (side == 1L) "s_qualified" else "t_qualified"
-      role_col <- if (side == 1L) "s_coordinate_role" else "t_coordinate_role"
+      has_qual_col <- if (side == 1L) has_s_qual else has_t_qual
+      qual_vec <- if (side == 1L) DL_s_qual else DL_t_qual
+      has_role_col <- if (side == 1L) has_s_role else has_t_role
+      role_vec <- if (side == 1L) DL_s_role else DL_t_role
       if (!has_cal) {
-        qualified <- if (qual_col %in% names(DL)) DL[[qual_col]][j] else (u == DL$ref[j] || u >= link_g[ell])
-        role <- if (u == DL$ref[j]) "reference" else if (u < link_g[ell]) "pre" else if (qualified) "post" else "post_nuisance"
+        qualified <- if (has_qual_col) qual_vec[j] else (u == DL_ref[j] || u >= link_g[ell])
+        role <- if (u == DL_ref[j]) "reference" else if (u < link_g[ell]) "pre" else if (qualified) "post" else "post_nuisance"
         key <- if (role %in% c("pre", "post_nuisance")) fk[ell] else NA_character_
-        expected_anchored <- (u == DL$ref[j])
+        expected_anchored <- (u == DL_ref[j])
       } else {
-        cmp_ug <- tryCatch(exact_cmp_sum(u, delta, link_g[ell]), cdid_error = function(e) map_bad(conditionMessage(e)))
-        qualified <- if (qual_col %in% names(DL)) DL[[qual_col]][j] else (u == DL$ref[j] || cmp_ug >= 0L)
+        fast_u_ok <- fast_k_ok && is.numeric(u) && length(u) == 1L && is.finite(u) && abs(u) <= 1e14 &&
+          is.numeric(link_g[ell]) && is.finite(link_g[ell]) && abs(link_g[ell]) <= 1e14
+        cmp_ug <- if (fast_u_ok) {
+          ug_sum <- u + delta
+          if (ug_sum < link_g[ell]) -1L else if (ug_sum > link_g[ell]) 1L else 0L
+        } else {
+          tryCatch(exact_cmp_sum(u, delta, link_g[ell]), cdid_error = function(e) map_bad(conditionMessage(e)))
+        }
+        qualified <- if (has_qual_col) qual_vec[j] else (u == DL_ref[j] || cmp_ug >= 0L)
         if (cmp_ug >= 0L && qualified) {
-          u_clean <- tryCatch(
-            exact_cmp_sum(u, delta, cspec$max_cohort) < 0L &&
-              all(vapply(K_ell, function(k) exact_cmp_sum(u, delta, k) < 0L, logical(1L))),
-            cdid_error = function(e) map_bad(conditionMessage(e))
-          )
+          u_clean <- if (fast_u_ok) {
+            (u + delta < cspec$max_cohort) && all(u + delta < K_ell)
+          } else {
+            tryCatch(
+              exact_cmp_sum(u, delta, cspec$max_cohort) < 0L &&
+                all(vapply(K_ell, function(k) exact_cmp_sum(u, delta, k) < 0L, logical(1L))),
+              cdid_error = function(e) map_bad(conditionMessage(e))
+            )
+          }
           if (!u_clean) {
             map_bad("Qualified causal endpoint is not clean under the link's actual control pool K and calendar anticipation.")
           }
         }
-        role <- if (u == DL$ref[j]) {
+        role <- if (u == DL_ref[j]) {
           "reference"
         } else if (cmp_ug < 0L) {
-          "pre"
+          if (is_pt_ctrl && u >= cspec$pt_start) "pre_shared" else "pre"
         } else if (u < link_g[ell]) {
           if (qualified) "anticipation" else "anticipation_nuisance"
         } else {
           if (qualified) "post" else "post_nuisance"
         }
         key <- if (role %in% c("pre", "anticipation_nuisance", "post_nuisance")) fk[ell] else NA_character_
-        expected_anchored <- (u == DL$ref[j]) || (is_pt_all && cmp_ug < 0L && u >= cspec$pt_start)
-        if (role_col %in% names(DL)) {
-          rc_val <- DL[[role_col]][j]
-          ok_rc <- if (u == DL$ref[j]) {
+        expected_anchored <- (u == DL_ref[j]) || (is_pt_all && cmp_ug < 0L && u >= cspec$pt_start)
+        if (has_role_col) {
+          rc_val <- role_vec[j]
+          ok_rc <- if (u == DL_ref[j]) {
             identical(rc_val, "reference")
           } else if (cmp_ug < 0L) {
-            rc_val %in% c("pre", "pre_nuisance") || (is_pt_all && u >= cspec$pt_start && identical(rc_val, "pre_pt_all_zero"))
+            rc_val %in% c("pre", "pre_nuisance") ||
+              (is_pt_all && u >= cspec$pt_start && identical(rc_val, "pre_pt_all_zero")) ||
+              (is_pt_ctrl && u >= cspec$pt_start && identical(rc_val, "pre_pt_ctrl_shared"))
           } else if (u < link_g[ell]) {
             if (qualified) rc_val %in% c("anticipation", "anticipation_att") else identical(rc_val, "anticipation_nuisance")
           } else {
             if (qualified) rc_val %in% c("post", "post_att") else identical(rc_val, "post_nuisance")
           }
           if (!isTRUE(ok_rc)) {
-            map_bad("Design row endpoint coordinate role disagrees with its calendar region or PT-all window.")
+            map_bad("Design row endpoint coordinate role disagrees with its calendar region or PT window.")
           }
         }
       }
-      if (!identical(as.double(DV$time[v]), u) || !identical(as.double(DV$g[v]), link_g[ell]) ||
-          !identical(DV$role[v], role) || !identical(DV$functional_key[v], key) ||
-          !identical(is.na(DV$param_index[v]), expected_anchored)) {
+      if (!identical(DV_time[v], u) || !identical(DV_g[v], link_g[ell]) ||
+          !identical(DV_role[v], role) || !identical(DV_fk[v], key) ||
+          !identical(DV_pna[v], expected_anchored)) {
         map_bad("Endpoint vertex is not the intrinsic qualified vertex of the link's cohort, date and operator.")
       }
     }
@@ -1425,9 +1590,10 @@ ipw_structural_design_checks <- function(link_g, link_s, link_t, link_K, link_fk
         c("cdid_ipw_class_operator_error", "cdid_ipw_certificate_error")
       )
     }
+    }
   }
 
-  validate_ipw_design_incidence(design)
+  if (!is_trusted_design) validate_ipw_design_incidence(design)
   list(dli = dli, vs = vs, vt = vt, fk = fk)
 }
 
@@ -1465,7 +1631,7 @@ ipw_structural_classes_assemble <- function(n_links, link_s, link_t, fk, vs, vt,
     }
     a_idx <- match(link_s[members], dates)
     b_idx <- match(link_t[members], dates)
-    if (anyDuplicated(paste(a_idx, b_idx))) {
+    if (anyDuplicated(a_idx * (length(dates) + 1L) + b_idx)) {
       cdid_abort(
         "Duplicate (s, t) link within one structural class.",
         c("cdid_ipw_class_duplicate_error", "cdid_ipw_certificate_error")
@@ -1501,36 +1667,44 @@ ipw_structural_classes_assemble <- function(n_links, link_s, link_t, fk, vs, vt,
   # Cross-class date-cycle check among retained links sharing identical (g, K, glm_control, mask)
   # Two distinct nuisance_view_ref objects with the same (g, K, glm_control) are checked via
   # chunked zero-outcome `verify_ipw_view_mask_compatibility`.
-  src_reps <- integer()
-  src_id <- integer(n_links)
-  for (ell in seq_len(n_links)) {
-    hit_k <- 0L
-    for (k in seq_along(src_reps)) {
-      rep_ell <- src_reps[k]
-      # Same verified nuisance reference group (identical `nuisance_view_ref`).
-      if (nu_gid[ell] == nu_gid[rep_ell] &&
-          identical(link_glm[[ell]], link_glm[[rep_ell]])) {
-        hit_k <- k
-        break
-      }
-      if (identical(link_cohort_g[[ell]], link_cohort_g[[rep_ell]]) &&
-          identical(link_cohort_K[[ell]], link_cohort_K[[rep_ell]]) &&
-          identical(link_glm[[ell]], link_glm[[rep_ell]])) {
-        # Decided by the caller's actual mask evidence for (link ell, source
-        # representative rep_ell): the view core streams or reads its bound
-        # registry certificate; the compact route reads complete-date posting facts.
-        same_mask <- same_mask_fn(ell, rep_ell)
-        if (isTRUE(same_mask)) {
+  fast_part_gid <- isTRUE(attr(same_mask_fn, "partition_by_nu_gid")) &&
+    length(link_glm) == n_links &&
+    (n_links <= 1L || all(vapply(link_glm[-1L], identical, logical(1L), link_glm[[1L]])))
+  if (fast_part_gid) {
+    src_reps <- which(!duplicated(nu_gid))
+    src_id <- match(nu_gid, nu_gid[src_reps])
+  } else {
+    src_reps <- integer()
+    src_id <- integer(n_links)
+    for (ell in seq_len(n_links)) {
+      hit_k <- 0L
+      for (k in seq_along(src_reps)) {
+        rep_ell <- src_reps[k]
+        # Same verified nuisance reference group (identical `nuisance_view_ref`).
+        if (nu_gid[ell] == nu_gid[rep_ell] &&
+            identical(link_glm[[ell]], link_glm[[rep_ell]])) {
           hit_k <- k
           break
         }
+        if (identical(link_cohort_g[[ell]], link_cohort_g[[rep_ell]]) &&
+            identical(link_cohort_K[[ell]], link_cohort_K[[rep_ell]]) &&
+            identical(link_glm[[ell]], link_glm[[rep_ell]])) {
+          # Decided by the caller's actual mask evidence for (link ell, source
+          # representative rep_ell): the view core streams or reads its bound
+          # registry certificate; the compact route reads complete-date posting facts.
+          same_mask <- same_mask_fn(ell, rep_ell)
+          if (isTRUE(same_mask)) {
+            hit_k <- k
+            break
+          }
+        }
       }
+      if (hit_k == 0L) {
+        src_reps <- c(src_reps, ell)
+        hit_k <- length(src_reps)
+      }
+      src_id[ell] <- hit_k
     }
-    if (hit_k == 0L) {
-      src_reps <- c(src_reps, ell)
-      hit_k <- length(src_reps)
-    }
-    src_id[ell] <- hit_k
   }
 
   dropped_all <- unlist(lapply(plans, function(pl) pl$members[pl$dropped]), use.names = FALSE)
@@ -1663,6 +1837,11 @@ ipw_view_structural_classes_core <- function(links, design, design_link_index, b
   fit_refs <- list()
   nu_gid <- integer(n_links)
   nuisance_checked <- if (is.null(cert_view)) NULL else ipw_link_view_nuisance_checked_set(frame_owner)
+  all_r_nu <- lapply(links, `[[`, "nuisance_view_ref")
+  fk_vf_cls <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+    cdid_fast_kernel("C_cdid_verify_fast")
+  } else NULL
+  first_nu_idx <- if (!is.null(fk_vf_cls)) fk_vf_cls(9L, all_r_nu, NULL, NULL, NULL) else NULL
   for (ell in seq_len(n_links)) {
     pl <- links[[ell]]
     r_nu <- pl$nuisance_view_ref
@@ -1670,10 +1849,14 @@ ipw_view_structural_classes_core <- function(links, design, design_link_index, b
     nv_obj <- get("nuisance_view", envir = r_nu, inherits = FALSE)
     lv_obj <- get("link_view", envir = pl$link_view_ref, inherits = FALSE)
     hit <- 0L
-    for (k in seq_along(nu_refs)) {
-      if (identical(nu_refs[[k]], r_nu)) {
-        hit <- k
-        break
+    if (!is.null(first_nu_idx)) {
+      if (first_nu_idx[ell] < ell) hit <- nu_gid[first_nu_idx[ell]]
+    } else {
+      for (k in seq_along(nu_refs)) {
+        if (identical(nu_refs[[k]], r_nu)) {
+          hit <- k
+          break
+        }
       }
     }
     nu_new <- hit == 0L
@@ -1741,6 +1924,13 @@ ipw_view_structural_classes_core <- function(links, design, design_link_index, b
       },
       cdid_ipw_shared_mask_error = function(e) FALSE
     )
+  }
+  if (!is.null(cert_view)) {
+    gk_keys <- paste0(link_g, ":", vapply(link_K, paste, character(1L), collapse = ","))
+    vo_vec <- mask_certificate$view_operator[cert_view]
+    if (identical(match(gk_keys, gk_keys), match(vo_vec, vo_vec))) {
+      attr(same_mask_fn, "partition_by_nu_gid") <- TRUE
+    }
   }
   ipw_structural_classes_assemble(n_links, link_s, link_t, fk, vs, vt, dli, nu_gid, nu_refs,
     link_cohort_g = lapply(links, function(pl) pl$cohorts$g), link_cohort_K = lapply(links, function(pl) pl$cohorts$K),
@@ -3247,12 +3437,15 @@ ipw_pipeline_request_ledger <- function(target_cohorts, calendar, cohort_univers
   delta <- as.double(anticipation)
   if (is.null(target_post_times)) {
     # did-style declared grid: every stored calendar date at or after g.
-    parts <- lapply(tg, function(g) {
-      tt <- cal[cal >= g]
-      if (!length(tt)) NULL else data.frame(g = g, time = tt, requested_by = "calendar_grid", stringsAsFactors = FALSE)
-    })
-    parts <- parts[!vapply(parts, is.null, logical(1L))]
-    rows <- if (length(parts)) do.call(rbind, parts) else data.frame(g = numeric(), time = numeric(), requested_by = character(), stringsAsFactors = FALSE)
+    g_rep <- rep(tg, each = length(cal))
+    t_rep <- rep.int(cal, length(tg))
+    keep_gt <- t_rep >= g_rep
+    rows <- if (any(keep_gt)) {
+      data.frame(g = g_rep[keep_gt], time = t_rep[keep_gt],
+                 requested_by = rep.int("calendar_grid", sum(keep_gt)), stringsAsFactors = FALSE)
+    } else {
+      data.frame(g = numeric(), time = numeric(), requested_by = character(), stringsAsFactors = FALSE)
+    }
   } else {
     tp <- target_post_times
     tc <- if (is.data.frame(tp) && "time" %in% names(tp)) "time" else "t"
@@ -3524,6 +3717,11 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
   all_points <- if (is.null(registry)) list() else registry$point_links
   points <- vector("list", Q); problems <- list(); enclosures <- vector("list", Q)
   custom_aux_retained <- 0.0
+  custom_aux_ctx <- if (is.function(custom_est_method) && !has_raw_aux && is.null(registry$cp04_reader)) {
+    cx <- ipw_owner_construction_context(frame_owner)
+    ipw_owner_context_check_frame(cx, frame_owner)
+    cx
+  } else NULL
   desc_status <- rep("supported", Q); desc_reason <- rep(NA_character_, Q); desc_counts <- vector("list", Q)
   for (j in seq_len(Q)) {
     d <- descriptors[[j]]; lv <- NULL; idx <- NA_integer_; support_err <- NULL
@@ -3557,7 +3755,7 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
       trial <- tryCatch(construct_ipw_link_view(frame_owner, d$s, d$t, g = d$g, K = d$K, nuisance_view = NULL,
         control = control$owner_control, link_id = paste0("reporting:", j),
         functional_key = paste0("reporting_operator:", gsub(" ", "", paste(d$g, paste(d$K, collapse = ","), sep = ":"))),
-        require_support = TRUE, verify_nuisance_mask = FALSE),
+        require_support = TRUE, verify_nuisance_mask = FALSE, construction_context = custom_aux_ctx),
         cdid_ipw_support_error = identity)
       if (inherits(trial, "error")) {
         support_err <- trial
@@ -3598,6 +3796,14 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
         ", t=", fmt_design_num(d$t), ", K={", paste(fmt_design_num(d$K), collapse = ","), "}]")
       if (has_raw_aux && !is.null(registry$raw_aux_counts[[j]])) {
         desc_counts[[j]] <- registry$raw_aux_counts[[j]]
+      } else if (!is.null(registry$cp04_reader) &&
+                 is.list(cdid_fast_kernel_cache$last_cp04_aux) &&
+                 identical(cdid_fast_kernel_cache$last_cp04_aux$frame_ref, frame_owner$ref) &&
+                 j <= length(cdid_fast_kernel_cache$last_cp04_aux$counts) &&
+                 !is.null(cdid_fast_kernel_cache$last_cp04_aux$counts[[j]]) &&
+                 identical(cdid_fast_kernel_cache$last_cp04_aux$aux_errors[[j]], support_err) &&
+                 cdid_are_default_fns("construct_ipw_nuisance_view")) {
+        desc_counts[[j]] <- cdid_fast_kernel_cache$last_cp04_aux$counts[[j]]
       } else {
         probe <- construct_ipw_nuisance_view(frame_owner, d$g, d$K, d$s, d$t, control$owner_control,
           nuisance_id = paste0("reporting_probe:", j), require_support = FALSE)
@@ -3725,6 +3931,11 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
   if (!is.null(registry$cp04) && Qs && length(backend_ids)) {
     ids <- unique(backend_ids)
     signs <- vapply(specs[active_columns], `[[`, numeric(1), "sign")
+    fk_set_aux <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+      cdid_fast_kernel("C_cdid_matrix_set_rows")
+    } else {
+      NULL
+    }
     # CP08 retained moment IF: an admitted auxiliary extension serves the exact
     # same-recipe columns from the retained raw store (frame scale on the
     # F = A, lambda = 1 frame, the existing sign, the original output slot) and
@@ -3735,18 +3946,59 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
       retained_pipeline_entries + 8 * n_total * (length(requested) + nrow(ledger)))
     service <- cp04_retained_if_auxiliary_service(retained_store, registry$cp04, backend_ids, aux_retained)
     if (is.null(service)) {
-      cp04_replay_links(registry$cp04, ids, function(b) {
-        for (j in seq_along(active_columns)) out[b$rows, active_columns[j]] <<-
-          signs[j] * b$phi[, match(backend_ids[j], ids)]
-      }, scale = "frame", chunk_rows = preflight$chunk_rows)
+      col_src_all <- as.integer(match(backend_ids, ids))
+      col_dst_all <- as.integer(active_columns)
+      signs_all <- as.double(signs)
+      fast_done <- if (exists("cdid_fast_aux_replay", mode = "function", inherits = TRUE) &&
+                       identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+        cdid_fast_aux_replay(registry$cp04, ids, col_dst_all, col_src_all, signs_all, out, preflight$chunk_rows)
+      } else {
+        FALSE
+      }
+      if (!isTRUE(fast_done)) {
+        cp04_replay_links(registry$cp04, ids, function(b) {
+          if (!is.null(fk_set_aux)) {
+            fk_set_aux(out, list(as.integer(b$rows), col_dst_all, col_src_all, signs_all), b$phi)
+          } else {
+            for (j in seq_along(active_columns)) out[b$rows, active_columns[j]] <<-
+              signs[j] * b$phi[, col_src_all[j]]
+          }
+        }, scale = "frame", chunk_rows = preflight$chunk_rows)
+      }
     } else {
       if (!isTRUE(preflight$chunk_rows == service$chunk_rows))
         cp04_abort("The auxiliary replay row partition differs from its admitted original plan.", "integrity")
       served <- which(!is.na(service$column)); streamed <- which(is.na(service$column))
-      cp04_retained_if_auxiliary_slices(retained_store, registry$cp04, backend_ids, function(b) {
-        for (j in served) out[b$rows, active_columns[j]] <<-
-          signs[j] * b$phi[, match(backend_ids[j], b$links)]
-      })
+      fast_aux_done <- FALSE
+      if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+          cdid_are_default_fns(c("cp04_retained_if_auxiliary_slices", cp04_retained_if_default_validators))) {
+        fk_vf_aux <- cdid_fast_kernel("C_cdid_verify_fast")
+        if (!is.null(fk_vf_aux) && !(exists("phase", retained_store, inherits = FALSE) && !is.null(retained_store$phase)) &&
+            !is.null(retained_store$auxiliary) && identical(retained_store$auxiliary$backend_ids, as.integer(backend_ids)) &&
+            is.finite(retained_store$auxiliary$work) && retained_store$auxiliary$work <= registry$cp04$control$max_work_ops) {
+          fast_st <- fk_vf_aux(3L, retained_store, registry$cp04, retained_store$links, list(retained_store$B, "core", 1L))
+          if (!is.null(fast_st) && isTRUE(fast_st$lambda == 1) &&
+              identical(as.double(fast_st$N), as.double(fast_st$n_A)) &&
+              isTRUE(retained_store$lambda == 1) && identical(as.double(retained_store$N), as.double(retained_store$n_A))) {
+            phi_s <- retained_store$phi
+            if (!is.null(fk_set_aux) && length(served)) {
+              fk_set_aux(out, list(NULL, as.integer(active_columns[served]), as.integer(service$column[served]), as.double(signs[served])), phi_s)
+            } else {
+              for (j in served) {
+                out[, active_columns[j]] <- signs[j] * phi_s[, service$column[j]]
+              }
+            }
+            retained_store$auxiliary$slice_passes <- retained_store$auxiliary$slice_passes + 1L
+            fast_aux_done <- TRUE
+          }
+        }
+      }
+      if (!fast_aux_done) {
+        cp04_retained_if_auxiliary_slices(retained_store, registry$cp04, backend_ids, function(b) {
+          for (j in served) out[b$rows, active_columns[j]] <<-
+            signs[j] * b$phi[, match(backend_ids[j], b$links)]
+        })
+      }
       if (length(streamed)) {
         ids_stream <- unique(backend_ids[streamed])
         pre_stream <- cp04_preflight_links(registry$cp04, ids_stream, aux_retained + retained_store$entries,
@@ -3757,29 +4009,81 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
           "CP04 auxiliary producer, retained moment IF and requested reporting outputs")
         if (!identical(ids_stream, service$ids_stream) || !isTRUE(pre_stream$chunk_rows == service$chunk_rows_stream))
           cp04_abort("The unmatched auxiliary replay differs from its admitted plan.", "integrity")
+        col_src_st <- as.integer(match(backend_ids[streamed], ids_stream))
+        col_dst_st <- as.integer(active_columns[streamed])
+        signs_st <- as.double(signs[streamed])
         cp04_replay_links(registry$cp04, ids_stream, function(b) {
-          for (j in streamed) out[b$rows, active_columns[j]] <<-
-            signs[j] * b$phi[, match(backend_ids[j], ids_stream)]
+          if (!is.null(fk_set_aux)) {
+            fk_set_aux(out, list(as.integer(b$rows), col_dst_st, col_src_st, signs_st), b$phi)
+          } else {
+            for (j in streamed) out[b$rows, active_columns[j]] <<-
+              signs[j] * b$phi[, match(backend_ids[j], ids_stream)]
+          }
         }, scale = "frame", chunk_rows = pre_stream$chunk_rows)
       }
     }
   } else if (has_raw_aux && Qs && length(backend_ids)) {
     ids <- unique(backend_ids)
     signs <- vapply(specs[active_columns], `[[`, numeric(1), "sign")
+    fk_set_aux <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+      cdid_fast_kernel("C_cdid_matrix_set_rows")
+    } else {
+      NULL
+    }
     aux_retained <- retained_pipeline_entries + 8 * n_total * (length(requested) + nrow(ledger))
     service <- cp04_retained_if_auxiliary_service(retained_store, registry$raw_ipw, backend_ids, aux_retained)
     A_req <- matrix(0.0, nrow = n_a, ncol = length(active_columns))
     if (is.null(service)) {
-      cp04_replay_links(registry$raw_ipw, ids, function(b) {
-        for (j in seq_along(active_columns)) A_req[b$rows, j] <<- b$phi[, match(backend_ids[j], ids)]
-      }, scale = "frame", chunk_rows = preflight$chunk_rows)
+      col_src_all <- as.integer(match(backend_ids, ids))
+      col_dst_req <- seq_along(active_columns)
+      fast_done <- if (exists("cdid_fast_aux_replay", mode = "function", inherits = TRUE) &&
+                       identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+        cdid_fast_aux_replay(registry$raw_ipw, ids, col_dst_req, col_src_all, rep.int(1.0, length(active_columns)), A_req, preflight$chunk_rows)
+      } else {
+        FALSE
+      }
+      if (!isTRUE(fast_done)) {
+        cp04_replay_links(registry$raw_ipw, ids, function(b) {
+          if (!is.null(fk_set_aux)) {
+            fk_set_aux(A_req, list(as.integer(b$rows), col_dst_req, col_src_all, NULL), b$phi)
+          } else {
+            for (j in seq_along(active_columns)) A_req[b$rows, j] <<- b$phi[, col_src_all[j]]
+          }
+        }, scale = "frame", chunk_rows = preflight$chunk_rows)
+      }
     } else {
       if (!isTRUE(preflight$chunk_rows == service$chunk_rows))
         cp04_abort("The auxiliary replay row partition differs from its admitted original plan.", "integrity")
       served <- which(!is.na(service$column)); streamed <- which(is.na(service$column))
-      cp04_retained_if_auxiliary_slices(retained_store, registry$raw_ipw, backend_ids, function(b) {
-        for (j in served) A_req[b$rows, j] <<- b$phi[, match(backend_ids[j], b$links)]
-      })
+      fast_aux_done <- FALSE
+      if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+          cdid_are_default_fns(c("cp04_retained_if_auxiliary_slices", cp04_retained_if_default_validators))) {
+        fk_vf_aux <- cdid_fast_kernel("C_cdid_verify_fast")
+        if (!is.null(fk_vf_aux) && !(exists("phase", retained_store, inherits = FALSE) && !is.null(retained_store$phase)) &&
+            !is.null(retained_store$auxiliary) && identical(retained_store$auxiliary$backend_ids, as.integer(backend_ids)) &&
+            is.finite(retained_store$auxiliary$work) && retained_store$auxiliary$work <= registry$raw_ipw$control$max_work_ops) {
+          fast_st <- fk_vf_aux(3L, retained_store, registry$raw_ipw, retained_store$links, list(retained_store$B, "core", 1L))
+          if (!is.null(fast_st) && isTRUE(fast_st$lambda == 1) &&
+              identical(as.double(fast_st$N), as.double(fast_st$n_A)) &&
+              isTRUE(retained_store$lambda == 1) && identical(as.double(retained_store$N), as.double(retained_store$n_A))) {
+            phi_s <- retained_store$phi
+            if (!is.null(fk_set_aux) && length(served)) {
+              fk_set_aux(A_req, list(NULL, as.integer(served), as.integer(service$column[served]), NULL), phi_s)
+            } else {
+              for (j in served) {
+                A_req[, j] <- phi_s[, service$column[j]]
+              }
+            }
+            retained_store$auxiliary$slice_passes <- retained_store$auxiliary$slice_passes + 1L
+            fast_aux_done <- TRUE
+          }
+        }
+      }
+      if (!fast_aux_done) {
+        cp04_retained_if_auxiliary_slices(retained_store, registry$raw_ipw, backend_ids, function(b) {
+          for (j in served) A_req[b$rows, j] <<- b$phi[, match(backend_ids[j], b$links)]
+        })
+      }
       if (length(streamed)) {
         ids_stream <- unique(backend_ids[streamed])
         pre_stream <- cp04_preflight_links(registry$raw_ipw, ids_stream, aux_retained + retained_store$entries,
@@ -3790,48 +4094,79 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
           "CP04 auxiliary producer, retained moment IF and requested reporting outputs")
         if (!identical(ids_stream, service$ids_stream) || !isTRUE(pre_stream$chunk_rows == service$chunk_rows_stream))
           cp04_abort("The unmatched auxiliary replay differs from its admitted plan.", "integrity")
+        col_src_st <- as.integer(match(backend_ids[streamed], ids_stream))
+        col_dst_st <- as.integer(streamed)
         cp04_replay_links(registry$raw_ipw, ids_stream, function(b) {
-          for (j in streamed) A_req[b$rows, j] <<- b$phi[, match(backend_ids[j], ids_stream)]
+          if (!is.null(fk_set_aux)) {
+            fk_set_aux(A_req, list(as.integer(b$rows), col_dst_st, col_src_st, NULL), b$phi)
+          } else {
+            for (j in streamed) A_req[b$rows, j] <<- b$phi[, match(backend_ids[j], ids_stream)]
+          }
         }, scale = "frame", chunk_rows = pre_stream$chunk_rows)
       }
     }
     full_req <- transport_if_to_full_frame(A_req, n_total, a_to_full)$Phi_full
-    for (j in seq_along(active_columns)) {
-      out[, active_columns[j]] <- signs[j] * full_req[, j]
+    if (!is.null(fk_set_aux)) {
+      fk_set_aux(out, list(NULL, as.integer(active_columns), seq_along(active_columns), as.double(signs)), full_req)
+    } else {
+      for (j in seq_along(active_columns)) {
+        out[, active_columns[j]] <- signs[j] * full_req[, j]
+      }
     }
   }
   el <- eh <- if (transfer_requested) matrix(NA_real_, 1L, R) else NULL
-  rl <- rh <- if (transfer_requested) out else NULL; metas <- vector("list", R)
-  meta_row <- function(g, time, role, target_id, ref, base_t, is_post, ledger_index, auxiliary_index, status, reason, loading_column, functional_key) {
-    data.frame(g = g, time = time, role = role, target_id = target_id, param_id = target_id, param_index = NA_integer_,
-      functional_key = functional_key, ref = ref, base_t = base_t, base_period_mode = base_period, is_post = is_post,
-      ledger_index = ledger_index, auxiliary_index = auxiliary_index, support_status = status, support_reason = reason,
-      loading_column = loading_column, stringsAsFactors = FALSE)
-  }
-  for (j in seq_along(specs)) {
+  rl <- rh <- if (transfer_requested) out else NULL
+  m_g <- numeric(R)
+  m_time <- numeric(R)
+  m_role <- character(R)
+  m_tid <- character(R)
+  m_fk <- rep(NA_character_, R)
+  m_ref <- numeric(R)
+  m_base_t <- numeric(R)
+  m_is_post <- logical(R)
+  m_ledger_idx <- rep(NA_integer_, R)
+  m_aux_idx <- rep(NA_integer_, R)
+  m_status <- character(R)
+  m_reason <- character(R)
+  m_load_col <- rep(NA_integer_, R)
+
+  n_specs <- length(specs)
+  for (j in seq_len(n_specs)) {
     d <- specs[[j]]
+    m_g[j] <- d$g
+    m_time[j] <- d$t
+    m_ref[j] <- d$ref
+    m_base_t[j] <- d$from
+    m_is_post[j] <- FALSE
     if (identical(d$status, "reference_zero")) {
-      metas[[j]] <- meta_row(d$g, d$t, "reference", paste0("reference(g=", fmt_design_num(d$g), ",t=", fmt_design_num(d$t), ")"), d$ref, d$from, FALSE,
-        NA_integer_, NA_integer_, "deterministic_reference_zero", "universal base-period reference cell: exact zero with zero influence function", NA_integer_, NA_character_)
+      m_role[j] <- "reference"
+      m_tid[j] <- paste0("reference(g=", fmt_design_num(d$g), ",t=", fmt_design_num(d$t), ")")
+      m_status[j] <- "deterministic_reference_zero"
+      m_reason[j] <- "universal base-period reference cell: exact zero with zero influence function"
       th[j] <- 0.0; if (isTRUE(compute_if)) out[, j] <- 0.0; available[j] <- TRUE
       if (isTRUE(transfer_requested)) { el[j] <- eh[j] <- 0.0; rl[, j] <- rh[, j] <- 0.0 }
       next
     }
     tid <- paste0("pre(g=", fmt_design_num(d$g), ",t=", fmt_design_num(d$t), ")")
+    m_role[j] <- "pre"
+    m_tid[j] <- tid
     if (identical(d$status, "unavailable")) {
-      metas[[j]] <- meta_row(d$g, d$t, "pre", tid, d$ref, d$from, FALSE, NA_integer_, NA_integer_, "unavailable_pretrend", d$reason, NA_integer_, NA_character_)
+      m_status[j] <- "unavailable_pretrend"
+      m_reason[j] <- d$reason
       next
     }
     q <- d$index
+    m_aux_idx[j] <- as.integer(q)
+    m_fk[j] <- paste0("auxiliary:", q)
     if (!identical(desc_status[q], "supported")) {
-      metas[[j]] <- meta_row(d$g, d$t, "pre", tid, d$ref, d$from, FALSE, NA_integer_, as.integer(q), "unavailable_pretrend",
-        paste0("unsupported_pair: ", desc_reason[q]), NA_integer_, paste0("auxiliary:", q))
+      m_status[j] <- "unavailable_pretrend"
+      m_reason[j] <- paste0("unsupported_pair: ", desc_reason[q])
       next
     }
     qs <- match(q, sup)
-    metas[[j]] <- meta_row(d$g, d$t, "pre", tid, d$ref, d$from, FALSE, NA_integer_, as.integer(q), "supported_direct_pretrend",
-      paste0("direct auxiliary comparison ", fmt_design_num(d$from), "->", fmt_design_num(d$t), " with controls {", paste(fmt_design_num(d$K), collapse = ","), "}"),
-      NA_integer_, paste0("auxiliary:", q))
+    m_status[j] <- "supported_direct_pretrend"
+    m_reason[j] <- paste0("direct auxiliary comparison ", fmt_design_num(d$from), "->", fmt_design_num(d$t),
+      " with controls {", paste(fmt_design_num(d$K), collapse = ","), "}")
     th[j] <- d$sign * theta[qs]
     if (is.null(registry$cp04) && !has_raw_aux && isTRUE(compute_if)) out[, j] <- d$sign * full[, qs]
     available[j] <- TRUE
@@ -3840,19 +4175,48 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
       for (i in seq_len(n_total)) { z <- gmm_iv_mul(gmm_iv(d$sign), c(lo[i, qs], hi[i, qs])); rl[i, j] <- z[1L]; rh[i, j] <- z[2L] }
     }
   }
-  for (h in seq_len(R_post)) {
-    j <- length(specs) + h
-    col <- if (is.null(gmm)) NA_integer_ else ledger$loading_column[h]
-    metas[[j]] <- meta_row(ledger$g[h], ledger$time[h], "post", ledger$cell_id[h], ledger$ref[h], ledger$ref[h], TRUE,
-      as.integer(h), NA_integer_, ledger$support_status[h], ledger$support_reason[h], col, NA_character_)
-    if (!is.na(col)) {
-      th[j] <- gmm$estimates[col]; if (isTRUE(compute_if)) out[, j] <- gmm$if_full[, col]; available[j] <- TRUE
-      if (isTRUE(transfer_requested)) { el[j] <- gmm$enclosure$theta$lo[col]; eh[j] <- gmm$enclosure$theta$hi[col]; rl[, j] <- gmm$enclosure$rows$lo[, col]; rh[, j] <- gmm$enclosure$rows$hi[, col] }
+  if (R_post > 0L) {
+    post_j <- seq.int(n_specs + 1L, n_specs + R_post)
+    m_g[post_j] <- ledger$g
+    m_time[post_j] <- ledger$time
+    m_role[post_j] <- "post"
+    m_tid[post_j] <- ledger$cell_id
+    m_ref[post_j] <- ledger$ref
+    m_base_t[post_j] <- ledger$ref
+    m_is_post[post_j] <- TRUE
+    m_ledger_idx[post_j] <- seq_len(R_post)
+    m_status[post_j] <- ledger$support_status
+    m_reason[post_j] <- ledger$support_reason
+    if (!is.null(gmm)) {
+      cols_post <- as.integer(ledger$loading_column)
+      m_load_col[post_j] <- cols_post
+      ok_p <- which(!is.na(cols_post))
+      if (length(ok_p) > 0L) {
+        jj_ok <- n_specs + ok_p
+        cc_ok <- cols_post[ok_p]
+        th[jj_ok] <- gmm$estimates[cc_ok]
+        if (isTRUE(compute_if)) out[, jj_ok] <- gmm$if_full[, cc_ok, drop = FALSE]
+        available[jj_ok] <- TRUE
+        if (isTRUE(transfer_requested)) {
+          el[jj_ok] <- gmm$enclosure$theta$lo[cc_ok]
+          eh[jj_ok] <- gmm$enclosure$theta$hi[cc_ok]
+          rl[, jj_ok] <- gmm$enclosure$rows$lo[, cc_ok, drop = FALSE]
+          rh[, jj_ok] <- gmm$enclosure$rows$hi[, cc_ok, drop = FALSE]
+        }
+      }
     }
   }
-  meta <- do.call(rbind, metas); o <- order(meta$g, meta$time); meta <- meta[o, , drop = FALSE]; rownames(meta) <- NULL
-  th <- th[o]; available <- available[o]; names(th) <- meta$target_id
-  if (isTRUE(compute_if)) { out <- out[, o, drop = FALSE]; colnames(out) <- meta$target_id }
+  o <- order(m_g, m_time)
+  m_tid_o <- m_tid[o]
+  meta <- cdid_fast_df(list(
+    g = m_g[o], time = m_time[o], role = m_role[o], target_id = m_tid_o, param_id = m_tid_o,
+    param_index = rep.int(NA_integer_, R), functional_key = m_fk[o], ref = m_ref[o],
+    base_t = m_base_t[o], base_period_mode = rep.int(base_period, R), is_post = m_is_post[o],
+    ledger_index = m_ledger_idx[o], auxiliary_index = m_aux_idx[o], support_status = m_status[o],
+    support_reason = m_reason[o], loading_column = m_load_col[o]
+  ))
+  th <- th[o]; available <- available[o]; names(th) <- m_tid_o
+  if (isTRUE(compute_if)) { out <- out[, o, drop = FALSE]; colnames(out) <- m_tid_o }
   meta <- chained_pt_reporting_tags(meta, pt_assumption, pt_start, ant, descriptors, pt_catalog_links)
   meta$available <- available
   meta$reported_column <- seq_len(R)
@@ -3860,8 +4224,18 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
   # Complete reported joint covariance on the supported block from the full common frame.
   S <- if (isTRUE(compute_if)) matrix(NA_real_, R, R, dimnames = list(meta$target_id, meta$target_id)) else NULL
   if (length(av) && isTRUE(compute_if)) {
-    centered <- sweep(out[, av, drop = FALSE], 2L, colMeans(out[, av, drop = FALSE]), "-")
-    S[av, av] <- crossprod(centered) * as.double(n_a) / (as.double(n_total)^2)
+    out_av <- out[, av, drop = FALSE]
+    fk_gram <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) cdid_fast_kernel("C_cdid_center_gram") else NULL
+    fast_S <- if (!is.null(fk_gram)) {
+      denom_scale <- (as.double(n_total)^2) / as.double(n_a)
+      fk_gram(out_av, colMeans(out_av), NULL, NULL, TRUE, denom_scale)
+    } else NULL
+    if (!is.null(fast_S)) {
+      S[av, av] <- fast_S
+    } else {
+      centered <- sweep(out_av, 2L, colMeans(out_av), "-")
+      S[av, av] <- crossprod(centered) * as.double(n_a) / (as.double(n_total)^2)
+    }
   }
   E <- if (!isTRUE(transfer_requested)) NULL else list(theta = list(lo = el[, o, drop = FALSE], hi = eh[, o, drop = FALSE]),
     rows = list(lo = rl[, o, drop = FALSE], hi = rh[, o, drop = FALSE]))
@@ -3873,11 +4247,19 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
     for (k in seq_along(si$lo)) { v <- gmm_iv_mul(c(si$lo[k], si$hi[k]), gmm_iv(as.double(n_a))); si$lo[k] <- v[1L]; si$hi[k] <- v[2L] }
     SE <- list(lo = S, hi = S); SE$lo[av, av] <- si$lo; SE$hi[av, av] <- si$hi
   }
-  desc_table <- if (Q) data.frame(index = seq_len(Q), g = vapply(descriptors, `[[`, numeric(1L), "g"),
-    s = vapply(descriptors, `[[`, numeric(1L), "s"), t = vapply(descriptors, `[[`, numeric(1L), "t"),
-    K = vapply(descriptors, function(x) paste0("{", paste(fmt_design_num(x$K), collapse = ","), "}"), character(1L)),
-    status = desc_status, reason = desc_reason, stringsAsFactors = FALSE) else
-    data.frame(index = integer(), g = numeric(), s = numeric(), t = numeric(), K = character(), status = character(), reason = character(), stringsAsFactors = FALSE)
+  desc_table <- if (Q) {
+    d_g <- d_s <- d_t <- numeric(Q)
+    d_K <- character(Q)
+    for (j in seq_len(Q)) {
+      dj <- descriptors[[j]]
+      d_g[j] <- dj$g; d_s[j] <- dj$s; d_t[j] <- dj$t
+      kj <- dj$K
+      d_K[j] <- if (length(kj) == 1L && is.infinite(kj) && kj > 0) "{Inf}" else paste0("{", paste(fmt_design_num(kj), collapse = ","), "}")
+    }
+    cdid_fast_df(list(index = seq_len(Q), g = d_g, s = d_s, t = d_t, K = d_K, status = desc_status, reason = desc_reason))
+  } else {
+    cdid_fast_df(list(index = integer(), g = numeric(), s = numeric(), t = numeric(), K = character(), status = character(), reason = character()))
+  }
   list(base_period = base_period, target_meta = meta, theta_hat = th, if_full = out, available = available,
     Sigma_a = S, Sigma_a_enclosure = SE, enclosure = E, L_map = NULL,
     auxiliary = list(descriptors = descriptors, selections = selections, point_links = points, descriptor_status = desc_table,
@@ -3971,7 +4353,8 @@ compute_chained_ipw_inference <- function(
   n <- nrow(Psi); J <- ncol(Psi)
   mb <- validate_multiplier_budget(multiplier_budget)
   ia <- validate_ipw_pipeline_inference_accuracy(inference_accuracy)
-  if (length(est) != J || n < 1L || any(!is.finite(Psi)) || any(!is.finite(est)) ||
+  if (length(est) != J || n < 1L || (!is.finite(sum(Psi)) && any(!is.finite(Psi))) ||
+      (!is.finite(sum(est)) && any(!is.finite(est))) ||
       !gmm_scalar_numeric(alp, positive=TRUE) || alp >= 1.0) {
     cdid_ipw_pipeline_abort("Invalid inference inputs.", "cdid_ipw_pipeline_input_error")
   }
@@ -4024,21 +4407,22 @@ compute_chained_ipw_inference <- function(
       infer_entries > mb$max_workspace_cells || 8.0*infer_entries > mb$max_workspace_bytes) {
     cdid_ipw_pipeline_abort("Inference producer/interval/consumer storage exceeds the explicit multiplier budget.", "cdid_ipw_pipeline_bound_error")
   }
-  S <- matrix(0.0,G,J)
   if (is.null(cluster_full) && typeof(Psi) == "double" && !is.object(Psi)) {
-    S[,] <- 0.0 + Psi
+    raw_cluster_sums <- matrix(0.0 + as.double(Psi), n, J)
+    S <- sweep(raw_cluster_sums, 2L, .colMeans(raw_cluster_sums, n, J, FALSE), "-")
   } else {
+    S <- matrix(0.0,G,J)
     for (i in seq_len(n)) S[map[i],] <- S[map[i],] + Psi[i,]
+    raw_cluster_sums <- S
+    S <- sweep(S,2L,colMeans(S),"-")
   }
-  raw_cluster_sums <- S
-  S <- sweep(S,2L,colMeans(S),"-")
   V <- crossprod(S)/(as.double(n)^2)
   dimnames(V) <- list(names(estimates),names(estimates))
-  if (any(!is.finite(S)) || any(!is.finite(V)))
+  if ((!is.finite(sum(S)) && any(!is.finite(S))) || (!is.finite(sum(V)) && any(!is.finite(V))))
     cdid_ipw_pipeline_abort("Nonfinite inference covariance or cluster sums.", "cdid_ipw_pipeline_scale_error")
   analytical_se <- sqrt(pmax(0.0,diag(V)))
   se <- analytical_se
-  deterministic <- which(colSums(abs(Psi)) == 0.0 & est == 0.0)
+  deterministic <- which(.colSums(abs(Psi), n, J, FALSE) == 0.0 & est == 0.0)
   # A reference-only selection has exact zero intervals and needs no quantile.
   zcrit <- if (length(deterministic) == J) 0.0 else stats::qnorm(1.0-alp/2.0)
   crit <- zcrit; mult <- NULL; rng <- NULL
@@ -4269,8 +4653,10 @@ ipw_pipeline_supported_inference <- function(estimates, if_full, available, clus
   if (!is.logical(available) || length(available) != J || anyNA(available)) {
     cdid_ipw_pipeline_abort("`available` must be a complete logical selector over the requested targets.", "cdid_ipw_pipeline_input_error")
   }
-  if (any(available & (!is.finite(est) | colSums(!is.finite(Psi)) > 0L))) {
-    cdid_ipw_pipeline_abort("An available target must have a finite estimate and finite influence-function column.", "cdid_ipw_pipeline_integrity_error")
+  if (!is.finite(sum(est[available])) || !is.finite(sum(Psi[, available, drop = FALSE]))) {
+    if (any(available & (!is.finite(est) | colSums(!is.finite(Psi)) > 0L))) {
+      cdid_ipw_pipeline_abort("An available target must have a finite estimate and finite influence-function column.", "cdid_ipw_pipeline_integrity_error")
+    }
   }
   av <- which(available)
   if (!length(av)) return(ipw_pipeline_empty_inference(ids, n, cluster_full, eligible_full, reason))
@@ -4459,7 +4845,7 @@ aggregate_chained_ipw_targets <- function(
   btype = "rademacher", seed = NULL, multiplier_budget, inference_accuracy,
   enclosure = NULL, fixed_signs = NULL, eligible_full = NULL, na.rm = FALSE, available = NULL,
   bstrap = NULL, caller_rng = FALSE, balance_e = NULL, min_e = -Inf, max_e = Inf,
-  calendar = NULL, cohort_grid = NULL, share_law = NULL, frame_ids = NULL
+  calendar = NULL, cohort_grid = NULL, share_law = NULL, frame_ids = NULL, share_eligibility = NULL
 ) {
   typ <- match.arg(type); th <- as.double(theta_hat); X <- as.matrix(target_if_full)
   n <- nrow(X); R <- ncol(X); g <- as.double(target_meta$g); tt <- as.double(target_meta$time)
@@ -4483,6 +4869,16 @@ aggregate_chained_ipw_targets <- function(
   incomplete_masses <- first_masses && anyNA(full_frame_w)
   if (incomplete_masses && !is.null(enclosure))
     cdid_ipw_pipeline_abort("Interval enclosures are not available with incomplete first-calendar masses.", "cdid_ipw_pipeline_aggregation_error")
+  # Issue #16: restricted eligibility contexts (missing_reference = "exclude")
+  # use the masses m_g = H(V I_g E_g) with contribution V I_g E_g - m_g; the D61
+  # incomplete-weight rules apply to the masses actually read.
+  restricted_masses <- !is.null(share_eligibility)
+  if (restricted_masses && (!first_masses || !is.null(enclosure) || !is.list(share_eligibility) ||
+      !is.numeric(share_eligibility$cohort) || !is.list(share_eligibility$excluded) ||
+      length(share_eligibility$cohort) != length(share_eligibility$excluded) ||
+      any(vapply(share_eligibility$excluded, function(e) !is.numeric(e) || anyNA(e) || any(e < 1 | e > n), logical(1)))))
+    cdid_ipw_pipeline_abort("Restricted eligibility masses need first-calendar masses, valid frame positions and no interval enclosure.",
+      "cdid_ipw_pipeline_aggregation_error")
   if (is.null(available)) available <- is.finite(th) & colSums(!is.finite(X)) == 0L
   if (!is.logical(available) || length(available) != R || anyNA(available) ||
       any(available & (!is.finite(th) | colSums(!is.finite(X)) > 0L))) {
@@ -4510,13 +4906,17 @@ aggregate_chained_ipw_targets <- function(
   p <- rep(NA_real_, K); P <- matrix(0.0, n, K); piv <- if (is.null(enclosure)) NULL else matrix(NA_real_, 2L, K); Penc <- NULL
   names(p) <- colnames(P) <- as.character(cohorts)
   mass_complete <- stats::setNames(rep(TRUE, K), as.character(cohorts)); mass_missing <- character(K)
-  if (shares_known && incomplete_masses) {
+  if (shares_known && (incomplete_masses || restricted_masses)) {
     # D61 (TeX (5)-(6)): masses m_g = H(I_g V) with IF u_g - m_g. Every share
     # map here is degree 0, so the unnormalized masses feed the same weights,
     # derivatives and cross-covariances; never-treated V is not demanded and a
     # cohort lacking V is refused only by the aggregates that read its mass.
     for (k in seq_len(K)) {
       ind <- full_frame_g == cohorts[k]
+      if (restricted_masses) {
+        ei <- match(cohorts[k], share_eligibility$cohort)
+        if (!is.na(ei)) ind[share_eligibility$excluded[[ei]]] <- FALSE
+      }
       gap <- which(ind & is.na(full_frame_w))
       if (length(gap)) {
         mass_complete[k] <- FALSE
@@ -4830,7 +5230,9 @@ aggregate_chained_ipw_targets <- function(
     # incomplete (degree-0 maps; never-treated V not demanded).
     out$share_law <- "first_calendar_masses"
     out$cohort_mass_complete <- mass_complete
-    out$cohort_masses_unnormalized <- incomplete_masses
+    out$cohort_masses_unnormalized <- incomplete_masses || restricted_masses
+    if (restricted_masses) out$cohort_mass_eligibility_restricted <- stats::setNames(cohorts %in% share_eligibility$cohort,
+      as.character(cohorts))
   }
   out
 }
@@ -5062,6 +5464,9 @@ run_chained_ipw_pipeline <- function(
     ctrl$gmm_accuracy$covariance_strategy$weighting_requested <- wt_requested
     ctrl$gmm_accuracy$covariance_strategy$weighting_canonical <- wt_mode
   }
+  if (isTRUE(run_numerical_transfer) && identical(wt_mode, "within")) {
+    cdid_ipw_pipeline_abort("Interval numerical transfer (`run_numerical_transfer = TRUE`) is not supported with `gmm_weighting = \"within\"`.", "cdid_ipw_pipeline_control_error")
+  }
   if (isTRUE(run_numerical_transfer) && (is.null(ctrl$inference_accuracy) ||
       identical(ctrl$gmm_accuracy$method, "conventional_chol_qr")))
     cdid_ipw_pipeline_abort("Private numerical transfer requires explicit inference budgets and a strict GMM certificate method.", "cdid_ipw_pipeline_control_error")
@@ -5210,10 +5615,23 @@ run_chained_ipw_pipeline <- function(
   # Invocation-only maps have no later consumer. Retained replay closures must
   # not keep this sealed intake (and its source/ordering arrays) alive.
   prepared <- bound <- NULL
+  if (exists("cdid_fast_kernel_cache", inherits = TRUE)) {
+    cdid_fast_kernel_cache$last_panel_prep <- NULL
+    cdid_fast_kernel_cache$last_retained_if <- NULL
+    on.exit({
+      cdid_fast_kernel_cache$last_panel_prep <- NULL
+      cdid_fast_kernel_cache$last_retained_if <- NULL
+    }, add = TRUE)
+  }
   replay_n <- if (is.null(cp04)) panel_owner$n_a_units else length(f_id)
   n_total <- as.integer(length(f_id))
   n_a_units <- as.integer(panel_owner$n_a_units)
-  a_to_full <- match(panel_owner$a_id, f_id)
+  a_to_full <- if (n_a_units == n_total &&
+                   (gmm_sexp_aliases(panel_owner$a_id, f_id) || identical(panel_owner$a_id, f_id))) {
+    seq_len(n_a_units)
+  } else {
+    match(panel_owner$a_id, f_id)
+  }
   if (anyNA(a_to_full) || length(a_to_full) != n_a_units) {
     cdid_ipw_pipeline_abort(
       "Failed to align `panel_owner$a_id` into the full unit frame `f_id`.",
@@ -5236,6 +5654,10 @@ run_chained_ipw_pipeline <- function(
     full_frame_w <- as.double(cp04$reference_source$V)
     share_law <- "first_calendar_masses"
   }
+  # Issue #16: restricted eligibility contexts (NULL on every other fit) give
+  # the per-context catalog occupancy and the restricted cohort masses.
+  eligibility <- if (is.null(cp04)) NULL else cp04$reference_source$eligibility
+  share_eligibility <- if (is.null(eligibility)) NULL else chained_reference_share_eligibility(eligibility, full_frame_g)
 
   # Optional one-way cluster assignment on the full frame
   cluster_full <- NULL
@@ -5330,7 +5752,7 @@ run_chained_ipw_pipeline <- function(
         multiplier_budget = ctrl$multiplier_budget, inference_accuracy = ctrl$inference_accuracy,
         enclosure = rm$enclosure, fixed_signs = fixed_signs, eligible_full = eligible_full, na.rm = na_rm, available = rm$available,
         bstrap = bstrap, caller_rng = caller_rng, calendar = panel_owner$all_times, cohort_grid = panel_owner$cohorts,
-        share_law = share_law, frame_ids = f_id)
+        share_law = share_law, frame_ids = f_id, share_eligibility = share_eligibility)
     }
     out
   }
@@ -5403,6 +5825,34 @@ run_chained_ipw_pipeline <- function(
   # First build catalog (or if `declared_qualified` & `target_post_times` are NULL,
   # qualify all clean causal endpoints `(g, u)` present in the retained catalog rows).
   progress("building the comparison catalog for target cohorts ", paste(fmt_design_num(tgt_cohorts), collapse = ", "))
+  # Issue #16: restricted eligibility contexts read their own occupancy (the
+  # owner counts minus their excluded units' pairs); the native catalog pair,
+  # which has no context identity, is not used for them.
+  eligibility_occupancy <- chained_reference_eligibility_occupancy(eligibility, panel_owner, f_id, tgt_cohorts)
+  fast_meta_pair <- if (is.null(eligibility_occupancy) && identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+    cdid_fast_pipeline_metadata_pair(
+      panel_owner = panel_owner,
+      frame_owner = frame_owner,
+      targets = tgt_cohorts,
+      anticipation = anticipation,
+      control_group = cg_mode,
+      conventions = conventions,
+      requested_post = requested_post,
+      control = ctrl$owner_control,
+      catalog_bounds = ctrl$catalog_bounds,
+      declared_qualified = declared_qualified,
+      ledger = ledger,
+      pt_assumption = pt_assumption,
+      pt_start = pt_start
+    )
+  } else NULL
+  if (!is.null(fast_meta_pair)) {
+    meta_initial <- fast_meta_pair$meta_initial
+    metadata_obj <- fast_meta_pair$metadata_obj
+    # Reuse the full requested grid when the retained basis omits edges.
+    # The sealed metadata holds the design, not its target-grid input.
+    tpt_df <- fast_meta_pair$target_post_times
+  } else {
   meta_initial <- build_owner_comparison_catalog(
     panel_owner = panel_owner,
     targets = tgt_cohorts,
@@ -5413,7 +5863,8 @@ run_chained_ipw_pipeline <- function(
     control = ctrl$owner_control,
     catalog_bounds = ctrl$catalog_bounds,
     frame_owner = frame_owner,
-    build_design = FALSE, pt_assumption = pt_assumption, pt_start = pt_start
+    build_design = FALSE, pt_assumption = pt_assumption, pt_start = pt_start,
+    eligibility_occupancy = eligibility_occupancy
   )
   if (nrow(meta_initial$catalog$rows) < 1L && isTRUE(conditional_pretest)) {
     # Auxiliary links only: owners, the plan and the auxiliary views/nuisances
@@ -5436,7 +5887,8 @@ run_chained_ipw_pipeline <- function(
       outcome_pooling = if (is.null(cp04$outcome_pooling)) "pooled" else cp04$outcome_pooling,
       dr_method = cp04$dr_method, treatment_columns = cp04$treatment_columns,
       imputation = if (imputation) cp04 else NULL, augmented = if (augmented) cp04 else NULL,
-      reference_source = cp04$reference_source, ipw_method = cp04$ipw_method, aux_spec = aux_plan)
+      reference_source = cp04$reference_source, ipw_method = cp04$ipw_method, aux_spec = aux_plan,
+      missing_reference = cp04$missing_reference)
     reporting_map <- build_ipw_auxiliary_reporting(ledger, panel_owner$all_times, panel_owner$cohorts, anticipation, cg_mode,
       empty_registry, frame_owner, NULL, ctrl, NULL, NULL, FALSE, bp_mode, n_total, a_to_full, cpt_initial,
       pt_assumption = pt_assumption, pt_start = pt_start, aux_spec = aux_plan, compute_if = FALSE)
@@ -5479,7 +5931,8 @@ run_chained_ipw_pipeline <- function(
       dr_method = cp04$dr_method, treatment_columns = cp04$treatment_columns,
       imputation = if (imputation) cp04 else NULL, augmented = if (augmented) cp04 else NULL,
       reference_source = cp04$reference_source, ipw_method = cp04$ipw_method,
-      custom_est_method = custom_est_method, custom_dots = custom_dots, aux_spec = aux_plan)
+      custom_est_method = custom_est_method, custom_dots = custom_dots, aux_spec = aux_plan,
+      missing_reference = cp04$missing_reference)
     reporting_map <- build_ipw_auxiliary_reporting(ledger, panel_owner$all_times, panel_owner$cohorts, anticipation, cg_mode,
       empty_registry, frame_owner, NULL, ctrl, root_witness, NULL, isTRUE(run_numerical_transfer), bp_mode, n_total, a_to_full, combined_empty,
       custom_est_method = custom_est_method, custom_dots = custom_dots,
@@ -5542,8 +5995,10 @@ run_chained_ipw_pipeline <- function(
     # CP08 compact basis: the validated first catalog, occupancy and CSR
     # mappings (sealed, same owners, identical arguments) are reused; only the
     # design step is constructed here.
-    metadata_source = meta_initial
+    metadata_source = meta_initial,
+    eligibility_occupancy = eligibility_occupancy
   )
+  }
 
   design_all <- metadata_obj$design
   ledger <- ipw_pipeline_ledger_support(ledger, metadata_obj, design_all)
@@ -5579,7 +6034,7 @@ run_chained_ipw_pipeline <- function(
   # original row still carries its views, nuisance and D27 metadata (M_bound
   # terms); the covariance/GMM/replay terms are charged on the certified retained
   # basis plus auxiliary rows before any point fit, not on M_bound here.
-  early_reduction <- is.null(cp04) && !is.function(custom_est_method) && identical(wt_mode, "optimal") &&
+  early_reduction <- is.null(cp04) && !is.function(custom_est_method) && wt_mode %in% c("optimal", "within") &&
     isTRUE(reduce_structural_redundancy) && identical(structural_reduction_stage, "outcome_free")
   # CP08 O14: the conditional pretest state charges no GMM, reporting or draw buffer.
   cpt_mode <- isTRUE(conditional_pretest)
@@ -5675,7 +6130,8 @@ run_chained_ipw_pipeline <- function(
       # CP08 descriptor context: the registry decides the early canonical OR/DR
       # intake from these request facts; a standalone caller without them
       # keeps the link-view route.
-      pt_assumption = pt_assumption, run_numerical_transfer = run_numerical_transfer)
+      pt_assumption = pt_assumption, run_numerical_transfer = run_numerical_transfer,
+      missing_reference = cp04$missing_reference)
     combined_initial <- ipw_owner_safe_sum(c(combined_initial,
       nuis_res$cp04$accounting$owned_entries, cp04_reader$accounting$owned_entries),
       min(ctrl$owner_control$max_retained_entries, ctrl$owner_control$max_matrix_entries), "CP04 combined retained pipeline")
@@ -5792,6 +6248,8 @@ run_chained_ipw_pipeline <- function(
   # 5. Certify structural equivalence classes and apply optional redundancy reduction
   #    (only under `weighting == "optimal"`; all rows are kept under `weighting == "identity"`).
   class_cert <- NULL
+  sf_within_gram <- NULL
+  same_pair_within_bundle <- NULL
   batch_facts <- batch_fit_trace <- point_plan <- point_general <- point_custom <- NULL
   if (use_raw_ipw) {
     point_links_all <- nuis_res$point_links
@@ -5875,12 +6333,12 @@ run_chained_ipw_pipeline <- function(
     M_all <- length(point_links_all)
     # CP04 retains every actual catalog row. The legacy cross-date mask/forest
     # proof is A-only and does not certify equality of the new selection rows.
-    if (is.null(cp04) && identical(wt_mode, "optimal")) {
+    if (is.null(cp04) && wt_mode %in% c("optimal", "within")) {
       class_cert <- certify_ipw_structural_classes_view(
         point_links = point_links_all,
         design = design_all,
         design_link_index = match(seq_len(M_all), design_all$links$catalog_row),
-        weighting = "optimal",
+        weighting = wt_mode,
         bounds = ctrl$class_bounds,
         owner_control = ctrl$owner_control
       )
@@ -5911,9 +6369,37 @@ run_chained_ipw_pipeline <- function(
       }
     }
 
-    if (!is.null(class_cert) && identical(wt_mode, "optimal") && isTRUE(reduce_structural_redundancy)) {
+    need_general_within <- !is.null(cp04) && identical(wt_mode, "within") &&
+      (!is.null(cp04$reference_source) || identical(cp04$outcome_pooling, "pooled") ||
+         !is.null(cp04$selection_est_method) || identical(cp04$canonical_assumption, "conditional_mtar"))
+    if (need_general_within) {
+      same_pair_within_bundle <- compute_same_pair_within_bundle(
+        design_links = metadata_obj$design_links,
+        point_links_all = point_links_all,
+        panel_owner = panel_owner,
+        frame_owner = frame_owner,
+        cp04 = cp04,
+        cp04_reader = cp04_reader,
+        nuis_res = nuis_res,
+        f_Z = f_Z,
+        ctrl = ctrl,
+        reduce_structural_redundancy = is.null(class_cert) && isTRUE(reduce_structural_redundancy)
+      )
+    }
+
+    if (!is.null(class_cert) && wt_mode %in% c("optimal", "within") && isTRUE(reduce_structural_redundancy)) {
       kept_idx <- class_cert$retained_index
       dropped_idx <- class_cert$dropped_index
+    } else if (!is.null(same_pair_within_bundle) && is.null(class_cert) && isTRUE(reduce_structural_redundancy)) {
+      kept_idx <- same_pair_within_bundle$kept_idx
+      dropped_idx <- same_pair_within_bundle$dropped_idx
+      if (length(kept_idx) < M_all) sf_within_gram <- same_pair_within_bundle$G
+    } else if (is.null(class_cert) && identical(wt_mode, "within") && isTRUE(reduce_structural_redundancy) &&
+               (is.null(cp04) || (is.null(cp04$reference_source) && !identical(cp04$outcome_pooling, "pooled")))) {
+      sf_within <- within_mask_spanning_forest(metadata_obj$design_links, panel_owner, frame_owner)
+      kept_idx <- sf_within$kept_idx
+      dropped_idx <- sf_within$dropped_idx
+      if (length(kept_idx) < M_all) sf_within_gram <- sf_within$G
     } else {
       kept_idx <- seq_len(M_all)
       dropped_idx <- integer(0L)
@@ -5945,6 +6431,7 @@ run_chained_ipw_pipeline <- function(
   }
   oo <- order(design_order)
   kept_idx <- kept_idx[oo]; point_links_used <- point_links_used[oo]
+  if (!is.null(sf_within_gram)) sf_within_gram <- sf_within_gram[oo, oo, drop = FALSE]
 
   # 6. Ledger alignment with the (possibly reduced) design and the post-contrast basis.
   #    The proved lossless reduction preserves component connectivity; any change
@@ -6319,7 +6806,16 @@ run_chained_ipw_pipeline <- function(
     )
   }
   mhat_used <- stats::setNames(as.double(cov_stream_used$estimates), design_used$incidence$link_ids)
-  V_used <- cov_stream_used$covariance
+  V_used <- if (identical(wt_mode, "within")) {
+    if (!is.null(same_pair_within_bundle)) {
+      U_used <- lapply(same_pair_within_bundle$U_list_all, function(U_t) U_t[, kept_idx, drop = FALSE])
+      within_cov_from_level_loadings(U_used, design_used$links$g)
+    } else {
+      compute_pipeline_within_covariance(design_used, panel_owner, frame_owner, cp04, ctrl$glm_control)
+    }
+  } else {
+    cov_stream_used$covariance
+  }
   dimnames(V_used) <- list(design_used$incidence$link_ids, design_used$incidence$link_ids)
 
   # Verify `apply_ipw_reduction_map` expansion back to all original links when `class_cert` is present
@@ -6362,17 +6858,19 @@ run_chained_ipw_pipeline <- function(
     scale_id = scale_id_str,
     nuisance_fit_id = nuis_id_str,
     reduction = list(
-      mode = if (!is.null(cp04) && !is.null(class_cert)) "sparse_class_certificate" else "none",
+      mode = if ((!is.null(cp04) && !is.null(class_cert)) || !is.null(sf_within_gram)) "sparse_class_certificate" else "none",
+      G = sf_within_gram,
       class_certificate = class_cert,
       kept_indices = kept_idx,
       n_links_all = M_all,
-      reduction_active = (L_used < M_all)
+      reduction_active = (L_used < M_all),
+      gram_provenance = if (!is.null(sf_within_gram)) "mask_spanning_forest_exact_gram" else NULL
     )
   )
-  if (wt_mode == "optimal" && !is.null(ctrl$gmm_accuracy$covariance_strategy)) {
-    # This stream was formed here from complete unit IFs. Bind its exact
-    # covariance and nuisance identity using the existing snapshot seal;
-    # caller metadata never grants the D27 roundoff-negative diagnosis.
+  if (wt_mode %in% c("optimal", "within") && !is.null(ctrl$gmm_accuracy$covariance_strategy)) {
+    # This stream was formed here from complete unit IFs (or analytical within-unit
+    # levels covariance). Bind its exact covariance and nuisance identity using
+    # the existing snapshot seal; caller metadata never grants the D27 roundoff-negative diagnosis.
     prov_used$complete_unit_if_gram <- ipw_seal(list(covariance = V_used,
       n_units = prov_used$n_units, nuisance_fit_id = prov_used$nuisance_fit_id), "complete_unit_if_gram")
     # V_R and D26_gram_provenance_snapshot in the unchanged GMM preflight
@@ -6463,6 +6961,24 @@ run_chained_ipw_pipeline <- function(
     nuisance_fit_id = nuis_id_str,
     expected_unit_ids = if (is.null(cp04)) panel_owner$a_id else f_id
   )
+  if (!is.null(active_backend) && inherits(cp04_producer, "cdid_cp04_retained_if_bound") &&
+      is.environment(cp04_producer$store) && identical(cp04_producer$store$state, "filled")) {
+    attr(if_replay_spec$callback, "cdid_retained_if") <- list(
+      kind = "cp04",
+      producer = cp04_producer,
+      links = cp04_used,
+      chunk_rows = point_preflight$chunk_rows
+    )
+  } else if (is.null(active_backend) && !is.null(point_carrier) &&
+             is.environment(point_carrier) && identical(point_carrier$state, "filled") &&
+             (!is.null(point_plan) || !is.null(point_custom) || !is.null(point_general))) {
+    attr(if_replay_spec$callback, "cdid_retained_if") <- list(
+      kind = "point",
+      carrier = point_carrier,
+      plan = if (!is.null(point_plan)) point_plan else if (!is.null(point_custom)) point_custom else point_general,
+      control = ctrl$point_control
+    )
+  }
 
   # Pipeline-level refusal context (section 0b): the catalog/class map, the
   # covariance-stream provenance, the design rank record and the core target
@@ -6889,4 +7405,183 @@ run_chained_ipw_pipeline <- function(
     ),
     class = "cdid_ipw_pipeline_result"
   )
+}
+
+within_mask_spanning_forest <- function(design_links, panel_owner, frame_owner) {
+  M <- nrow(design_links)
+  if (M == 0L) return(list(kept_idx = integer(0L), dropped_idx = integer(0L), G = matrix(0.0, 0L, 0L)))
+  if (M == 1L) return(list(kept_idx = 1L, dropped_idx = integer(0L), G = matrix(1.0, 1L, 1L)))
+  all_times <- panel_owner$all_times
+  n_cal <- length(all_times)
+  n_a <- as.integer(frame_owner$n_a_units)
+  post <- panel_owner$postings
+  a_g <- as.double(frame_owner$a_g)
+  obs_at <- vector("list", n_cal)
+  for (c_idx in seq_len(n_cal)) {
+    m_c <- logical(n_a)
+    if (post$date_count[c_idx] > 0L) {
+      m_c[post$post_a_index[post$date_start[c_idx]:post$date_end[c_idx]]] <- TRUE
+    }
+    obs_at[[c_idx]] <- m_c
+  }
+  dl_pools <- design_pool_cache(design_links$control_pool)
+  fk_col <- if ("functional_key" %in% names(design_links)) {
+    as.character(design_links$functional_key)
+  } else {
+    as.character(design_links$control_pool)
+  }
+
+  # Bucket candidate masks by (g, fk, count, linear fingerprint), then verify exact mask equality
+  u_wt <- sin(seq_len(n_a) * 1.618033988749895) + 2.0
+  masks_m <- vector("list", M)
+  fp_keys <- character(M)
+  for (m in seq_len(M)) {
+    s_cal <- match(as.double(design_links$s[m]), all_times)
+    t_cal <- match(as.double(design_links$t[m]), all_times)
+    gk <- c(as.double(design_links$g[m]), dl_pools$values(m))
+    m_bool <- obs_at[[s_cal]] & obs_at[[t_cal]] & (a_g %in% gk)
+    masks_m[[m]] <- m_bool
+    cnt_m <- sum(m_bool)
+    fp_m <- sum(u_wt[m_bool])
+    fp_keys[m] <- paste0(design_links$g[m], "|", fk_col[m], "|", dl_pools$index[m], "|", cnt_m, "|", formatC(fp_m, digits = 12L, format = "g"))
+  }
+
+  buckets <- split(seq_len(M), fp_keys)
+  exact_keys <- integer(M)
+  cur_id <- 0L
+  for (b_idx in buckets) {
+    if (length(b_idx) == 1L) {
+      cur_id <- cur_id + 1L
+      exact_keys[b_idx[1L]] <- cur_id
+      next
+    }
+    reps_mask <- list()
+    reps_id <- integer(0L)
+    for (mi in b_idx) {
+      mb <- masks_m[[mi]]
+      matched <- 0L
+      for (rj in seq_along(reps_id)) {
+        if (identical(mb, reps_mask[[rj]])) {
+          matched <- reps_id[rj]
+          break
+        }
+      }
+      if (matched == 0L) {
+        cur_id <- cur_id + 1L
+        matched <- cur_id
+        reps_mask[[length(reps_mask) + 1L]] <- mb
+        reps_id <- c(reps_id, matched)
+      }
+      exact_keys[mi] <- matched
+    }
+  }
+
+  build_mask_forest_and_gram(design_links$s, design_links$t, exact_keys)
+}
+
+compute_pipeline_within_covariance <- function(design_used, panel_owner, frame_owner, cp04, glm_control) {
+  DL <- design_used$links
+  L <- nrow(DL)
+  if (L == 0L) return(matrix(0.0, 0L, 0L))
+  n_a <- as.integer(frame_owner$n_a_units)
+  w_a <- as.double(frame_owner$w_a)
+  a_g <- as.double(frame_owner$a_g)
+  Z_a <- frame_owner$Z_a
+  sum_w_a <- sum(w_a)
+  inv_sqrt_w <- ifelse(w_a > 0, 1.0 / sqrt(w_a), 0.0)
+  all_times <- panel_owner$all_times
+  n_cal <- length(all_times)
+  post <- panel_owner$postings
+  obs_at <- vector("list", n_cal)
+  for (c_idx in seq_len(n_cal)) {
+    m_c <- logical(n_a)
+    if (post$date_count[c_idx] > 0L) {
+      m_c[post$post_a_index[post$date_start[c_idx]:post$date_end[c_idx]]] <- TRUE
+    }
+    obs_at[[c_idx]] <- m_c
+  }
+  u_coh <- as.double(frame_owner$a_cohorts)
+  coh_mass <- as.double(frame_owner$cohort_a_weight)
+  is_or <- !is.null(cp04) && identical(cp04$or_method, "baseline")
+  is_dr <- !is.null(cp04) && identical(cp04$dr_method, "baseline")
+  if (!is.null(cp04) && !is.null(cp04$reference_source)) {
+    cdid_ipw_pipeline_abort(
+      "Internal baseline `V_within` fast path requires static covariates and weights; route through `compute_same_pair_within_bundle()`.",
+      c("cdid_chained_unavailable", "cdid_ipw_pipeline_input_error")
+    )
+  }
+  Z_trt <- if (is_dr && !is.null(cp04$treatment_columns)) Z_a[, cp04$treatment_columns, drop = FALSE] else Z_a
+  Z_or <- if ((is_or || is_dr) && !is.null(cp04$outcome_recipe)) Z_a[, cp04$outcome_recipe$columns, drop = FALSE] else Z_a
+  glm_ctrl <- validate_ipw_glm_control(glm_control)
+  dl_pools <- design_pool_cache(DL$control_pool)
+  Omega_scaled <- matrix(0.0, nrow = L, ncol = n_a)
+
+  for (ell in seq_len(L)) {
+    g_ell <- as.double(DL$g[ell])
+    s_cal <- match(as.double(DL$s[ell]), all_times)
+    t_cal <- match(as.double(DL$t[ell]), all_times)
+    K_ell <- as.double(dl_pools$values(ell))
+    obs_pair <- obs_at[[s_cal]] & obs_at[[t_cal]]
+    idx_t <- which(obs_pair & a_g == g_ell)
+    idx_c <- which(obs_pair & (a_g %in% K_ell))
+    g_pos <- match(g_ell, u_coh)
+    r_g <- max(sum(w_a[idx_t]) / coh_mass[g_pos], ipw_clip_eps)
+    v_t <- w_a[idx_t] / r_g
+    c_cohs <- unique(a_g[idx_c])
+    r_vec <- numeric(length(c_cohs))
+    for (k_i in seq_along(c_cohs)) {
+      kc <- c_cohs[k_i]
+      k_pos <- match(kc, u_coh)
+      r_vec[k_i] <- max(sum(w_a[obs_pair & a_g == kc]) / coh_mass[k_pos], ipw_clip_eps)
+    }
+    v_c <- w_a[idx_c] / r_vec[match(a_g[idx_c], c_cohs)]
+    omega_t <- v_t / sum(v_t)
+
+    if (!is_or) {
+      idx_tc <- c(idx_t, idx_c)
+      Z_sub <- Z_trt[idx_tc, , drop = FALSE]
+      if (ncol(Z_sub) == 1L && all(Z_sub[, 1L] == Z_sub[1L, 1L]) && Z_sub[1L, 1L] != 0) {
+        b_c <- v_c * (sum(v_t) / sum(v_c))
+      } else {
+        c_pos <- (length(idx_t) + 1L):length(idx_tc)
+        lg_rec <- fit_checked_propensity_logit(
+          Z_sub, c(rep(1.0, length(idx_t)), rep(0.0, length(idx_c))),
+          c(v_t, v_c), c_pos, glm_ctrl, n_a
+        )
+        b_c <- lg_rec$b_c
+      }
+      w_ipw_c <- -b_c / sum(b_c)
+    }
+    if (!is_or && !is_dr) {
+      omega_c <- w_ipw_c
+    } else {
+      X_c <- Z_or[idx_c, , drop = FALSE]
+      X_t <- Z_or[idx_t, , drop = FALSE]
+      qr_rec <- fit_checked_wls_qr(X_c, v_c)
+      verify_wls_target_support(qr_rec, X_t, g_ell)
+      piv <- qr_rec$piv
+      R_rk <- qr_rec$R_rk
+      xbar_t <- colSums(X_t[, piv, drop = FALSE] * v_t) / sum(v_t)
+      if (is_or) {
+        coef_x <- backsolve(R_rk, forwardsolve(t(R_rk), xbar_t))
+        omega_c <- -v_c * as.double(X_c[, piv, drop = FALSE] %*% coef_x)
+      } else {
+        xbar_att_c <- colSums(X_c[, piv, drop = FALSE] * b_c) / sum(b_c)
+        coef_x <- backsolve(R_rk, forwardsolve(t(R_rk), xbar_t - xbar_att_c))
+        omega_c <- w_ipw_c - v_c * as.double(X_c[, piv, drop = FALSE] %*% coef_x)
+      }
+    }
+    Omega_scaled[ell, idx_t] <- omega_t * inv_sqrt_w[idx_t]
+    Omega_scaled[ell, idx_c] <- omega_c * inv_sqrt_w[idx_c]
+  }
+
+  g_vec <- as.double(DL$g)
+  s_vec <- as.double(DL$s)
+  t_vec <- as.double(DL$t)
+  same_g <- outer(g_vec, g_vec, "==")
+  time_sign <- (outer(t_vec, t_vec, "==") + outer(s_vec, s_vec, "==") -
+                  outer(t_vec, s_vec, "==") - outer(s_vec, t_vec, "=="))
+  G_cross <- tcrossprod(Omega_scaled) * sum_w_a
+  V <- same_g * time_sign * G_cross
+  0.5 * (V + t(V))
 }

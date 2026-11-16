@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
-# Execute the complete unfiltered testthat suite (filter = NULL) against an
-# installed cdid build and packaged tests/testthat directory.
+# Execute every testthat file against an installed cdid build. The native
+# DLL lifecycle tests run separately from fits that hold native finalizers.
 #
 # Standard usage after R CMD check:
 #   Rscript validation/run_full_tests.R \
@@ -11,7 +11,11 @@
 # Standard usage against an already installed cdid in .libPaths():
 #   Rscript validation/run_full_tests.R
 
+command <- commandArgs()
 args <- commandArgs(trailingOnly = TRUE)
+native_only <- "--native-only" %in% args
+native_file <- "test-cp02-native-overhead.R"
+native_filter <- "^cp02-native-overhead$"
 
 parse_flag <- function(prefix, default = NULL) {
   hit <- grep(paste0("^", prefix, "="), args, value = TRUE)
@@ -54,15 +58,21 @@ if (!is.null(lib_loc)) {
                       normalizePath(file.path(lib_loc, "cdid"), winslash = "/", mustWork = TRUE)))
 }
 
-# Match testthat's file discovery; this revision ships 172 original files and
-# the bounded regression file. Root's archive hash audit authenticates contents.
+# Match testthat's file discovery and verify that the complete archive contains
+# the primary estimator and nuisance comparison suites.
 test_files <- sort(list.files(test_dir, pattern = "^test.*\\.[rR]$", full.names = FALSE))
-if (length(test_files) != 173L || !"test-cran-regression.R" %in% test_files) {
-  stop(sprintf(
-    "Expected all 173 packaged testthat files (including cran-regression) in '%s', found %d.",
-    test_dir, length(test_files)
-  ))
+required_test_files <- c("test-cran-regression.R", "test-cran-regression-static.R",
+                         "test-nuisance-models.R", "test-cross-pair-chaining.R",
+                         "test-cohort-time-fe.R", "test-cohort-time-nuisance-scores.R",
+                         "test-static-nuisance-capture.R",
+                         "test-chained-missing-reference.R")
+expected_test_count <- 191L
+if (length(test_files) != expected_test_count || !all(required_test_files %in% test_files)) {
+  stop(sprintf("Expected all %d packaged testthat files in '%s', found %d.",
+               expected_test_count, test_dir, length(test_files)))
 }
+stopifnot(native_file %in% test_files)
+if (native_only) test_files <- native_file
 
 log_file <- file.path(output_dir, "full-testthat.log")
 summary_file <- file.path(output_dir, "full-test-summary.txt")
@@ -75,12 +85,36 @@ multi_rep <- testthat::MultiReporter$new(reporters = list(summary_rep, list_rep)
 started_utc <- format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 t0 <- proc.time()
 run_error <- NULL
+native_error <- NULL
+native_results <- NULL
+
+if (!native_only) {
+  self <- sub("^--file=", "", grep("^--file=", command, value = TRUE))
+  stopifnot(length(self) == 1L, file.exists(self))
+  native_dir <- tempfile("native-overhead-", tmpdir = output_dir)
+  native_args <- c("--vanilla", shQuote(self), "--native-only",
+    shQuote(paste0("--lib-loc=", dirname(package_path))),
+    shQuote(paste0("--test-dir=", test_dir)),
+    shQuote(paste0("--output-dir=", native_dir)))
+  native_log <- file.path(output_dir, "native-overhead-console.log")
+  native_status <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
+    native_args, stdout = native_log, stderr = native_log))
+  native_rds <- file.path(native_dir, "full-test-results.rds")
+  result <- if (file.exists(native_rds)) tryCatch(readRDS(native_rds), error = identity) else NULL
+  valid_result <- is.data.frame(result) && identical(unique(result$file), native_file)
+  if (valid_result) native_results <- result
+  if (!identical(native_status, 0L) || !valid_result) {
+    native_error <- sprintf("Native DLL test process failed (status %s). See %s.",
+      native_status, native_log)
+  }
+}
 
 tryCatch(
   {
     testthat::test_dir(
       path = test_dir,
-      filter = NULL,
+      filter = native_filter,
+      invert = !native_only,
       package = "cdid",
       load_package = "installed",
       reporter = multi_rep,
@@ -98,6 +132,7 @@ finished_utc <- format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 
 res_list <- list_rep$get_results()
 res_df <- as.data.frame(res_list)
+if (!is.null(native_results)) res_df <- rbind(res_df, native_results)
 saveRDS(res_df, file = results_rds)
 
 # ListReporter has one row per test block; file is the basename passed to
@@ -112,7 +147,7 @@ n_warnings <- if (nrow(res_df)) sum(res_df$warning) else 0L
 n_skipped <- if (nrow(res_df)) sum(as.integer(res_df$skipped)) else 0L
 n_errors <- if (nrow(res_df)) sum(as.integer(res_df$error)) else 0L
 
-status_ok <- is.null(run_error) &&
+status_ok <- is.null(run_error) && is.null(native_error) &&
   n_failed == 0L &&
   n_warnings == 0L &&
   n_errors == 0L &&
@@ -126,7 +161,7 @@ summary_lines <- c(
   sprintf("package_path: %s", package_path),
   sprintf("requested_library: %s", if (is.null(lib_loc)) "default .libPaths()" else lib_loc),
   sprintf("test_dir: %s", test_dir),
-  sprintf("filter: NULL (unfiltered)"),
+  if (native_only) "scope: isolated native DLL tests" else "scope: all files across two processes",
   sprintf("started_utc: %s", started_utc),
   sprintf("finished_utc: %s", finished_utc),
   sprintf("elapsed_seconds: %.2f", elapsed_sec),
@@ -142,6 +177,7 @@ summary_lines <- c(
   sprintf("skipped_tests: %d", n_skipped),
   sprintf("log_file: %s", log_file)
 )
+if (!is.null(native_error)) summary_lines <- c(summary_lines, native_error)
 if (!is.null(run_error)) {
   summary_lines <- c(summary_lines, sprintf("error_message: %s", conditionMessage(run_error)))
 }
@@ -150,6 +186,7 @@ writeLines(summary_lines, con = summary_file)
 cat(paste(summary_lines, collapse = "\n"), "\n", sep = "")
 
 if (!status_ok) {
+  if (!is.null(native_error)) stop(native_error, call. = FALSE)
   if (!is.null(run_error)) {
     stop(run_error)
   }

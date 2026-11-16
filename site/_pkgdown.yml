@@ -5,6 +5,8 @@
 
 title: cdid
 llm-docs: false
+home:
+  sidebar: false
 development:
   mode: release
 news:
@@ -24,7 +26,7 @@ repo:
   url:
     home: https://github.com/dvbn/cdid/
 
-# Menus follow the numbered reading path in docs/README.md.
+# Menus follow the user guide in docs/README.md.
 navbar:
   structure:
     left: [start, examples, methods, guide_reference, help, news]
@@ -36,11 +38,15 @@ navbar:
       - text: Home
         href: index.html
       - text: Installation
-        href: articles/installation.html
+        href: index.html#installation
       - text: "1. Get started"
         href: articles/get-started.html
-      - text: "2. Moving from did"
+      - text: Moving from did
         href: articles/from-did.html
+      - text: Familiar DiD models for incomplete panels
+        href: articles/comparisons.html
+      - text: Reproduce R and Stata models
+        href: articles/from-other-packages.html
     examples:
       text: Examples
       menu:
@@ -62,6 +68,10 @@ navbar:
         href: articles/examples/robustness.html
       - text: "17. Inference"
         href: articles/examples/inference.html
+      - text: Short pretreatment windows
+        href: articles/examples/short-pretreatment-windows.html
+      - text: Cross-pair simulations
+        href: articles/outputs/cross-pair-simulations.html
     methods:
       text: Methods
       menu:
@@ -75,6 +85,12 @@ navbar:
         href: articles/methods/parallel-trends.html
       - text: "15. GMM weighting and covariance regularization"
         href: articles/methods/gmm.html
+      - text: Cross-pair chaining
+        href: articles/methods/cross-pair-chaining.html
+      - text: Effects at entry and exit
+        href: articles/methods/static-entry-exit.html
+      - text: Cohort-by-date fixed effects
+        href: articles/methods/cohort-time-fe.html
     guide_reference:
       text: Reference
       menu:
@@ -103,9 +119,10 @@ navbar:
 articles:
 - title: Get started
   contents:
-  - installation
   - get-started
   - from-did
+  - comparisons
+  - from-other-packages
 - title: Examples
   contents:
   - examples/incomplete-panels
@@ -117,6 +134,8 @@ articles:
   - examples/pt-all-comparison
   - examples/robustness
   - examples/inference
+  - examples/short-pretreatment-windows
+  - outputs/cross-pair-simulations
 - title: Methods
   contents:
   - methods/treatment
@@ -124,6 +143,9 @@ articles:
   - methods/sampling-information
   - methods/parallel-trends
   - methods/gmm
+  - methods/cross-pair-chaining
+  - methods/static-entry-exit
+  - methods/cohort-time-fe
 - title: Reference
   contents:
   - reference/options
@@ -143,6 +165,10 @@ reference:
 - title: Pre-Testing
   contents:
   - conditional_did_pretest
+- title: Inspecting a Fit
+  contents:
+  - chain_report
+  - nuisance_models
 - title: Plotting and Summarizing
   contents:
   - reexports

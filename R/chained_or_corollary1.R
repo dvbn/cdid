@@ -29,6 +29,8 @@ or_corollary1_moments_add <- function(M, z, dy, q, prob, Q) {
 # S <= A <= U, so Z_a, Q and rho are read only there. Keeps the q-weighted
 # design summary and the compact moments; both die with fitting.
 or_corollary1_support <- function(reader, spec, selection, recipe, ctrl) {
+  fast <- cdid_fast_sel_support_collect(1L, reader, spec, selection, recipe = recipe, ctrl = ctrl)
+  if (!is.null(fast)) return(fast)
   st <- reader$state; a <- st$a[spec$cohort]; m <- recipe$p + 2L
   acc <- or_pooled_support_start(recipe, spec$transitions)
   moments <- array(0, c(m, m, ncol(st$Z)))
@@ -57,38 +59,70 @@ or_corollary1_support <- function(reader, spec, selection, recipe, ctrl) {
 # H(q (d - dbar_b) r_b t') (uncentered d without intercept), C_energy =
 # H(q r_b^2 t'). A shared a_k coordinate sums over pairs and blocks. A
 # single-cohort block's a_k C_alpha vanishes at the root; its C_beta does not.
-or_corollary1_forcing <- function(recipe, fitted, supports, pools, channels, D, N) {
+or_corollary1_forcing <- function(recipe, fitted, supports, pools, channels, D, N,
+                                  include_score_means = FALSE, local_only = FALSE) {
   keep <- fitted$keep; p <- length(keep); m <- recipe$p + 2L
-  beta_total <- matrix(0, p, D); energy_total <- numeric(D)
+  beta_total <- if (local_only) NULL else matrix(0, p, D)
+  energy_total <- if (local_only) NULL else numeric(D)
   regressions <- fitted$regressions
   for (b in seq_along(pools)) {
     sids <- pools[[b]]$support_ids; rec <- regressions[[b]]
-    fa <- fe <- numeric(D); fb <- matrix(0, p, D)
+    single_sorted <- length(sids) == 1L && !is.unsorted(channels[[sids[1L]]], strictly = TRUE)
+    ids <- if (single_sorted) channels[[sids[1L]]] else sort.int(unique(unlist(channels[sids], use.names = FALSE)))
+    n_id <- length(ids)
+    fa <- fe <- if (local_only) numeric(n_id) else numeric(D)
+    fb <- if (local_only) matrix(0, p, n_id) else matrix(0, p, D)
     cr <- numeric(m); cr[1L] <- -rec$alpha; cr[1L + keep] <- -rec$L * fitted$beta; cr[m] <- 1
+    mean_alpha <- 0
+    mean_beta <- if (include_score_means) numeric(p) else NULL
     for (s in sids) {
-      u <- supports[[s]]; ka <- channels[[s]][1L]; kl <- channels[[s]][-1L]
+      u <- supports[[s]]; ch_s <- channels[[s]]
+      if (local_only) {
+        if (single_sorted) {
+          ka <- 1L; kl <- if (n_id > 1L) 2L:n_id else integer(0L)
+        } else {
+          pos <- match(ch_s, ids)
+          ka <- pos[1L]; kl <- pos[-1L]
+        }
+      } else {
+        ka <- ch_s[1L]; kl <- ch_s[-1L]
+      }
       g <- or_pooled_factor_moments(recipe, u$design$summary, keep, rec$alpha, fitted$beta)
-      Mr <- vapply(seq_along(kl), function(j) as.vector(u$moments[, , j] %*% cr), numeric(m))
+      dq_s <- length(kl)
+      Mr <- if (dq_s > 0L) matrix(crossprod(matrix(u$moments, nrow = m), cr), m, dq_s) else matrix(0, m, 0L)
       if (recipe$intercept) {
-        fa[ka] <- fa[ka] + g$g[1L] / (N * u$a)
-        fb[, ka] <- fb[, ka] + (g$g[-1L] - rec$mean_d * g$g[1L]) / (N * u$a)
+        ga <- g$g[1L]
+        gb <- g$g[-1L] - rec$mean_d * ga
+        fa[ka] <- fa[ka] + ga / (N * u$a)
+        fb[, ka] <- fb[, ka] + gb / (N * u$a)
         fa[kl] <- fa[kl] + Mr[1L, ] / N
         fb[, kl] <- fb[, kl] + (rec$L * Mr[1L + keep, , drop = FALSE] -
-          outer(rec$mean_d, Mr[1L, ])) / N
+          tcrossprod(rec$mean_d, Mr[1L, ])) / N
       } else {
-        fb[, ka] <- fb[, ka] + g$g / (N * u$a)
+        ga <- 0
+        gb <- g$g
+        fb[, ka] <- fb[, ka] + gb / (N * u$a)
         fb[, kl] <- fb[, kl] + rec$L * Mr[1L + keep, , drop = FALSE] / N
+      }
+      if (include_score_means) {
+        mean_alpha <- mean_alpha + ga / N
+        mean_beta <- mean_beta + gb / N
       }
       fe[ka] <- fe[ka] + g$e2 / (N * u$a)
       fe[kl] <- fe[kl] + colSums(cr * Mr) / N
     }
-    ids <- sort(unique(unlist(channels[sids])))
     cp04_finite(c(fa, fb, fe), "Corollary 1 regression forcing")
     regressions[[b]]$channel_ids <- ids
-    regressions[[b]]$forcing_alpha <- fa[ids]
-    regressions[[b]]$forcing_beta <- fb[, ids, drop = FALSE]
-    regressions[[b]]$forcing_energy <- fe[ids]
-    beta_total <- beta_total + fb; energy_total <- energy_total + fe
+    regressions[[b]]$forcing_alpha <- if (local_only) fa else fa[ids]
+    regressions[[b]]$forcing_beta <- if (local_only) fb else fb[, ids, drop = FALSE]
+    regressions[[b]]$forcing_energy <- if (local_only) fe else fe[ids]
+    if (include_score_means) {
+      regressions[[b]]$score_mean_alpha <- mean_alpha
+      regressions[[b]]$score_mean_beta <- mean_beta
+    }
+    if (!local_only) {
+      beta_total <- beta_total + fb; energy_total <- energy_total + fe
+    }
   }
   list(regressions = regressions, beta = beta_total, energy = energy_total)
 }
@@ -103,7 +137,7 @@ or_corollary1_link <- function(recipe, fitted, u, rec, N) {
     rec$L, rec$alpha, fitted$beta)
   d <- u$pair_mass / N; num <- lm$mu * d
   cr <- numeric(m); cr[1L] <- -rec$alpha; cr[1L + keep] <- -rec$L * fitted$beta; cr[m] <- 1
-  Mr <- vapply(seq_len(dq), function(j) as.vector(u$moments[, , j] %*% cr), numeric(m))
+  Mr <- if (dq > 0L) matrix(crossprod(matrix(u$moments, nrow = m), cr), m, dq) else matrix(0, m, 0L)
   ans <- list(mu = lm$mu, c = lm$c, d = d, numerator = num,
     rate_loading = c(lm$residual / (N * u$a * d),
       (Mr[1L, ] - lm$mu * u$moments[1L, 1L, ]) / (N * d)),
@@ -111,7 +145,7 @@ or_corollary1_link <- function(recipe, fitted, u, rec, N) {
     numerator_loading = c(num / u$a, Mr[1L, ] / N),
     design_loading = matrix(c(lm$c * d / u$a, rec$L * u$moments[1L + keep, 1L, ] / N),
       p, 1L + dq))
-  cp04_finite(unlist(ans), "Corollary 1 link moments")
+  cp04_finite(unlist(ans, use.names = FALSE), "Corollary 1 link moments")
   ans
 }
 
@@ -147,10 +181,13 @@ or_corollary1_assemble <- function(recipe, supports, pools, links, channels, D, 
                                    visit_rows) {
   blocks <- lapply(seq_along(pools), function(b) list(name = paste0("b", b),
     support_ids = pools[[b]]$support_ids, L = pools[[b]]$transitions))
-  fitted <- or_pooled_fit_blocks(recipe, lapply(supports, function(u)
-      list(summary = u$design$summary, scale = 1, colmax = u$design$colmax)),
-    blocks, lapply(links, function(l) list(regression = l$regression,
-      support_id = l$support_id)), rank_tol, N, visit_rows, "corollary1")
+  fitted <- cdid_sel_fast_or_pooled_fit(recipe, supports, blocks, rank_tol, N)
+  if (is.null(fitted)) {
+    fitted <- or_pooled_fit_blocks(recipe, lapply(supports, function(u)
+        list(summary = u$design$summary, scale = 1, colmax = u$design$colmax)),
+      blocks, lapply(links, function(l) list(regression = l$regression,
+        support_id = l$support_id)), rank_tol, N, visit_rows, "corollary1")
+  }
   forcing <- or_corollary1_forcing(recipe, fitted, supports, pools, channels, D, N)
   for (i in seq_along(links)) {
     l <- links[[i]]
@@ -174,6 +211,9 @@ or_corollary1_assemble <- function(recipe, supports, pools, links, channels, D, 
 }
 
 validate_or_corollary1_backend <- function(backend) {
+  if (cdid_sel_check_validated(backend, "cdid_or_corollary1", "or_corollary1_backend")) {
+    return(invisible(backend))
+  }
   if (!inherits(backend, "cdid_or_corollary1") ||
       !ipw_owner_seal_ok(backend, "or_corollary1_backend"))
     or_corollary1_abort("Expected the immutable private Corollary 1 OR backend.", "integrity")
@@ -182,6 +222,12 @@ validate_or_corollary1_backend <- function(backend) {
       get("cp04_reader", backend$reader_ref, inherits = FALSE) else NULL
   validate_cp04_reader(reader)
   if (!is.null(backend$reference_ref)) chained_backend_reference(backend)
+  cdid_sel_record_validated(
+    backend, "or_corollary1_backend", reader,
+    get("frame_owner", reader$frame_ref, inherits = FALSE),
+    get("panel_owner", reader$panel_ref, inherits = FALSE),
+    reader$frame_ref
+  )
   invisible(backend)
 }
 
@@ -224,50 +270,69 @@ fit_or_corollary1 <- function(reader, link_views, control, glm_control, rank_tol
   header <- 4096 + 1024 * L * (J + 1)
   cp04_budget(ctrl, c(base, header), header, c(external_work_ops, 128 * L * L * (J + 1)), header,
     "Corollary 1 OR metadata")
-  records <- list()
-  for (ell in seq_along(link_views)) {
-    v <- link_views[[ell]]
-    validate_ipw_link_view(v, frame_owner = frame)
-    source <- v$functional_key
-    if (!gmm_scalar_character(source) || !startsWith(source, "cmpcat:"))
-      or_corollary1_abort("Corollary 1 OR requires the supplied comparison-catalog functional key.")
-    key_bytes <- nchar(source, type = "bytes")
-    cp04_budget(ctrl, c(base, header), header + 16 * key_bytes,
-      c(external_work_ops, 128 * L * L * (J + 1) + 64 * key_bytes), header + 16 * key_bytes,
-      "Corollary 1 catalog key")
-    if (!is.null(v$candidates) || !is.null(v$loading_beta_candidate))
-      or_corollary1_abort("Legacy nuisance candidates are unsupported.")
-    if (!is.null(v$nuisance_ref)) {
-      nv <- get("nuisance_view", v$nuisance_ref, inherits = FALSE)
-      if (!isTRUE(v$nuisance_mask_verified) || !identical(nv$defining_pair, v$pair))
-        or_corollary1_abort("Cross-pair or unverified nuisance sharing is unsupported.")
+  fast_cat <- cdid_fast_or_cor1_catalog(
+    link_views, st, frame, ctrl, base, header, external_work_ops, recipe, separate
+  )
+  if (!is.null(fast_cat)) {
+    specs <- fast_cat$specs
+    pools <- fast_cat$pools
+    links <- fast_cat$links
+  } else {
+    records <- list()
+    use_inc_pay <- cdid_are_default_fns(c("or_baseline_payload_append", "or_baseline_payload_verify", "cp04_payload"))
+    charge_pay <- if (use_inc_pay) list(n = 0L, records = c(entries = 0, char_bytes = 0)) else NULL
+    lv_ok <- cdid_fast_validate_link_views(link_views, frame)
+    for (ell in seq_along(link_views)) {
+      v <- link_views[[ell]]
+      if (!lv_ok) validate_ipw_link_view(v, frame_owner = frame)
+      source <- v$functional_key
+      if (!gmm_scalar_character(source) || !startsWith(source, "cmpcat:"))
+        or_corollary1_abort("Corollary 1 OR requires the supplied comparison-catalog functional key.")
+      key_bytes <- nchar(source, type = "bytes")
+      cp04_budget(ctrl, c(base, header), header + 16 * key_bytes,
+        c(external_work_ops, 128 * L * L * (J + 1) + 64 * key_bytes), header + 16 * key_bytes,
+        "Corollary 1 catalog key")
+      if (!is.null(v$candidates) || !is.null(v$loading_beta_candidate))
+        or_corollary1_abort("Legacy nuisance candidates are unsupported.")
+      if (!is.null(v$nuisance_ref)) {
+        nv <- get("nuisance_view", v$nuisance_ref, inherits = FALSE)
+        if (!isTRUE(v$nuisance_mask_verified) || !identical(nv$defining_pair, v$pair))
+          or_corollary1_abort("Cross-pair or unverified nuisance sharing is unsupported.")
+      }
+      target <- match(v$cohorts$g, st$cohorts)
+      control_cohorts <- match(sort(v$cohorts$K, method = "radix"), st$cohorts)
+      if (anyNA(c(target, control_cohorts)) || !isTRUE(all(v$support$by_cohort_pair_count >= 1)))
+        or_corollary1_abort("Positive actual-pair cohort support required.", "support")
+      or_pooled_transitions(v$pair, "corollary1")
+      records[[ell]] <- list(pair = v$pair, target = target, controls = control_cohorts,
+        link_id = v$link_id, source_functional_key = source,
+        functional_key = paste0("cmpcat:OR-Cor1-", st$universe, "-shared-slope-WLS-a/(rho*p)|",
+          substring(source, 8L)))
+      if (separate) records[[ell]]$functional_key <- sub("shared-slope", "separate-slopes",
+        records[[ell]]$functional_key, fixed = TRUE)
+      if (use_inc_pay) {
+        charge_pay <- or_baseline_payload_append(charge_pay, records, or_corollary1_abort)
+        tot_pay <- charge_pay$total
+      } else {
+        tot_pay <- cp04_payload(records)
+      }
+      cp04_budget(ctrl, c(base, header), header + tot_pay["entries"],
+        c(external_work_ops, 128 * L * L * (J + 1) + 64 * tot_pay["char_bytes"]),
+        header + tot_pay["entries"], "Corollary 1 catalog metadata")
     }
-    target <- match(v$cohorts$g, st$cohorts)
-    control_cohorts <- match(sort(v$cohorts$K, method = "radix"), st$cohorts)
-    if (anyNA(c(target, control_cohorts)) || !isTRUE(all(v$support$by_cohort_pair_count >= 1)))
-      or_corollary1_abort("Positive actual-pair cohort support required.", "support")
-    or_pooled_transitions(v$pair, "corollary1")
-    records[[ell]] <- list(pair = v$pair, target = target, controls = control_cohorts,
-      link_id = v$link_id, source_functional_key = source,
-      functional_key = paste0("cmpcat:OR-Cor1-", st$universe, "-shared-slope-WLS-a/(rho*p)|",
-        substring(source, 8L)))
-    if (separate) records[[ell]]$functional_key <- sub("shared-slope", "separate-slopes",
-      records[[ell]]$functional_key, fixed = TRUE)
-    cp04_budget(ctrl, c(base, header), header + cp04_payload(records)["entries"],
-      c(external_work_ops, 128 * L * L * (J + 1) + 64 * cp04_payload(records)["char_bytes"]),
-      header + cp04_payload(records)["entries"], "Corollary 1 catalog metadata")
-  }
-  ids <- vapply(records, function(x) if (is.null(x$link_id)) "" else x$link_id, character(1))
-  if (any(!nzchar(ids)) || anyDuplicated(ids))
-    or_corollary1_abort("Distinct nonempty link IDs required.")
-  # The canonical shared catalog: one block per unique (actual pair, sorted pool).
-  catalog <- or_baseline_catalog(records, st$cohorts, recipe)
-  specs <- catalog$specs; pools <- catalog$pools; links <- catalog$links
-  for (i in seq_along(pools)) {
-    pr <- specs[[pools[[i]]$support_ids[1L]]]$pair
-    pools[[i]]$block_key <- paste0("pair:", pr$s, "-", pr$t, "|pool:",
-      paste(st$cohorts[pools[[i]]$cohorts], collapse = ","), "|", recipe$key,
-      "|weights:w*a_U/(rho_U*p_U)|U:", st$universe)
+    if (use_inc_pay) or_baseline_payload_verify(charge_pay, records, or_corollary1_abort)
+    ids <- vapply(records, function(x) if (is.null(x$link_id)) "" else x$link_id, character(1))
+    if (any(!nzchar(ids)) || anyDuplicated(ids))
+      or_corollary1_abort("Distinct nonempty link IDs required.")
+    # The canonical shared catalog: one block per unique (actual pair, sorted pool).
+    catalog <- or_baseline_catalog(records, st$cohorts, recipe)
+    specs <- catalog$specs; pools <- catalog$pools; links <- catalog$links
+    for (i in seq_along(pools)) {
+      pr <- specs[[pools[[i]]$support_ids[1L]]]$pair
+      pools[[i]]$block_key <- paste0("pair:", pr$s, "-", pr$t, "|pool:",
+        paste(st$cohorts[pools[[i]]$cohorts], collapse = ","), "|", recipe$key,
+        "|weights:w*a_U/(rho_U*p_U)|U:", st$universe)
+    }
   }
   # Selection key: actual pair and cohort inside this reader's U/Q/rho/weights.
   selection_specs <- lapply(specs, function(s) list(pair = s$pair, cohort = s$cohort))
@@ -293,9 +358,13 @@ fit_or_corollary1 <- function(reader, link_views, control, glm_control, rank_tol
     "Corollary 1 OR pipeline fit work")
   bound <- metadata + charges$models
   cp04_budget(ctrl, c(base, bound), scratch, work, bound, "Corollary 1 OR fits")
-  selections <- lapply(selection_specs, function(s) cp04_selection_fit(reader, s, gc, ctrl))
-  supports <- lapply(seq_len(S), function(j)
-    or_corollary1_support(reader, specs[[j]], selections[[j]], recipe, ctrl))
+  selections <- cdid_fast_sel_cp04_fit_batch(reader, selection_specs, gc)
+  if (is.null(selections)) selections <- lapply(selection_specs, function(s) cp04_selection_fit(reader, s, gc, ctrl))
+  supports <- cdid_fast_sel_cor1_support_batch(reader, specs, selections, recipe, ctrl)
+  if (is.null(supports)) {
+    supports <- lapply(seq_len(S), function(j)
+      or_corollary1_support(reader, specs[[j]], selections[[j]], recipe, ctrl))
+  }
   assemble <- if (separate) function(...) or_selection_separate_assemble(...,
     forcing_fun = or_corollary1_forcing, link_fun = or_corollary1_link) else or_corollary1_assemble
   state <- assemble(recipe, supports, pools, links, channels, D, rank_tol, st$N,
@@ -330,7 +399,13 @@ fit_or_corollary1 <- function(reader, link_views, control, glm_control, rank_tol
   if (actual > bound) or_corollary1_abort("Retained Corollary 1 OR bound underestimated.", "bound")
   cp04_budget(ctrl, c(base, actual), scratch, work, actual, "retained Corollary 1 OR")
   obj$accounting$owned_entries <- actual
-  ipw_owner_seal(obj, "or_corollary1_backend")
+  sealed <- cdid_fast_seal(obj, "or_corollary1_backend")
+  cdid_sel_record_validated(
+    sealed, "or_corollary1_backend", reader, frame,
+    get("panel_owner", reader$panel_ref, inherits = FALSE),
+    reader$frame_ref
+  )
+  sealed
 }
 
 # Requested link blocks plus, whenever a shared slope exists (or details), EVERY
@@ -381,22 +456,60 @@ or_corollary1_if_budget <- function(backend, B, links, details = FALSE) {
 }
 
 evaluate_or_corollary1_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE) {
+  fast_res <- cdid_fast_eval_or_cor1_if_chunk(backend, rows, links, scale, details)
+  if (!is.null(fast_res)) return(fast_res)
   validate_or_corollary1_backend(backend)
   if (isTRUE(backend$uses_selection_models))
     return(evaluate_or_selection_if_chunk(backend, rows, links, scale = scale, details = details))
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
-  valid_index <- function(x, n) is.numeric(x) && !is.object(x) && is.null(dim(x)) &&
-    length(x) > 0L && all(is.finite(x)) && all(x == floor(x)) &&
-    all(x >= 1 & x <= n) && !anyDuplicated(x)
-  if (!valid_index(rows, st$N) || length(rows) > backend$control$max_chunk_rows ||
-      !valid_index(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
+  if (!cdid_sel_valid_idx(rows, st$N) || length(rows) > backend$control$max_chunk_rows ||
+      !cdid_sel_valid_idx(links, length(backend$links)) || !identical(details, isTRUE(details)) ||
       !is.character(scale) || length(scale) != 1L || is.na(scale) || !scale %in% c("frame", "core"))
     or_corollary1_abort("Invalid explicit IF row/link batch, scale or details flag.")
-  pre <- or_corollary1_if_budget(backend, length(rows), links, details)
+  B <- length(rows)
+  meta <- if (!details && cdid_are_default_fns(c("or_corollary1_if_budget", "cp04_budget")))
+    cdid_sel_get_if_meta(backend, B, links, "or_cor1_if_meta") else NULL
+  if (is.null(meta)) {
+    pre <- or_corollary1_if_budget(backend, B, links, details)
+    link_names <- vapply(backend$links[links], `[[`, character(1), "link_id")
+    if (!details && cdid_are_default_fns(c("or_corollary1_if_budget", "cp04_budget"))) {
+      cdid_sel_set_if_meta(backend, B, links, pre, link_names, "or_cor1_if_meta")
+    }
+  } else {
+    pre <- meta$pre
+    link_names <- meta$link_names
+  }
+  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+  separate <- or_selection_separate(backend)
+  if (!details && is.null(backend$reference_ref) && is.null(backend$layout) && is.null(backend$pair_outcomes)) {
+    fast_if <- cdid_fast_sel_if_chunk(5L, backend, reader, frame, NULL, rows, links, scale, pre, link_names)
+    if (!is.null(fast_if)) {
+      out <- list(
+        rows = rows, id = cdid_sel_slice_id(st$id, rows, st$N), links = links, phi = fast_if$phi, scale = scale,
+        normalization_count = if (scale == "core") st$n_A else st$N,
+        diagnostics = list(
+          n_rate_score_evaluations = sum(pre$uids <= backend$upstream$n_a),
+          n_selection_score_evaluations = length(pre$sids),
+          n_upstream_coordinates = length(pre$uids),
+          n_regression_score_evaluations = length(union(pre$gids, pre$beta_gids)),
+          n_global_beta_blocks = length(pre$beta_gids),
+          output_entries_bound = pre$output,
+          concurrent_scratch_bound = pre$scratch,
+          work_ops_bound = pre$work
+        )
+      )
+      if (separate) {
+        out$diagnostics$outcome_pooling <- "separate"
+        out$diagnostics$n_global_beta_blocks <- 0L
+        out$diagnostics$n_local_beta_blocks <- length(pre$beta_gids)
+      }
+      if (unname(cp04_payload(out)["entries"]) > pre$output)
+        or_corollary1_abort("IF output bound underestimated.", "bound")
+      return(out)
+    }
+  }
   pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "or", details)
   on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
-  B <- length(rows); frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
-  separate <- or_selection_separate(backend)
   kept <- if (separate) backend$outcome_recipe$slope_index else
     backend$outcome_recipe$slope_index[backend$shared$keep]
   ci <- st$cohort_index[rows]; w <- st$w[rows]; U <- st$U[rows]

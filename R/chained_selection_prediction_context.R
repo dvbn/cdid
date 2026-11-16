@@ -221,6 +221,14 @@ selection_prediction_operation <- function(backend, expected_sources = NULL,
     prepared <- if (is.null(preparation)) NULL else
       dr_conditional_replay_upstream_index(preparation, sel_fit, up_map, uids, details)
     ref <- reference
+    # Issue #16: the native upstream kernel reads every U row of each cohort;
+    # a backend with any restricted eligibility context uses the masked R rows.
+    restricted <- chained_reference_restricted(ref)
+    if (!details && !restricted && (is.null(pair_response_reader) ||
+        identical(parent.env(environment(pair_response_reader)), environment(cdid_fast_kernel)))) {
+      fast <- cdid_fast_sel_upstream(sel_fit, up_map, reader, ref, rows, uids, prepared)
+      if (!is.null(fast)) return(fast)
+    }
     B <- length(rows)
     ci <- st$cohort_index[rows]
     # D60: no common weight; each rate coordinate and cell reads its recipe's W_g.
@@ -228,12 +236,15 @@ selection_prediction_operation <- function(backend, expected_sources = NULL,
     U_rows <- st$U[rows]
     A <- as.double(st$a_index[rows] > 0L)
     w_of <- function(r, ix) if (is.null(ref)) w[ix] else chained_reference_weight(ref, r, rows[ix])
+    # Issue #16: rate, slope and cell score rows of a restricted recipe are
+    # its eligible rows only (zero IF rows elsewhere; no excluded read).
+    keep_of <- function(r, ix) if (restricted) ix[chained_reference_eligible(ref, r, rows[ix])] else ix
 
     up <- matrix(0, B, length(uids))
     for (j in if (is.null(prepared)) which(uids <= up_map$n_a) else prepared$rate_positions) {
       k <- up_map$cohorts_a[uids[j]]
       r <- up_map$rates_ref[uids[j]]
-      ix <- which(ci == k & U_rows)
+      ix <- keep_of(r, which(ci == k & U_rows))
       if (length(ix)) {
         a_k <- if (is.null(ref)) st$a[k] else chained_reference_stat(ref, r, k, "a")
         m_k <- if (is.null(ref)) st$mass_U[k] else chained_reference_stat(ref, r, k, "mass_U")
@@ -269,13 +280,13 @@ selection_prediction_operation <- function(backend, expected_sources = NULL,
       if (!is.null(ref) && d_s > 0L) {
         rb <- sel_fit$block_specs[[m]]$reference
         cohort_ids <- if (is.null(prepared)) vapply(sel_fit$cells[cids], `[[`, integer(1), "cohort") else prepared$cohorts[[m]]
-        on <- which(U_rows & ci %in% cohort_ids)
+        on <- keep_of(rb, which(U_rows & ci %in% cohort_ids))
         if (length(on)) Zb[u_pos[on], ] <- chained_reference_s(ref, rb, rows[on])[, sel_fit$design_spec$slope_cols, drop = FALSE]
       }
       for (b in seq_len(B_m)) {
         cid <- cids[b]
         cell <- sel_fit$cells[[cid]]
-        rr <- which(ci == cell$cohort & U_rows)
+        rr <- keep_of(cell$reference, which(ci == cell$cohort & U_rows))
         if (!length(rr)) next
         pr <- cell_prediction(rows[rr], cid)
         Y <- if (identical(sel_fit$selection_model, "independent_period_logit")) {

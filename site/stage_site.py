@@ -63,7 +63,13 @@ ARTICLES = {
     "docs/reference/options.md": "reference/options",
     "docs/reference/results.md": "reference/results",
     "docs/help/troubleshooting.md": "help/troubleshooting",
-    "validation/SETUP.md": "installation",
+    "docs/comparisons.md": "comparisons",
+    "docs/from-other-packages.md": "from-other-packages",
+    "docs/examples/short-pretreatment-windows.md": "examples/short-pretreatment-windows",
+    "docs/methods/cross-pair-chaining.md": "methods/cross-pair-chaining",
+    "docs/methods/static-entry-exit.md": "methods/static-entry-exit",
+    "docs/methods/cohort-time-fe.md": "methods/cohort-time-fe",
+    "docs/outputs/cross_pair_monte_carlo_results.md": "outputs/cross-pair-simulations",
 }
 
 # Existing plots -> articles/figures/<file name>.
@@ -73,16 +79,21 @@ FIGURES = [
     "docs/outputs/get-started-cells.png",
     "docs/outputs/get-started-dynamic.png",
     "docs/outputs/incomplete-dr-dynamic.png",
+    "docs/outputs/static-entry-exit.png",
 ]
 
-# Linked files that are not pages: link to them in the private repository.
-# Branch as in the Contributing link of docs/README.md.
+# Link source files and the notebook to the repository.
 REPO_BLOB = "https://github.com/dvbn/cdid/blob/main/"
 REPO_FILES = [
+    "README.md",
+    "CONTRIBUTING.md",
+    "docs/theory/cross_pair_and_control_trends.tex",
+    "docs/theory/cohort_time_fe_linear.tex",
     "notebooks/README.md",
     "notebooks/cdid_practical_guide.qmd",
     "notebooks/cdid_practical_guide.html",
     "notebooks/simulate_panel.R",
+    "validation/SETUP.md",
 ]
 
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
@@ -221,7 +232,11 @@ def needs_blank(prev):
 def map_link(target, rel, anchors, record):
     if not target:
         raise StageError("empty link target")
-    if is_external(target):
+    if rel in (HOME, "README.md") and target.startswith(REPO_BLOB):
+        target = posixpath.relpath(target[len(REPO_BLOB):], posixpath.dirname(rel) or ".")
+    elif rel in (HOME, "README.md") and target == "https://raw.githubusercontent.com/dvbn/cdid/main/man/figures/logo.png":
+        target = posixpath.relpath("man/figures/logo.png", posixpath.dirname(rel) or ".")
+    elif is_external(target):
         return target
     url = urlsplit(html.unescape(target))
     path, frag = unquote(url.path), unquote(url.fragment)
@@ -233,10 +248,15 @@ def map_link(target, rel, anchors, record):
     else:
         dest_rel = posixpath.normpath(posixpath.join(posixpath.dirname(rel), path))
         if dest_rel in REPO_FILES:
+            if hash_ and frag not in anchors.get(dest_rel, ()):
+                raise StageError("anchor not found in %s: #%s" % (dest_rel, frag))
+            dest = REPO_BLOB + dest_rel
+            if url.query:
+                dest += "?" + url.query
             if hash_:
-                raise StageError("anchor on a repository file link: " + target)
-            record["repo_links"].append({"target": dest_rel, "url": REPO_BLOB + dest_rel})
-            return REPO_BLOB + dest_rel
+                dest += "#" + url.fragment
+            record["repo_links"].append({"target": dest_rel, "url": dest})
+            return dest
         try:
             dest = site_path(dest_rel)
         except KeyError:
@@ -482,7 +502,9 @@ def main():
             anchors[rel] = github_anchors(*split[rel])
         except StageError as e:
             raise StageError("%s: %s" % (rel, e))
-    anchors["README.md"] = github_anchors(*split_title("README.md", source_file(src, "README.md").read_text(encoding="utf-8")))
+    for rel in ("README.md", "validation/SETUP.md"):
+        text = source_file(src, rel).read_text(encoding="utf-8")
+        anchors[rel] = github_anchors(*split_title(rel, text))
     staged, page_records = {}, []
     all_anchors, figures_used, repo_links = set(), set(), []
     for rel in pages:
@@ -506,13 +528,13 @@ def main():
     unused = sorted(set(FIGURES) - figures_used)
     if unused:
         raise StageError("figures not referenced by any page: " + ", ".join(unused))
-    # The two home sources must agree after rebasing their relative URLs.
+    # Check the repository quick start as well as the site's guide home.
     root_body = source_file(src, "README.md").read_text(encoding="utf-8")
     check_public("README.md", root_body)
     root_record = {"links_mapped": 0, "blank_lines_inserted": 0, "explicit_ids": 0,
                    "anchors": set(), "figures": set(), "repo_links": []}
-    if adapt("README.md", None, root_body, anchors, root_record) != staged[HOME]:
-        raise StageError("README.md and docs/README.md must have the same content apart from relative link paths")
+    adapt("README.md", None, root_body, anchors, root_record)
+    repo_links += [dict(r, source="README.md") for r in root_record["repo_links"]]
     missing_repo = sorted({r["target"] for r in repo_links
                            if not os.path.isfile(os.path.join(src, r["target"]))})
 

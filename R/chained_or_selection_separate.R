@@ -19,8 +19,14 @@ or_selection_separate_fit_charges <- function(S, G, L, p, d, D, n_A, B, max_fit_
   x <- or_baseline_separate_fit_charges(S, G, L, p, sum(support_rows), n_A, B,
     metadata, header, name_bytes, pools, links, support_rows)
   forcing <- 0
-  for (b in seq_along(pools)) forcing <- forcing +
-    length(unique(unlist(channels[pools[[b]]$support_ids])))
+  for (b in seq_along(pools)) {
+    sids_b <- pools[[b]]$support_ids
+    forcing <- forcing + if (length(sids_b) == 1L && !anyDuplicated(channels[[sids_b[1L]]])) {
+      length(channels[[sids_b[1L]]])
+    } else {
+      length(unique(unlist(channels[sids_b], use.names = FALSE)))
+    }
+  }
   # Global coordinates are used only by the current forcing accumulator; the
   # retained records store their actual local channel subsets.
   x$models <- x$models + 32 * (p + 3) * forcing + 32 * (p + 2) * sum(lengths(channels))
@@ -41,28 +47,50 @@ or_selection_separate_assemble <- function(recipe, supports, pools, links, chann
                                            link_fun = or_selection_link) {
   blocks <- lapply(seq_along(pools), function(b) list(name = paste0("b", b),
     support_ids = pools[[b]]$support_ids, L = pools[[b]]$transitions))
-  fitted <- or_outcome_fit_blocks(recipe, lapply(supports, function(u)
-      list(summary = u$design$summary, scale = 1, colmax = u$design$colmax)),
-    blocks, lapply(links, function(l) list(regression = l$regression,
-      support_id = l$support_id)), rank_tol, N, visit_rows, "separate", "corollary1")
-  regressions <- lapply(seq_along(pools), function(b) {
-    f <- fitted$groups[[b]]
-    rec <- forcing_fun(recipe, f, supports, pools[b], channels, D, N)$regressions[[1L]]
-    mean_alpha <- 0; mean_beta <- numeric(length(f$keep))
-    for (s in pools[[b]]$support_ids) {
-      g <- or_pooled_factor_moments(recipe, supports[[s]]$design$summary,
-        f$keep, rec$alpha, f$beta)
-      ga <- if (recipe$intercept) g$g[1L] else 0
-      gb <- if (recipe$intercept) g$g[-1L] - rec$mean_d * ga else g$g
-      mean_alpha <- mean_alpha + ga / N
-      mean_beta <- mean_beta + gb / N
+  fitted <- cdid_sel_fast_or_outcome_fit_blocks(
+    recipe, supports, blocks, links, rank_tol, N, "separate", "corollary1"
+  )
+  if (is.null(fitted)) {
+    fitted <- or_outcome_fit_blocks(recipe, lapply(supports, function(u)
+        list(summary = u$design$summary, scale = 1, colmax = u$design$colmax)),
+      blocks, lapply(links, function(l) list(regression = l$regression,
+        support_id = l$support_id)), rank_tol, N, visit_rows, "separate", "corollary1")
+  }
+  fast_fl <- if ((identical(forcing_fun, or_selection_forcing) && identical(link_fun, or_selection_link)) ||
+                 (identical(forcing_fun, or_corollary1_forcing) && identical(link_fun, or_corollary1_link))) {
+    cdid_fast_or_sep_forcing_links(recipe, fitted, supports, pools, links, channels, N)
+  } else {
+    NULL
+  }
+  if (!is.null(fast_fl)) {
+    regressions <- fast_fl$regressions
+    links <- fast_fl$links
+  } else {
+    can_fast_force <- (identical(forcing_fun, or_selection_forcing) || identical(forcing_fun, or_corollary1_forcing)) &&
+      length(formals(forcing_fun)) >= 9L
+    regressions <- lapply(seq_along(pools), function(b) {
+      f <- fitted$groups[[b]]
+      if (can_fast_force) {
+        return(forcing_fun(recipe, f, supports, pools[b], channels, D, N,
+          include_score_means = TRUE, local_only = TRUE)$regressions[[1L]])
+      }
+      rec <- forcing_fun(recipe, f, supports, pools[b], channels, D, N)$regressions[[1L]]
+      mean_alpha <- 0; mean_beta <- numeric(length(f$keep))
+      for (s in pools[[b]]$support_ids) {
+        g <- or_pooled_factor_moments(recipe, supports[[s]]$design$summary,
+          f$keep, rec$alpha, f$beta)
+        ga <- if (recipe$intercept) g$g[1L] else 0
+        gb <- if (recipe$intercept) g$g[-1L] - rec$mean_d * ga else g$g
+        mean_alpha <- mean_alpha + ga / N
+        mean_beta <- mean_beta + gb / N
+      }
+      c(rec, list(score_mean_alpha = mean_alpha, score_mean_beta = mean_beta))
+    })
+    for (i in seq_along(links)) {
+      l <- links[[i]]
+      links[[i]] <- c(l, link_fun(recipe, fitted$groups[[l$regression]],
+        supports[[l$support_id]], regressions[[l$regression]], N))
     }
-    c(rec, list(score_mean_alpha = mean_alpha, score_mean_beta = mean_beta))
-  })
-  for (i in seq_along(links)) {
-    l <- links[[i]]
-    links[[i]] <- c(l, link_fun(recipe, fitted$groups[[l$regression]],
-      supports[[l$support_id]], regressions[[l$regression]], N))
   }
   list(supports = lapply(seq_along(supports), function(s) {
     u <- supports[[s]]
@@ -90,6 +118,10 @@ or_selection_separate_record <- function(obj, state) {
 # visit every outcome block for the full objective; ordinary requests visit only
 # their blocks. Shared upstream selection groups still bring every needed cell.
 or_selection_separate_if_envelope <- function(backend, B, links, details) {
+  if (!isTRUE(details) && identical(details, FALSE)) {
+    fast_env <- cdid_fast_or_sep_envelope(backend, B, links)
+    if (!is.null(fast_env)) return(fast_env)
+  }
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   G <- length(backend$regression_specs); S <- length(backend$supports)

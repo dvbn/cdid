@@ -200,7 +200,7 @@ A variation shows what DR protects. Replace `0.3 * cov_panel$x` by `0.3 * cov_pa
 
 ---
 
-**Reading path, step 7 of 20** · Previous: [Prepare your panel and unit table](../help/prepare-data.md) · Next: [Choose IPW, OR or DR in an incomplete panel](../examples/treatment-choice.md)
+**Reading path, step 7 of 22** · Previous: [Prepare your panel and unit table](../help/prepare-data.md) · Next: [Choose IPW, OR or DR in an incomplete panel](../examples/treatment-choice.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -227,6 +227,8 @@ A variation shows what DR protects. Replace `0.3 * cov_panel$x` by `0.3 * cov_pa
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](../examples/short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

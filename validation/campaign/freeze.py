@@ -8,7 +8,8 @@ import argparse, csv, datetime, fractions, hashlib, itertools, json, math, os, p
 CDID_ATT_GT_FORMALS = ("yname", "tname", "idname", "gname", "xformla", "data", "panel", "allow_unbalanced_panel", "control_group",
     "anticipation", "weightsname", "fix_weights", "alp", "bstrap", "cband", "biters", "clustervars", "est_method", "base_period", "faster_mode", "print_details", "pl", "cores", "compute_inffunc", "mode", "frame", "selection",
     "selection_model", "selection_pooling", "selection_xformla", "selection_universe", "selection_rho",
-    "selection_justification", "selection_est_method", "imputation_pooling", "gmm_weighting", "gmm_covariance", "pt_assumption", "pt_start", "control", "outcome_pooling")
+    "selection_justification", "selection_est_method", "imputation_pooling", "gmm_weighting", "gmm_covariance",
+    "pt_assumption", "pt_start", "cross_pair", "control", "outcome_pooling", "dname", "imputation_scale", "switchers", "switch_times")
 DID_ATT_GT_FORMALS = ("yname", "tname", "idname", "gname", "xformla", "data", "panel", "allow_unbalanced_panel", "control_group",
     "anticipation", "weightsname", "fix_weights", "alp", "bstrap", "cband", "biters", "clustervars", "est_method", "base_period", "faster_mode", "print_details", "pl", "cores", "compute_inffunc")
 CDID_AGGTE_FORMALS = ("MP", "type", "balance_e", "min_e", "max_e", "na.rm", "bstrap", "biters", "cband", "alp", "clustervars")

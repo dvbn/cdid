@@ -479,6 +479,24 @@ pipeline_occupancy_accumulate <- function(p_own, preflight) {
       count = numeric(0L), diagnostics = diag))
   }
   if (pipeline_occupancy_complete_roster(p_own)) return(pipeline_occupancy_accumulate_complete(p_own, preflight, diag))
+  fk <- if (exists("cdid_is_default_fn", mode = "function", inherits = TRUE) &&
+            cdid_is_default_fn(pipeline_occupancy_accumulate, "pipeline_occupancy_accumulate") &&
+            cdid_are_default_fns("ipw_owner_check_interrupt")) {
+    cdid_fast_kernel("C_cdid_occupancy_accumulate")
+  } else {
+    NULL
+  }
+  if (!is.null(fk)) {
+    cb <- cdid_interrupt_callback(ipw_owner_check_interrupt)
+    fast_acc <- fk(
+      p_own$a_unit_index, p_own$units$n_obs, p_own$units$obs_start,
+      p_own$a_cohort_index, p_own$observations$calendar_index,
+      list(p_own$n_a_units, p_own$n_calendar_dates, preflight$max_occupancy_cells,
+           preflight$slice_pairs, preflight$accumulation_scratch_entries,
+           preflight$grouping_scratch_entries, cb, environment())
+    )
+    if (!is.null(fast_acc)) return(fast_acc)
+  }
   cal_idx <- p_own$observations$calendar_index
   a_units <- p_own$a_unit_index
 
@@ -1389,6 +1407,25 @@ pipeline_metadata_resolve_catalog_mappings <- function(
   }
 
   rows <- catalog$rows
+  fast_map <- NULL
+  if (n_rows > 0L && exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+    fk_map <- cdid_fast_kernel("C_cdid_catalog_row_mappings")
+    if (!is.null(fk_map)) {
+      fast_map <- fk_map(
+        list(pair_s_key, pair_t_key, pair_starts, pair_ends, p_ki, as.double(p_cnt), p_cell_id),
+        list(as.integer(pl$entries), as.integer(pl$start), as.integer(pl$size)),
+        list(as.integer(rows$target_index), as.integer(rows$s_index), as.integer(rows$t_index), as.integer(rows$pool_id))
+      )
+    }
+  }
+  if (!is.null(fast_map)) {
+    target_occ_cell_id <- fast_map$target_occ_cell_id
+    target_pair_count <- fast_map$target_pair_count
+    control_pool_pair_count <- fast_map$control_pool_pair_count
+    risk_pair_count <- fast_map$risk_pair_count
+    all_cohort_pair_count <- fast_map$all_cohort_pair_count
+    n_supported_controls <- fast_map$n_supported_controls
+  } else {
   target_occ_cell_id <- integer(n_rows)
   target_pair_count <- numeric(n_rows)
   control_pool_pair_count <- numeric(n_rows)
@@ -1438,6 +1475,7 @@ pipeline_metadata_resolve_catalog_mappings <- function(
       label = "risk-set pair count"
     )
     all_cohort_pair_count[r] <- ipw_owner_safe_sum(sl_cnt, label = "all-cohort pair count")
+  }
   }
 
   target_a_unit_count_row <- as.double(coh_a_count[rows$target_index])
@@ -1526,7 +1564,8 @@ pipeline_metadata_resolve_catalog_mappings <- function(
 # reuse refusal; nothing is derived from the source when it is refused.
 pipeline_metadata_bind_catalog_source <- function(source, panel_owner, frame_owner, pm_ctrl, occupancy,
                                                   targets, anticipation, control_group, conventions,
-                                                  requested_post, pt_assumption, pt_start) {
+                                                  requested_post, pt_assumption, pt_start,
+                                                  eligibility_occupancy = NULL) {
   bad <- function(msg, extra = character()) cdid_pipeline_metadata_abort(msg,
     c(extra, "cdid_pipeline_metadata_reuse_error", "cdid_pipeline_metadata_input_error"))
   # Original seal/owner/occupancy/catalog/mapping validator and its typed refusals first.
@@ -1546,12 +1585,14 @@ pipeline_metadata_bind_catalog_source <- function(source, panel_owner, frame_own
       "cdid_pipeline_metadata_owner_mismatch_error")
   }
   cons <- source$construction
-  cons_names <- c("targets", "anticipation", "control_group", "conventions", "requested_post", "pt_assumption", "pt_start")
+  cons_names <- c("targets", "anticipation", "control_group", "conventions", "requested_post", "pt_assumption", "pt_start",
+    if (!is.null(eligibility_occupancy)) "eligibility_occupancy")
   if (!is.list(cons) || is.object(cons) || !identical(names(cons), cons_names)) {
     bad("Catalog source metadata carries no construction record of its exact original arguments; reuse is refused.")
   }
   now <- list(targets = targets, anticipation = anticipation, control_group = control_group,
-    conventions = conventions, requested_post = requested_post, pt_assumption = pt_assumption, pt_start = pt_start)
+    conventions = conventions, requested_post = requested_post, pt_assumption = pt_assumption, pt_start = pt_start,
+    eligibility_occupancy = eligibility_occupancy)
   for (nm in cons_names) {
     if (!identical(cons[[nm]], now[[nm]])) {
       bad(paste0("Catalog source metadata was constructed with a different `", nm,
@@ -1599,7 +1640,8 @@ build_owner_comparison_catalog <- function(
   trace_env = NULL,
   metadata_id = NULL,
   pt_assumption = "post", pt_start = NULL,
-  metadata_source = NULL
+  metadata_source = NULL,
+  eligibility_occupancy = NULL
 ) {
   # Stage-local demand: owners/controls, the occupancy and catalog stages this
   # construction runs, and the design bridge only when a design is requested.
@@ -1661,7 +1703,8 @@ build_owner_comparison_catalog <- function(
   )
   if (!is.null(metadata_source)) {
     reuse <- pipeline_metadata_bind_catalog_source(metadata_source, p_own, f_own, pm_ctrl, occupancy,
-      targets, anticipation, control_group, conventions, requested_post, pt_assumption, pt_start)
+      targets, anticipation, control_group, conventions, requested_post, pt_assumption, pt_start,
+      eligibility_occupancy = eligibility_occupancy)
   }
 
   # 2. Derive or validate sealed sparse `(cohort, s, t, count)` occupancy
@@ -1694,7 +1737,8 @@ build_owner_comparison_catalog <- function(
       control_group = control_group,
       conventions = conventions,
       requested_post = requested_post,
-      bounds = cat_bnd
+      bounds = cat_bnd,
+      eligibility_occupancy = eligibility_occupancy
     )
 
     # 4. Resolve explicit row-to-operator/cohort/occupancy mappings
@@ -1774,8 +1818,10 @@ build_owner_comparison_catalog <- function(
       # Exact original argument objects of this construction (bound by the seal);
       # a later construction over the same owners may reuse this catalog only
       # when its own arguments are `identical()` to these.
-      construction = list(targets = targets, anticipation = anticipation, control_group = control_group,
+      construction = c(list(targets = targets, anticipation = anticipation, control_group = control_group,
         conventions = conventions, requested_post = requested_post, pt_assumption = pt_assumption, pt_start = pt_start),
+        # Issue #16: restricted eligibility occupancy (absent on every other fit).
+        if (!is.null(eligibility_occupancy)) list(eligibility_occupancy = eligibility_occupancy)),
       catalog_source_ref = if (is.null(reuse)) NULL else reuse$source_ref,
       preflight = c(pre,list(catalog_composition_reservation=reservation,
         catalog_reuse_binding = if (is.null(reuse)) NULL else reuse$binding)),
