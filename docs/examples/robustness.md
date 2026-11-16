@@ -214,7 +214,7 @@ Evaluating finite sample performance across these specifications requires a sepa
 
 ---
 
-**Reading path, step 16 of 20** · Previous: [GMM weighting and covariance regularization](../methods/gmm.md) · Next: [Inference](inference.md)
+**Reading path, step 16 of 22** · Previous: [GMM weighting and covariance regularization](../methods/gmm.md) · Next: [Inference](inference.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -241,6 +241,8 @@ Evaluating finite sample performance across these specifications requires a sepa
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

@@ -499,3 +499,62 @@ testthat::test_that("augmented OR (separate and pooled) and IPW match raw-equati
     testthat::expect_equal(core$phi, (sum(a_dated$A) / N) * together$phi, tolerance = 1e-10)
   }
 })
+
+# Nuisance report (R/chained_nuisance_models.R): the DR+DR role coefficients are
+# the backend's fitted records, and their streamed (links = 1L, bounded chunk)
+# unit/cluster SEs equal (i) the dense centered sandwich of all-link replayed
+# details IF columns and (ii) a sandwich of independent weight-perturbation
+# derivatives of the raw-equation reference refits (rap_reference).
+testthat::test_that("augmented DR+DR nuisance report: coefficients, streamed SEs and perturbation oracle", {
+  report <- rap_ns("chained_nuisance_augmented_roles_run")
+  se_of <- function(M, grp = NULL) {
+    S <- if (is.null(grp)) M else rowsum(M, grp)
+    sqrt(colSums(sweep(S, 2L, colMeans(S))^2)) / nrow(M)
+  }
+  specs <- list(list(imp = "within_cohort", sel = "across_cohorts", model = "pair_logit", mode = "pooled", oracle = TRUE),
+    list(imp = "separate", sel = "separate", model = "pair_logit", mode = "separate", oracle = FALSE))
+  for (spec in specs) {
+    a <- rap_case(); fit <- rap_fit(a, spec$imp, spec$sel, spec$model, spec$mode)
+    st <- get("cp04_reader", fit$reader_ref, inherits = FALSE)$state
+    N <- st$N; grp <- (seq_len(N) - 1L) %/% 4L + 1L
+    run <- function(group, B = NULL) report(fit, st, fit$control, group, if (is.null(group)) NULL else "cl",
+      list(), "~x", "w_i = w", 0, B)
+    unit <- run(NULL); clus <- run(grp); unit_b1 <- run(NULL, 1L)
+    actual <- rap_collect(fit)
+    n1 <- sum(vapply(fit$groups, function(g) length(g$cell_ids) * fit$outcome_recipe$intercept + g$p, numeric(1)))
+    n2 <- length(rap_point(fit)) - length(fit$links) - n1 -
+      sum(vapply(fit$treatments, function(t) length(t$coefficients), integer(1)))
+    p_trt <- fit$treatment_recipe$p
+    trt_cols <- function(tids) unlist(lapply(tids, function(t) n1 + n2 + (t - 1L) * p_trt + seq_len(p_trt)))
+    cols <- list(imputation = seq_len(n1), outcome = n1 + seq_len(n2),
+      treatment = trt_cols(unit$treatment$blocks$backend_id))
+    point <- rap_point(fit); ref_point <- rap_reference(a, fit)
+    for (r in names(cols)) {
+      co <- unit[[r]]$coefficients
+      testthat::expect_identical(unit[[r]]$covariance$status, "available")
+      testthat::expect_identical(co$estimate, unname(point[cols[[r]]]))
+      testthat::expect_equal(co$estimate, ref_point[cols[[r]]], tolerance = 2e-8)
+      testthat::expect_equal(co$std_error, unname(se_of(actual[, cols[[r]], drop = FALSE])), tolerance = 1e-10)
+      testthat::expect_equal(clus[[r]]$coefficients$std_error, unname(se_of(actual[, cols[[r]], drop = FALSE], grp)),
+        tolerance = 1e-10)
+      testthat::expect_equal(unit_b1[[r]]$coefficients$std_error, co$std_error, tolerance = 1e-12)
+      testthat::expect_true(all(is.finite(co$std_error) & co$std_error > 0))
+      testthat::expect_true(all(clus[[r]]$blocks$n_contributing_clusters >= 2L))
+    }
+    testthat::expect_identical(nrow(unit$imputation$blocks), length(fit$groups))
+    testthat::expect_identical(nrow(unit$outcome$blocks), if (spec$mode == "pooled") 1L else fit$shared_or$n_blocks)
+    if (spec$oracle) {
+      h <- 1e-6
+      numerical <- t(vapply(seq_len(N), function(i) {
+        delta <- -rep(1, N); delta[i] <- N - 1
+        (rap_reference(a, fit, 1 + h * delta) - rap_reference(a, fit, 1 - h * delta)) / (2 * h)
+      }, numeric(length(point))))
+      for (r in names(cols)) {
+        testthat::expect_equal(unit[[r]]$coefficients$std_error, unname(se_of(numerical[, cols[[r]], drop = FALSE])),
+          tolerance = 1e-5)
+        testthat::expect_equal(clus[[r]]$coefficients$std_error, unname(se_of(numerical[, cols[[r]], drop = FALSE], grp)),
+          tolerance = 1e-5)
+      }
+    }
+  }
+})

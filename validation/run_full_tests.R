@@ -54,14 +54,18 @@ if (!is.null(lib_loc)) {
                       normalizePath(file.path(lib_loc, "cdid"), winslash = "/", mustWork = TRUE)))
 }
 
-# Match testthat's file discovery; this revision ships 172 original files and
-# the bounded regression file. Root's archive hash audit authenticates contents.
+# Match testthat's file discovery and verify that the complete archive contains
+# the primary estimator and nuisance comparison suites.
 test_files <- sort(list.files(test_dir, pattern = "^test.*\\.[rR]$", full.names = FALSE))
-if (length(test_files) != 173L || !"test-cran-regression.R" %in% test_files) {
-  stop(sprintf(
-    "Expected all 173 packaged testthat files (including cran-regression) in '%s', found %d.",
-    test_dir, length(test_files)
-  ))
+required_test_files <- c("test-cran-regression.R", "test-cran-regression-static.R",
+                         "test-nuisance-models.R", "test-cross-pair-chaining.R",
+                         "test-cohort-time-fe.R", "test-cohort-time-nuisance-scores.R",
+                         "test-static-nuisance-capture.R",
+                         "test-chained-missing-reference.R")
+expected_test_count <- 191L
+if (length(test_files) != expected_test_count || !all(required_test_files %in% test_files)) {
+  stop(sprintf("Expected all %d packaged testthat files in '%s', found %d.",
+               expected_test_count, test_dir, length(test_files)))
 }
 
 log_file <- file.path(output_dir, "full-testthat.log")

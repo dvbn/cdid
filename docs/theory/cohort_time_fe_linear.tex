@@ -1,0 +1,205 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb}
+\title{Cohort-by-date fixed effects from observed outcome differences}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+Let \(O_i\) denote the ordered dates with an observed outcome for study unit \(i\).
+Write \(m_i=|O_i|\). For \(m_i\ge 1\), collect the observed outcomes in \(y_i\)
+and write their linear model as
+\[
+  y_i = \mathbf{1}_{m_i}\alpha_i + Z_i\beta + u_i.
+\]
+Rows of \(Z_i\) pick a coefficient slot. There is one common slot \(\lambda_t\)
+per date. A saturated cohort-date cell instead receives its own slot
+\(\gamma_{g,t}\). The treatment contrast for a post-treatment cell is
+\(\tau_{g,t}=\gamma_{g,t}-\lambda_t\). With never-treated controls the
+cell \((g,g-1)\) uses the common slot and other pre-treatment cells have
+separate deviations. With not-yet-treated controls all untreated cells use
+common slots, imposing common pre-treatment changes across cohorts.
+
+\paragraph{Eliminating the unit intercept.}
+For \(m_i\ge 2\) let \(B_i\) form successive differences along the observed
+dates, allowing calendar gaps. Its \(m_i-1\) rows are linearly independent,
+its kernel is the span of \(\mathbf{1}_{m_i}\), and its row space is the
+orthogonal complement of that vector. Therefore
+\[
+  B_i' (B_i B_i')^{-1} B_i
+  = M_i
+  = I_{m_i}-\frac{\mathbf{1}_{m_i}\mathbf{1}_{m_i}'}{m_i}.
+\]
+Both sides are the orthogonal projection onto the same row space. The
+within-unit least-squares objective is thus exactly
+\[
+  \sum_{i:m_i\ge 2}
+  (B_i y_i-B_i Z_i\beta)'(B_i B_i')^{-1}(B_i y_i-B_i Z_i\beta).
+\]
+It uses \(m_i-1\) differences regardless of how many additional pairwise
+differences can be formed. It weights correlated differences jointly.
+A one-date unit contributes zero after elimination. Units with no observed
+outcomes have no rows but can remain in the unit frame.
+
+\paragraph{Identification.}
+The Gram matrix is \(H=\sum_i Z_i'M_iZ_i\).
+For any vector \(v\), \(v'Hv=\sum_i\lVert M_i Z_i v\rVert^2\).
+It vanishes exactly when the slot values are constant along each unit's
+observed dates. Make slots vertices and connect two slots observed by a
+unit. The null space consists of component-wise constants. A contrast
+\(\gamma_{g,t}-\lambda_t\) is estimable exactly when its two slots lie in
+the same component. Removing one slot per component fixes the irrelevant
+origins. This operation does not add identifying restrictions to contrasts.
+
+\paragraph{Original-unit scores.}
+On the gauge-fixed system, let \(C\) map coefficients to the estimable
+contrasts. The contribution of unit \(i\) to the contrast estimator's
+sandwich is
+\[
+  v_i = C H^{-1} Z_i'M_i(y_i-Z_i\widehat\beta).
+\]
+The retained influence function is \(N v_i\) for the full unit frame of
+size \(N\). Independent-unit covariance is \(\sum_i v_iv_i'\). With
+independent clusters, sum \(v_i\) within cluster before taking the outer
+products. This sandwich does not use the homoskedastic model as its
+variance assumption. A regression program may report an additional
+degrees-of-freedom factor. Units with fewer than two outcomes have zero
+score in this linear observed-outcome criterion.
+
+The algebra equates sample computations on the same rows. Interpreting
+the coefficients as population treatment effects additionally requires
+the maintained parallel-trends model, treatment timing, and
+representativeness of the observed changes for the relevant moment
+conditions. In particular the needed mean restriction is on the
+within-unit score under the observed date design. This fit does not
+fit an observation probability or recover unobserved outcome changes.
+
+\section{Time-invariant covariates}
+Write \(w_i=(1,X_i')'\). Each coefficient slot now contains an intercept and
+covariate slopes. The date slot holds the common calendar coefficient vector.
+A free cohort-date slot holds the sum of the common vector and a cohort-date
+deviation. If \(S_i\) assigns the observed rows of unit \(i\) to slots, its
+regression design is \(D_i=S_i \otimes w_i'\). Unit intercepts are still
+eliminated by \(M_i\), so
+\[
+  D_i'M_iD_i = (S_i'M_i S_i)\otimes(w_iw_i').
+\]
+For a common cohort and observation pattern, the first factor is fixed. The
+fit can therefore accumulate the second factor over the units with that
+pattern. It uses the same normal equations as the full dummy and interaction
+regression.
+
+Let \(C_{g,t}\) take the vector difference between the cohort-date and
+calendar slots. The reported average effect is
+\(\theta_{g,t}=\bar w_g' C_{g,t}\widehat\beta\), where \(\bar w_g\) averages
+the full declared cohort frame. Support of the dates is necessary for
+identification, and the covariate contrasts also need to lie in the
+identified coefficient space. A finite pseudoinverse value alone does not
+establish an identified contrast.
+
+With \(N\) units and \(n_g\) in cohort \(g\), the original-unit contribution
+on the package's \(N\)-scaled convention is
+\[
+  N\bar w_g' C_{g,t} H^{-1} D_i'M_i\widehat u_i
+  +
+  \frac{N 1\{G_i=g\}}{n_g}
+  (w_i-\bar w_g)' C_{g,t}\widehat\beta ,
+\qquad H=\sum_i D_i'M_iD_i .
+\]
+The inverse is evaluated on the identified gauge-fixed coordinates. The
+second term comes from estimating the cohort covariate mean. A unit with
+fewer than two observed outcomes can therefore contribute through its
+covariates even when its regression score is zero. If a benchmark instead
+holds a specified target mix fixed, only the first term is used for that
+particular covariance comparison.
+
+\section{Cohort-standardized treatment moments}
+For a target cohort \(g\), write \(Q_g\) for its covariate distribution in the
+study frame and \(h_{gk}(x)\) for the odds of cohort \(g\) relative to donor
+\(k\) on their joint frame. For an observed clean pair \(e=(s,t)\) in cohort
+\(k\), take the conditional mean untreated change to be
+\(m_e^*(x)=\lambda_t(x)-\lambda_s(x)\). The same conditional function can
+have a different average under each \(Q_g\).
+Let \(B_{ke}=\mathbf{1}\{G=k,S_e=1\}\) indicate an observed donor change.
+With working outcome prediction \(m_e(x)\), define the control moment
+\[
+ C_{gke}=E_{Q_g}[m_e(X)] +
+   \frac{E[B_{ke} h_{gk}(X)\{\Delta_eY-m_e(X)\}]}{E[B_{ke}h_{gk}(X)]}.
+\]
+IPW sets \(m_e=0\). A sufficient selection-none condition is that
+observed pairs preserve the conditional mean change and covariate
+distribution within each relevant cohort. If \(h_{gk}\) is correct
+and the cap leaves the correct odds in use, normalizing the weighted
+donor distribution gives \(Q_g\). The
+right-hand side then equals \(E_{Q_g}[m_e^*(X)]\). If \(m_e=m_e^*\),
+the donor residual has conditional mean zero and its weighted expectation
+vanishes for any admitted working odds. Together with representative
+actual changes of the target cohort, these equalities give the desired
+cohort-by-date contrasts.
+
+Let \(c=E[B_{ke}h_{gk}(X)]\), \(p_g=P(G=g)\) and \(\bar r\) denote
+the normalized donor residual mean. The direct original-unit term is
+\[
+ \frac{\mathbf{1}\{G_i=g\}}{p_g}\{m_e(X_i)-E_{Q_g}m_e(X)\}+
+ \frac{B_{ke,i}h_{gk}(X_i)}{c}\{\Delta_eY_i-m_e(X_i)-\bar r\}.
+\]
+Each fitted nuisance contributes its influence function multiplied by
+the corresponding derivative of \(C_{gke}\). For a linear outcome
+nuisance this derivative is the target minus transported donor average
+of its design. For the logit it is the normalized donor average of the
+centered residual times the derivative of the log odds, including the
+active cap rule. The graph solve applies the contrast of the weighted
+least-squares loading to the original-unit moment scores. With valid
+population moments, the derivative through an estimated weighting
+matrix vanishes at the population solution under the usual regularity
+conditions.
+
+
+\section*{Reconstructing a change on the full study frame}
+Let \(S_{i,s,t}\) indicate an observed change for dates \(s<t\).
+Write \(q_{k,s,t}(X_i)\) for its probability in cohort \(k\),
+and \(j_{k,s,t}(X_i)\) for the fitted conditional mean of the cohort's
+actual change on the observed pairs. For a pair supported within that cohort,
+the three reconstructed responses are
+\[
+ \frac{S_{i,s,t}\Delta_{i,s,t}}{q_{k,s,t}(X_i)},\qquad
+ j_{k,s,t}(X_i),\qquad
+ j_{k,s,t}(X_i) + \frac{S_{i,s,t}}{q_{k,s,t}(X_i)}
+   \{\Delta_{i,s,t}-j_{k,s,t}(X_i)\}.
+\]
+Terms multiplied by \(S=0\) are zero without reading the missing outcome.
+Under conditional mean representativeness, the first response has the
+full-cohort conditional mean change when the probability is correct. The
+second has that mean when the change model is correct. For the third response
+with working functions \(q,j\) and true functions \(q_0,j_0\), the conditional
+mean is \(j+(q_0/q)(j_0-j)\). It equals \(j_0\) if either function is correct
+and the active clipping rule preserves the needed equality. Date-product
+probabilities require the two observation indicators to be independently
+distributed conditional on the selection predictors and cohort. A/B direct
+pair weighting uses \(q_F(x)=\Pr(U\mid k)\rho_k(x)q_U(x)\) before the
+documented clipping convention on \(q_U\).
+
+For complete observations, the unit-eliminated normal equations are a
+sum over all within-unit pairs with factor \(1/T\). The common factor
+cancels. For a supported cohort-pair, substitute the reconstructed
+change into the right-hand side while using the cohort's full-frame design
+cross products on the left. This defines the corrected projection.
+An unsupported cohort-pair does not supply a normal equation. A root offset
+is fixed in each retained connected component, and any contrast with endpoints
+in different components is unavailable. Treatment weighting and augmentation
+instead use the reconstructed changes in the full-frame ratios of the
+preceding section.
+
+The direct unit score of the corrected projection is the design difference
+times the residual of its reconstructed change. Apply the gauge-fixed
+inverse and add the derivative of the right-hand side applied to the
+estimating influence functions of \(q,j\). In the treatment ratios, compute
+the derivative of each full-cohort mean and normalized tilt, then add its
+upstream derivative loadings. A/B adds the full-frame influence of the
+rate \(\pi_k=\Pr(U\mid k)\), namely
+\(N/N_k\,{\bf 1}\{G_i=k\}(U_i-\pi_k)\). Its contribution to a weighted
+reconstructed response is the derivative of \(1/\pi_k\). The derivative
+of the probability floor is one above the floor and zero below, using
+the package's stated convention at equality. Shared upstream coordinates
+are summed by original unit before the sandwich or cluster aggregation.
+\end{document}

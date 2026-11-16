@@ -75,8 +75,8 @@ validate_calendar_spec <- function(calendar, cohorts, anticipation = 0, pt_assum
     cdid_abort("`anticipation` must be a finite non-negative whole numeric scalar.",
       c("cdid_design_anticipation_error", "cdid_design_calendar_error", "cdid_design_input_error"))
   }
-  if (!design_vector(pt_assumption, 1L, "character") || !pt_assumption %in% c("post", "all")) {
-    cdid_abort("`pt_assumption` must be explicitly \"post\" or \"all\".",
+  if (!design_vector(pt_assumption, 1L, "character") || !pt_assumption %in% c("post", "all", "ctrl")) {
+    cdid_abort("`pt_assumption` must be explicitly \"post\", \"all\", or \"ctrl\".",
       c("cdid_design_pt_assumption_error", "cdid_design_calendar_error", "cdid_design_input_error"))
   }
   cal <- sort(as.double(calendar))
@@ -93,6 +93,29 @@ validate_calendar_spec <- function(calendar, cohorts, anticipation = 0, pt_assum
         anticipation = as.double(anticipation),
         max_cohort = max(coh),
         has_never_treated = any(is.infinite(coh))
+      ),
+      class = "cdid_calendar_spec"
+    ))
+  }
+  if (identical(pt_assumption, "ctrl")) {
+    pt_start_resolved <- if (is.null(pt_start)) {
+      min(cal)
+    } else {
+      if (!design_vector(pt_start, 1L) || !(as.double(pt_start) %in% cal)) {
+        cdid_abort("Under `pt_assumption = \"ctrl\"`, `pt_start` must be `NULL` or an explicit finite scalar date belonging to the supplied full calendar.",
+          c("cdid_design_pt_start_error", "cdid_design_calendar_error", "cdid_design_input_error"))
+      }
+      as.double(pt_start)
+    }
+    return(structure(
+      list(
+        calendar = cal,
+        cohorts = coh,
+        anticipation = as.double(anticipation),
+        max_cohort = max(coh),
+        has_never_treated = any(is.infinite(coh)),
+        pt_assumption = "ctrl",
+        pt_start = pt_start_resolved
       ),
       class = "cdid_calendar_spec"
     ))
@@ -132,6 +155,21 @@ calendar_reference_date <- function(g, calendar, anticipation = 0) {
   cal <- sort(as.double(calendar))
   delta <- as.double(anticipation)
   ug <- sort(unique(as.double(g)))
+  can_fast_ref <- exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns("exact_cmp_sum") &&
+    is.finite(delta) && abs(delta) <= 1e14 &&
+    all(is.finite(cal)) && max(abs(cal)) <= 1e14 &&
+    all(is.finite(ug)) && max(abs(ug)) <= 1e14
+  if (can_fast_ref) {
+    cal_shift <- cal + delta
+    idx <- findInterval(ug, cal_shift, left.open = TRUE)
+    if (any(idx == 0L)) {
+      cdid_abort("No admissible pre-anticipation reference period t < g - anticipation on the supplied full calendar.",
+        c("cdid_design_reference_error", "cdid_design_calendar_error", "cdid_design_input_error"))
+    }
+    uref <- cal[idx]
+    return(uref[match(as.double(g), ug)])
+  }
   uref <- vapply(ug, function(gi) {
     pre <- vapply(cal, function(tm) exact_cmp_sum(tm, delta, gi) < 0L, logical(1L))
     if (!any(pre)) {
@@ -189,37 +227,70 @@ parse_control_pool_string <- function(cp_str) {
 # already bound `text[index]` to the actual `cp` column; only the text parse is
 # skipped, every cleanliness/universe/exclusion check runs on the typed values.
 design_pool_cache <- function(cp, delta = NULL, typed = NULL) {
+  n_u <- if (is.null(typed)) length(unique(cp)) else length(typed$text)
   if (is.null(typed)) {
     u <- unique(cp)
     index <- match(cp, u)
-    vals <- vector("list", length(u))
-    done <- logical(length(u))
+    vals <- vector("list", n_u)
+    done <- logical(n_u)
   } else {
     u <- typed$text
     index <- typed$index
     vals <- typed$values
-    done <- rep(TRUE, length(u))
+    done <- rep(TRUE, n_u)
+  }
+  can_fast_pool <- !is.null(delta) && is.numeric(delta) && length(delta) == 1L &&
+    is.finite(delta) && abs(delta) <= 1e14 &&
+    exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns("exact_cmp_sum")
+  pool_min_k <- rep(NA_real_, n_u)
+  pool_fast_ok <- logical(n_u)
+  if (can_fast_pool && !is.null(typed)) {
+    for (k in seq_len(n_u)) {
+      vk <- vals[[k]]
+      if (is.numeric(vk) && length(vk) >= 1L && !anyNA(vk)) {
+        v_fin <- vk[is.finite(vk)]
+        if (all(vk > -Inf) && (!length(v_fin) || max(abs(v_fin)) <= 1e14)) {
+          pool_min_k[k] <- min(vk)
+          pool_fast_ok[k] <- TRUE
+        }
+      }
+    }
   }
   clean <- new.env(hash = TRUE, parent = emptyenv())
   values <- function(i) {
     k <- index[i]
     if (!done[k]) {
-      vals[k] <<- list(parse_control_pool_string(u[k]))
+      vk <- parse_control_pool_string(u[k])
+      vals[k] <<- list(vk)
       done[k] <<- TRUE
+      if (can_fast_pool && is.numeric(vk) && length(vk) >= 1L && !anyNA(vk)) {
+        v_fin <- vk[is.finite(vk)]
+        if (all(vk > -Inf) && (!length(v_fin) || max(abs(v_fin)) <= 1e14)) {
+          pool_min_k[k] <<- min(vk)
+          pool_fast_ok[k] <<- TRUE
+        }
+      }
     }
     vals[[k]]
   }
   # all(k > u + delta) over the row's pool, exactly as the per-row vapply.
   all_clean <- function(i, date) {
-    key <- paste0(index[i], ":", sprintf("%a", as.double(date) + 0))
+    k <- index[i]
+    if (!done[k]) values(i)
+    if (pool_fast_ok[k] && is.numeric(date) && length(date) == 1L && is.finite(date) && abs(date) <= 1e14) {
+      return(as.double(date) + as.double(delta) < pool_min_k[k])
+    }
+    key <- paste0(k, ":", sprintf("%a", as.double(date) + 0))
     hit <- clean[[key]]
     if (is.null(hit)) {
-      hit <- all(vapply(values(i), function(k) exact_cmp_sum(date, delta, k) < 0L, logical(1L)))
+      hit <- all(vapply(vals[[k]], function(kv) exact_cmp_sum(date, delta, kv) < 0L, logical(1L)))
       assign(key, hit, envir = clean)
     }
     hit
   }
-  list(values = values, all_clean = all_clean, index = index, n_pools = length(u))
+  list(values = values, all_clean = all_clean, index = index, n_pools = n_u,
+       pool_fast_ok = pool_fast_ok, pool_min_k = pool_min_k, vals = vals)
 }
 
 # Truthful metadata validation only. No key generation, equality inference,
@@ -522,8 +593,26 @@ design_links_validation <- function(links, calendar_spec = NULL, pools = NULL) {
         c("cdid_design_reference_error", "cdid_design_calendar_error", "cdid_design_input_error"))
     }
     sq <- links$s_qualified; tq <- links$t_qualified
-    s_cmp <- vapply(seq_len(n), function(i) exact_cmp_sum(links$s[i], delta, links$g[i]), integer(1L))
-    t_cmp <- vapply(seq_len(n), function(i) exact_cmp_sum(links$t[i], delta, links$g[i]), integer(1L))
+    can_fast_cmp <- exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns("exact_cmp_sum") &&
+      is.numeric(delta) && length(delta) == 1L && is.finite(delta) && abs(delta) <= 1e14 &&
+      all(is.finite(links$s)) && max(abs(links$s)) <= 1e14 &&
+      all(is.finite(links$t)) && max(abs(links$t)) <= 1e14 &&
+      all(is.finite(links$g)) && max(abs(links$g)) <= 1e14 &&
+      is.finite(calendar_spec$max_cohort) && abs(calendar_spec$max_cohort) <= 1e14
+    if (can_fast_cmp) {
+      s_sum <- as.double(links$s) + as.double(delta)
+      t_sum <- as.double(links$t) + as.double(delta)
+      g_vec <- as.double(links$g)
+      mc_val <- as.double(calendar_spec$max_cohort)
+      s_cmp <- ifelse(s_sum < g_vec, -1L, ifelse(s_sum > g_vec, 1L, 0L))
+      t_cmp <- ifelse(t_sum < g_vec, -1L, ifelse(t_sum > g_vec, 1L, 0L))
+      s_bar_cmp <- ifelse(s_sum < mc_val, -1L, ifelse(s_sum > mc_val, 1L, 0L))
+      t_bar_cmp <- ifelse(t_sum < mc_val, -1L, ifelse(t_sum > mc_val, 1L, 0L))
+    } else {
+      s_cmp <- vapply(seq_len(n), function(i) exact_cmp_sum(links$s[i], delta, links$g[i]), integer(1L))
+      t_cmp <- vapply(seq_len(n), function(i) exact_cmp_sum(links$t[i], delta, links$g[i]), integer(1L))
+    }
     s_is_ref <- links$s == links$ref; t_is_ref <- links$t == links$ref
     s_is_pre <- s_cmp < 0L & !s_is_ref; t_is_pre <- t_cmp < 0L & !t_is_ref
     s_is_ant <- s_cmp >= 0L & links$s < links$g; t_is_ant <- t_cmp >= 0L & links$t < links$g
@@ -537,19 +626,25 @@ design_links_validation <- function(links, calendar_spec = NULL, pools = NULL) {
       cdid_abort("Pre-anticipation non-reference coordinates (u < g - anticipation, u != ref) cannot be shared or qualified.",
         c("cdid_design_qualification_error", "cdid_design_post_share_error", "cdid_design_functional_error", "cdid_design_input_error"))
     }
-    s_bar_cmp <- vapply(seq_len(n), function(i) exact_cmp_sum(links$s[i], delta, calendar_spec$max_cohort), integer(1L))
-    t_bar_cmp <- vapply(seq_len(n), function(i) exact_cmp_sum(links$t[i], delta, calendar_spec$max_cohort), integer(1L))
+    if (!can_fast_cmp) {
+      s_bar_cmp <- vapply(seq_len(n), function(i) exact_cmp_sum(links$s[i], delta, calendar_spec$max_cohort), integer(1L))
+      t_bar_cmp <- vapply(seq_len(n), function(i) exact_cmp_sum(links$t[i], delta, calendar_spec$max_cohort), integer(1L))
+    }
     if (any((s_is_causal & sq & s_bar_cmp >= 0L) | (t_is_causal & tq & t_bar_cmp >= 0L))) {
       cdid_abort("Causal endpoint cannot be qualified outside the parallel-trends cohort boundary u + anticipation < max(cohorts).",
         c("cdid_design_horizon_error", "cdid_design_qualification_error", "cdid_design_post_share_error", "cdid_design_functional_error", "cdid_design_input_error"))
     }
     if ("s_coordinate_role" %in% names(links)) {
       is_pt_all_cal <- identical(calendar_spec$pt_assumption, "all")
+      is_pt_ctrl_cal <- identical(calendar_spec$pt_assumption, "ctrl")
       check_cal_role <- function(u_v, is_ref, is_pre, is_ant, is_post, q_v, r_v) {
         ok_ref <- is_ref & q_v & r_v == "reference"
         ok_pre <- if (is_pt_all_cal) {
           is_pre & !q_v & (r_v %in% c("pre_nuisance", "pre") |
             (u_v >= calendar_spec$pt_start & r_v == "pre_pt_all_zero"))
+        } else if (is_pt_ctrl_cal) {
+          is_pre & !q_v & (r_v %in% c("pre_nuisance", "pre") |
+            (u_v >= calendar_spec$pt_start & r_v == "pre_pt_ctrl_shared"))
         } else {
           is_pre & !q_v & r_v %in% c("pre_nuisance", "pre")
         }
@@ -649,38 +744,57 @@ design_links_validation <- function(links, calendar_spec = NULL, pools = NULL) {
             c("cdid_design_internal_error", "cdid_design_qualification_error", "cdid_design_input_error"))
         }
       }
+      had_typed_pools <- !is.null(pools)
       pools <- design_pool_cache(cp, delta, typed = pools)
-      in_universe <- rep(NA, pools$n_pools)
-      for (i in seq_len(n)) {
-        vals <- pools$values(i)
-        if (is.null(vals)) {
-          cdid_abort("On the calendar path, `control_pool` must be an explicit `{...}` cohort set.",
-            c("cdid_design_qualification_error", "cdid_design_profile_merge_error", "cdid_design_functional_error", "cdid_design_input_error"))
+      fast_pool_done <- FALSE
+      if (had_typed_pools && can_fast_cmp && all(pools$pool_fast_ok) &&
+          !("control_group" %in% names(links)) && is.null(mh_vec)) {
+        u_ok <- vapply(pools$vals, function(v) !any(!v %in% calendar_spec$cohorts), logical(1L))
+        if (all(u_ok)) {
+          p_min <- pools$pool_min_k[pools$index]
+          if (all(p_min > as.double(links$g)) &&
+              all(as.double(links$ref) + as.double(delta) < p_min)) {
+            s_cl <- s_sum < p_min
+            t_cl <- t_sum < p_min
+            if (!any((s_is_causal & sq & !s_cl) | (t_is_causal & tq & !t_cl))) {
+              fast_pool_done <- TRUE
+            }
+          }
         }
-        k_pool <- pools$index[i]
-        if (is.na(in_universe[k_pool])) in_universe[k_pool] <- !any(!vals %in% calendar_spec$cohorts)
-        if (!in_universe[k_pool]) {
-          cdid_abort("`control_pool` cohorts must belong to the supplied cohort universe.",
-            c("cdid_design_cohort_error", "cdid_design_qualification_error", "cdid_design_calendar_error", "cdid_design_input_error"))
-        }
-        if (any(vals == links$g[i]) || !pools$all_clean(i, links$ref[i])) {
-          cdid_abort("`control_pool` must exclude target g and be clean at the reference date (all k > ref + anticipation).",
-            c("cdid_design_qualification_error", "cdid_design_profile_merge_error", "cdid_design_functional_error", "cdid_design_input_error"))
-        }
-        if ("control_group" %in% names(links) &&
-            all(is.infinite(vals)) != (links$control_group[i] == "nevertreated")) {
-          cdid_abort("`control_pool` contradicts `control_group` metadata.",
-            c("cdid_design_qualification_error", "cdid_design_profile_merge_error", "cdid_design_functional_error"))
-        }
-        if (!is.null(mh_vec) && !is.na(mh_vec[i]) && is.finite(mh_vec[i]) && !pools$all_clean(i, mh_vec[i])) {
-          cdid_abort("`control_pool` contradicts `max_qualified_horizon` under anticipation.",
-            c("cdid_design_horizon_error", "cdid_design_qualification_error", "cdid_design_profile_merge_error", "cdid_design_functional_error"))
-        }
-        s_clean <- pools$all_clean(i, links$s[i])
-        t_clean <- pools$all_clean(i, links$t[i])
-        if ((s_is_causal[i] && sq[i] && !s_clean) || (t_is_causal[i] && tq[i] && !t_clean)) {
-          cdid_abort("Qualified causal endpoint requires `control_pool` subset of E_u(anticipation) (all k > u + anticipation).",
-            c("cdid_design_qualification_error", "cdid_design_horizon_error", "cdid_design_profile_merge_error", "cdid_design_functional_error", "cdid_design_input_error"))
+      }
+      if (!fast_pool_done) {
+        in_universe <- rep(NA, pools$n_pools)
+        for (i in seq_len(n)) {
+          vals <- pools$values(i)
+          if (is.null(vals)) {
+            cdid_abort("On the calendar path, `control_pool` must be an explicit `{...}` cohort set.",
+              c("cdid_design_qualification_error", "cdid_design_profile_merge_error", "cdid_design_functional_error", "cdid_design_input_error"))
+          }
+          k_pool <- pools$index[i]
+          if (is.na(in_universe[k_pool])) in_universe[k_pool] <- !any(!vals %in% calendar_spec$cohorts)
+          if (!in_universe[k_pool]) {
+            cdid_abort("`control_pool` cohorts must belong to the supplied cohort universe.",
+              c("cdid_design_cohort_error", "cdid_design_qualification_error", "cdid_design_calendar_error", "cdid_design_input_error"))
+          }
+          if (any(vals == links$g[i]) || !pools$all_clean(i, links$ref[i])) {
+            cdid_abort("`control_pool` must exclude target g and be clean at the reference date (all k > ref + anticipation).",
+              c("cdid_design_qualification_error", "cdid_design_profile_merge_error", "cdid_design_functional_error", "cdid_design_input_error"))
+          }
+          if ("control_group" %in% names(links) &&
+              all(is.infinite(vals)) != (links$control_group[i] == "nevertreated")) {
+            cdid_abort("`control_pool` contradicts `control_group` metadata.",
+              c("cdid_design_qualification_error", "cdid_design_profile_merge_error", "cdid_design_functional_error"))
+          }
+          if (!is.null(mh_vec) && !is.na(mh_vec[i]) && is.finite(mh_vec[i]) && !pools$all_clean(i, mh_vec[i])) {
+            cdid_abort("`control_pool` contradicts `max_qualified_horizon` under anticipation.",
+              c("cdid_design_horizon_error", "cdid_design_qualification_error", "cdid_design_profile_merge_error", "cdid_design_functional_error"))
+          }
+          s_clean <- pools$all_clean(i, links$s[i])
+          t_clean <- pools$all_clean(i, links$t[i])
+          if ((s_is_causal[i] && sq[i] && !s_clean) || (t_is_causal[i] && tq[i] && !t_clean)) {
+            cdid_abort("Qualified causal endpoint requires `control_pool` subset of E_u(anticipation) (all k > u + anticipation).",
+              c("cdid_design_qualification_error", "cdid_design_horizon_error", "cdid_design_profile_merge_error", "cdid_design_functional_error", "cdid_design_input_error"))
+          }
         }
       }
     }
@@ -709,7 +823,13 @@ design_links_validation <- function(links, calendar_spec = NULL, pools = NULL) {
       }
     }
   }
-  keys <- paste(gi, match(links$s, dates), match(links$t, dates), fi, sep = ":")
+  si_d <- match(links$s, dates); ti_d <- match(links$t, dates)
+  nd_l <- as.double(length(dates)); nf_l <- as.double(max(1L, max(fi)))
+  if (as.double(max(gi)) * nd_l * nd_l * nf_l < 4503599627370496) {
+    keys <- (((as.double(gi) - 1) * nd_l + (si_d - 1)) * nd_l + (ti_d - 1)) * nf_l + fi
+  } else {
+    keys <- paste(gi, si_d, ti_d, fi, sep = ":")
+  }
   if (anyDuplicated(keys)) cdid_abort("Duplicate declared links.", "cdid_design_duplicate_link_error")
   if (has_cal) attr(links, "calendar_spec") <- calendar_spec
   list(links = links, calendar_spec = if (has_cal) calendar_spec else NULL, s_cmp = s_cmp, t_cmp = t_cmp)
@@ -766,6 +886,7 @@ adapt_calendar_design_links_validation <- function(links, calendar, cohorts, ant
         design_vector(links$t_coordinate_role, n, "character")) {
       valid_roles <- c("reference", "pre", "pre_nuisance",
                        if (identical(cal_spec$pt_assumption, "all")) "pre_pt_all_zero",
+                       if (identical(cal_spec$pt_assumption, "ctrl")) "pre_pt_ctrl_shared",
                        "anticipation", "anticipation_att",
                        "anticipation_nuisance", "post", "post_att", "post_nuisance")
       if (any(!links$s_coordinate_role %in% valid_roles) || any(!links$t_coordinate_role %in% valid_roles)) {
@@ -801,11 +922,14 @@ adapt_calendar_design_links_validation <- function(links, calendar, cohorts, ant
 }
 
 normalize_target_post_times <- function(target_post_times, cohorts, refs, calendar = NULL) {
-  empty <- data.frame(g = numeric(), time = numeric())
+  empty <- cdid_fast_df(list(g = numeric(), time = numeric()))
   if (is.null(target_post_times)) return(empty)
   if (design_vector(target_post_times, length(target_post_times))) {
-    grid <- expand.grid(time = sort(unique(target_post_times)), g = cohorts,
-      KEEP.OUT.ATTRS = FALSE)[, c("g", "time")]
+    ut_t <- sort(unique(as.double(target_post_times)))
+    grid <- cdid_fast_df(list(
+      g = rep(as.double(cohorts), each = length(ut_t)),
+      time = rep(ut_t, times = length(cohorts))
+    ))
   } else if (is.data.frame(target_post_times)) {
     tc <- if ("time" %in% names(target_post_times)) "time" else "t"
     design_columns(target_post_times, c("g", tc))
@@ -813,7 +937,7 @@ normalize_target_post_times <- function(target_post_times, cohorts, refs, calend
     if (!design_vector(gv, nrow(target_post_times)) || !design_vector(tv, nrow(target_post_times))) {
       cdid_abort("Targets require finite scalar numeric columns.", "cdid_design_target_error")
     }
-    grid <- data.frame(g = as.double(gv), time = as.double(tv))
+    grid <- cdid_fast_df(list(g = as.double(gv), time = as.double(tv)))
   } else cdid_abort("Invalid requested post targets.", "cdid_design_target_error")
   if (!is.null(calendar) && nrow(grid) > 0L && any(!grid$time %in% calendar)) {
     cdid_abort("Requested target post date must belong to the supplied full calendar.",
@@ -821,11 +945,15 @@ normalize_target_post_times <- function(target_post_times, cohorts, refs, calend
   }
   ci <- match(grid$g, cohorts)
   if (anyNA(ci) || any(grid$time < grid$g | grid$time <= refs[ci])) cdid_abort("Invalid cohort or post target date.", "cdid_design_target_error")
-  # Exact tuple deduplication, avoiding data-frame numeric string conversion.
-  key <- paste(ci, match(grid$time, sort(unique(grid$time))), sep = ":")
-  grid <- grid[!duplicated(key), , drop = FALSE]
-  grid <- grid[order(grid$g, grid$time, method = "radix"), , drop = FALSE]
-  rownames(grid) <- NULL
+  if (nrow(grid) > 0L) {
+    ut_time <- sort(unique(grid$time))
+    ti_g <- match(grid$time, ut_time)
+    key <- (as.double(ci) - 1) * length(ut_time) + ti_g
+    keep_g <- !duplicated(key)
+    gg <- grid$g[keep_g]; tt <- grid$time[keep_g]
+    ord_g <- order(gg, tt, method = "radix")
+    grid <- cdid_fast_df(list(g = gg[ord_g], time = tt[ord_g]))
+  }
   grid
 }
 
@@ -907,6 +1035,7 @@ chained_design_core <- function(validated, target_post_times = NULL) {
   cal_spec <- attr(links, "calendar_spec", exact = TRUE)
   has_cal <- !is.null(cal_spec)
   is_pt_all <- has_cal && identical(cal_spec$pt_assumption, "all")
+  is_pt_ctrl <- has_cal && identical(cal_spec$pt_assumption, "ctrl")
   has_qual <- has_cal || ("s_qualified" %in% names(links))
   g <- as.double(links$g); s <- as.double(links$s); t <- as.double(links$t)
   ref <- as.double(links$ref); fk <- links$functional_key; m <- length(g)
@@ -917,27 +1046,48 @@ chained_design_core <- function(validated, target_post_times = NULL) {
   dates <- if (has_cal) cal_spec$calendar else sort(unique(c(refs, s, t, targets$time)))
   sq <- if (has_qual) links$s_qualified else (s == ref | s >= g)
   tq <- if (has_qual) links$t_qualified else (t == ref | t >= g)
-  vertex_key <- function(ci, time, f, qual) {
-    # -1 is reference; 0 is shared qualified causal (anticipation or post); positive indices are private nuisance keys.
-    kind <- ifelse(time == refs[ci], -1L, ifelse(qual, 0L, f))
-    paste(ci, match(time, dates), kind, sep = ":")
+  s_pre_ant <- if (has_cal) validated$s_cmp < 0L else NULL
+  t_pre_ant <- if (has_cal) validated$t_cmp < 0L else NULL
+  # PT-ctrl: non-reference strictly pre-anticipation endpoints on or after
+  # pt_start share one vertex per (cohort, date) across functional keys.
+  if (is_pt_ctrl) {
+    s_ps <- s != ref & s_pre_ant & s >= cal_spec$pt_start
+    t_ps <- t != ref & t_pre_ant & t >= cal_spec$pt_start
   }
-  sk <- vertex_key(gi, s, fi, sq); tk <- vertex_key(gi, t, fi, tq)
   ci <- c(seq_along(cohorts), gi, gi, match(targets$g, cohorts))
   time <- c(refs, s, t, targets$time)
   f <- c(rep(0L, length(cohorts)), fi, fi, rep(0L, nrow(targets)))
   qual <- c(rep(TRUE, length(cohorts)), sq, tq, rep(TRUE, nrow(targets)))
-  key <- vertex_key(ci, time, f, qual)
+  # Vertex identity (cohort, date index, kind): -1 reference, -2 PT-ctrl shared
+  # pre-anticipation, 0 shared qualified causal, positive = private functional
+  # key index. Exact numeric key with one slot per kind (offset 2, or 3 when
+  # PT-ctrl adds kind -2) inside the exact double range and for matched dates;
+  # otherwise the exact string key "ci:date_index:kind".
+  di_all <- match(time, dates)
+  if (is_pt_ctrl) {
+    ps_all <- c(rep(FALSE, length(cohorts)), s_ps, t_ps, rep(FALSE, nrow(targets)))
+    kind_k <- ifelse(time == refs[ci], -1L, ifelse(ps_all, -2L, ifelse(qual, 0L, f)))
+    k_off <- 3L
+  } else {
+    kind_k <- ifelse(time == refs[ci], -1L, ifelse(qual, 0L, f))
+    k_off <- 2L
+  }
+  nd_k <- as.double(length(dates)); nf_k <- as.double(max(0L, max(f)) + k_off)
+  if (!anyNA(di_all) && as.double(length(cohorts)) * nd_k * nf_k < 4503599627370496) {
+    key <- ((as.double(ci) - 1) * nd_k + (di_all - 1)) * nf_k + (kind_k + k_off)
+  } else {
+    key <- paste(ci, di_all, kind_k, sep = ":")
+  }
+  n_coh_v <- length(cohorts)
+  sk <- key[n_coh_v + seq_len(m)]; tk <- key[n_coh_v + m + seq_len(m)]
   if (!has_cal) {
     kind <- ifelse(time == refs[ci], 1L, ifelse(time < cohorts[ci], 2L, ifelse(!qual, 3L, 4L)))
     fv <- ifelse(kind %in% c(2L, 3L), f, 0L)
     role_names <- c("reference", "pre", "post_nuisance", "post")
     nuis_kinds <- c(2L, 3L)
-  } else {
+  } else if (!is_pt_ctrl) {
     # Exact per-link cutoff signs of (s + anticipation) - g and (t + anticipation) - g,
     # computed once by the validation on these same columns.
-    s_pre_ant <- validated$s_cmp < 0L
-    t_pre_ant <- validated$t_cmp < 0L
     pre_ant <- c(rep(TRUE, length(cohorts)), s_pre_ant, t_pre_ant, rep(FALSE, nrow(targets)))
     kind <- ifelse(time == refs[ci], 1L,
       ifelse(pre_ant, 2L,
@@ -946,13 +1096,21 @@ chained_design_core <- function(validated, target_post_times = NULL) {
     fv <- ifelse(kind %in% c(2L, 3L, 5L), f, 0L)
     role_names <- c("reference", "pre", "anticipation_nuisance", "anticipation", "post_nuisance", "post")
     nuis_kinds <- c(2L, 3L, 5L)
+  } else {
+    pre_ant <- c(rep(TRUE, length(cohorts)), s_pre_ant, t_pre_ant, rep(FALSE, nrow(targets)))
+    kind <- ifelse(time == refs[ci], 1L,
+      ifelse(pre_ant, ifelse(ps_all, 3L, 2L),
+        ifelse(time < cohorts[ci], ifelse(!qual, 4L, 5L),
+          ifelse(!qual, 6L, 7L))))
+    fv <- ifelse(kind %in% c(2L, 4L, 6L), f, 0L)
+    role_names <- c("reference", "pre", "pre_shared", "anticipation_nuisance", "anticipation", "post_nuisance", "post")
+    nuis_kinds <- c(2L, 4L, 6L)
   }
   keep <- !duplicated(key)
   ord <- which(keep)[order(ci[keep], kind[keep], time[keep], fv[keep], method = "radix")]
-  vertices <- data.frame(g = cohorts[ci[ord]], time = time[ord],
+  vertices <- cdid_fast_df(list(g = cohorts[ci[ord]], time = time[ord],
     functional_key = ifelse(kind[ord] %in% nuis_kinds, fn[pmax(fv[ord], 1L)], NA_character_),
-    role = role_names[kind[ord]], vertex_index = seq_along(ord),
-    stringsAsFactors = FALSE)
+    role = role_names[kind[ord]], vertex_index = seq_along(ord)))
   vk <- key[ord]; nv <- nrow(vertices)
   is_anchor_v <- if (is_pt_all) {
     vertices$role == "reference" | (vertices$role == "pre" & vertices$time >= cal_spec$pt_start)
@@ -962,14 +1120,24 @@ chained_design_core <- function(validated, target_post_times = NULL) {
   pv <- which(!is_anchor_v); p <- length(pv)
   vertices$param_index <- NA_integer_; vertices$param_index[pv] <- seq_len(p)
   # Unique display labels are not used to construct/match graph vertices.
-  label <- ifelse(vertices$role == "reference", paste0("ref(g=", fmt_design_num(vertices$g), ",t=", fmt_design_num(vertices$time), ")"),
-    ifelse(vertices$role %in% c("anticipation", "post"), paste0("ATT(g=", fmt_design_num(vertices$g), ",t=", fmt_design_num(vertices$time), ")"),
+  u_vg <- unique(vertices$g)
+  vg_fmt <- fmt_design_num(u_vg)[match(vertices$g, u_vg)]
+  u_vt <- unique(vertices$time)
+  vt_fmt <- fmt_design_num(u_vt)[match(vertices$time, u_vt)]
+  label <- ifelse(vertices$role == "reference", paste0("ref(g=", vg_fmt, ",t=", vt_fmt, ")"),
+    ifelse(vertices$role %in% c("anticipation", "post"), paste0("ATT(g=", vg_fmt, ",t=", vt_fmt, ")"),
       ifelse(vertices$role == "anticipation_nuisance",
-        paste0("beta_anticipation_nuisance(g=", fmt_design_num(vertices$g), ",t=", fmt_design_num(vertices$time), ",fn=", vertices$functional_key, ")"),
+        paste0("beta_anticipation_nuisance(g=", vg_fmt, ",t=", vt_fmt, ",fn=", vertices$functional_key, ")"),
         ifelse(vertices$role == "post_nuisance",
-          paste0("beta_post_nuisance(g=", fmt_design_num(vertices$g), ",t=", fmt_design_num(vertices$time), ",fn=", vertices$functional_key, ")"),
-          paste0("beta(g=", fmt_design_num(vertices$g), ",t=", fmt_design_num(vertices$time), ",fn=", vertices$functional_key, ")")))))
-  vertices$vertex_id <- make.unique(label)
+          paste0("beta_post_nuisance(g=", vg_fmt, ",t=", vt_fmt, ",fn=", vertices$functional_key, ")"),
+          paste0("beta(g=", vg_fmt, ",t=", vt_fmt, ",fn=", vertices$functional_key, ")")))))
+  # PT-ctrl shared pre-anticipation vertices (roles are exclusive, so this
+  # equals CCDID's nested branch without a further full-length paste).
+  if (is_pt_ctrl) {
+    ps_v <- vertices$role == "pre_shared"
+    if (any(ps_v)) label[ps_v] <- paste0("beta_ctrl(g=", vg_fmt[ps_v], ",t=", vt_fmt[ps_v], ")")
+  }
+  vertices$vertex_id <- if (anyDuplicated(label) > 0L) make.unique(label) else label
   from <- match(sk, vk); to <- match(tk, vk)
   canonical <- order(gi, s, t, fi, method = "radix"); edge_order <- order(canonical)
   anchors <- which(is_anchor_v)
@@ -983,8 +1151,8 @@ chained_design_core <- function(validated, target_post_times = NULL) {
   parameters$param_id <- parameters$vertex_id
   parameters$level_estimable <- parameters$connected_to_ref
   # One additional linear-size time graph exposes false collapsed connectivity.
-  all_ci <- match(vertices$g, cohorts)
-  time_key <- paste(all_ci, match(vertices$time, dates), sep = ":")
+  all_ci <- ci[ord]
+  time_key <- (as.double(all_ci) - 1) * nd_k + di_all[ord]
   ut <- unique(time_key); ti <- match(time_key, ut)
   naive <- incidence_forest(length(ut), ti[from], ti[to], unique(ti[anchors]), edge_order)
   parameters$time_graph_connected_to_ref <- naive$component_id[ti[pv]] %in% naive$component_id[ti[anchors]]
@@ -1011,17 +1179,17 @@ chained_design_core <- function(validated, target_post_times = NULL) {
   rank <- as.integer(p - length(unanchored))
   # Retain inexpensive per-cohort diagnostics without per-cohort dense graphs.
   nh <- length(cohorts)
-  pci <- match(parameters$g, cohorts)
+  pci <- all_ci[pv]
   vcount <- tabulate(all_ci, nh); ccount <- tabulate(all_ci[forest$roots], nh)
   pcount <- tabulate(pci, nh); mcount <- tabulate(gi, nh)
   nullity_coh <- tabulate(all_ci[forest$roots[unanchored]], nh)
   rank_coh <- pcount - nullity_coh
-  pre_flag <- parameters$role == "pre"
+  pre_flag <- parameters$role %in% c("pre", "pre_shared")
   ant_nuis_flag <- parameters$role == "anticipation_nuisance"
   ant_flag <- parameters$role == "anticipation"
   post_nuis_flag <- parameters$role == "post_nuisance"
   post_flag <- parameters$role == "post"
-  by_cohort <- data.frame(g = cohorts, ref = refs, n_links = mcount,
+  by_cohort <- cdid_fast_df(list(g = cohorts, ref = refs, n_links = mcount,
     n_vertices = vcount, n_parameters = pcount,
     n_pre_parameters = tabulate(pci[pre_flag], nh),
     n_post_parameters = tabulate(pci[post_flag], nh), n_components = ccount,
@@ -1029,7 +1197,7 @@ chained_design_core <- function(validated, target_post_times = NULL) {
     cycle_rank = mcount - rank_coh,
     n_estimable_post = tabulate(pci[post_flag & parameters$level_estimable], nh),
     n_isolated_post = tabulate(pci[post_flag & parameters$is_isolated], nh),
-    n_disconnected_post = tabulate(pci[post_flag & !parameters$level_estimable & !parameters$is_isolated], nh))
+    n_disconnected_post = tabulate(pci[post_flag & !parameters$level_estimable & !parameters$is_isolated], nh)))
   if (has_qual) {
     by_cohort$n_post_nuisance_parameters <- tabulate(pci[post_nuis_flag], nh)
   }
@@ -1056,6 +1224,25 @@ chained_design_core <- function(validated, target_post_times = NULL) {
     by_cohort$no_extra_calendar_window <- cal_extra_coh == 0L
     by_cohort$no_extra_represented_restriction <- restr_pre_coh == 0L
     by_cohort$no_extra_restrictions <- restr_pre_coh == 0L
+  }
+  if (is_pt_ctrl) {
+    pt_start_val <- cal_spec$pt_start
+    cal_extra_coh <- vapply(seq_len(nh), function(h) {
+      sum(cal_spec$calendar >= pt_start_val & cal_spec$calendar < refs[h])
+    }, integer(1L))
+    shared_pre_coh <- tabulate(all_ci[vertices$role == "pre_shared"], nh)
+    priv_pre_key <- paste(c(gi[s_ps], gi[t_ps]), match(c(s[s_ps], t[t_ps]), dates), c(fi[s_ps], fi[t_ps]), sep = ":")
+    unmerged_pre_coh <- if (length(priv_pre_key)) {
+      u_pk <- !duplicated(priv_pre_key)
+      tabulate(c(gi[s_ps], gi[t_ps])[u_pk], nh)
+    } else integer(nh)
+    merged_pre_coh <- unmerged_pre_coh - shared_pre_coh
+    by_cohort$pt_start <- rep(pt_start_val, nh)
+    by_cohort$n_extra_calendar_dates <- cal_extra_coh
+    by_cohort$n_shared_pre_dates <- shared_pre_coh
+    by_cohort$n_merged_pre_parameters <- merged_pre_coh
+    by_cohort$no_extra_calendar_window <- cal_extra_coh == 0L
+    by_cohort$no_extra_restrictions <- merged_pre_coh == 0L
   }
   rank_diag <- list(n_links = m, n_vertices = nv, n_parameters = p,
     n_cohorts = length(cohorts), n_components = forest$n_components, rank = rank,
@@ -1087,6 +1274,14 @@ chained_design_core <- function(validated, target_post_times = NULL) {
     rank_diag$no_extra_restrictions <- all(by_cohort$no_extra_restrictions)
     rank_diag$restriction_is_identity <- sum(by_cohort$n_restricted_pre_parameters) == 0L
   }
+  if (is_pt_ctrl) {
+    rank_diag$n_extra_calendar_dates <- sum(by_cohort$n_extra_calendar_dates)
+    rank_diag$n_shared_pre_dates <- sum(by_cohort$n_shared_pre_dates)
+    rank_diag$n_merged_pre_parameters <- sum(by_cohort$n_merged_pre_parameters)
+    rank_diag$no_extra_calendar_window <- all(by_cohort$no_extra_calendar_window)
+    rank_diag$no_extra_restrictions <- all(by_cohort$no_extra_restrictions)
+    rank_diag$restriction_is_identity <- sum(by_cohort$n_merged_pre_parameters) == 0L
+  }
   incidence <- list(start = ifelse(is.na(links$start_param_index), 0L, links$start_param_index),
     end = ifelse(is.na(links$end_param_index), 0L, links$end_param_index),
     n_links = m, n_parameters = p, link_ids = links$link_id, param_ids = parameters$param_id)
@@ -1115,6 +1310,24 @@ chained_design_core <- function(validated, target_post_times = NULL) {
                                 "n_extra_represented_dates", "n_restricted_pre_parameters",
                                 "n_pre_parameters", "n_zero_loading_links",
                                 "no_extra_calendar_window", "no_extra_represented_restriction",
+                                "no_extra_restrictions"), drop = FALSE]
+    )
+  }
+  if (is_pt_ctrl) {
+    out$pt_ctrl_spec <- list(
+      pt_assumption = "ctrl",
+      pt_start = cal_spec$pt_start,
+      unrestricted_n_parameters = p + rank_diag$n_merged_pre_parameters,
+      restricted_n_parameters = p,
+      n_extra_calendar_dates = rank_diag$n_extra_calendar_dates,
+      n_shared_pre_dates = rank_diag$n_shared_pre_dates,
+      n_merged_pre_parameters = rank_diag$n_merged_pre_parameters,
+      no_extra_calendar_window = rank_diag$no_extra_calendar_window,
+      no_extra_restrictions = rank_diag$no_extra_restrictions,
+      restriction_is_identity = rank_diag$restriction_is_identity,
+      by_cohort = by_cohort[, c("g", "ref", "pt_start", "n_extra_calendar_dates",
+                                "n_shared_pre_dates", "n_merged_pre_parameters",
+                                "n_pre_parameters", "no_extra_calendar_window",
                                 "no_extra_restrictions"), drop = FALSE]
     )
   }
@@ -1197,6 +1410,52 @@ restrict_chained_design_pt_all <- function(design, pt_start) {
       vapply(seq_len(nrow(links_in)), function(i) exact_cmp_sum(links_in$t[i], cspec$anticipation, links_in$g[i]) < 0L, logical(1L)) &
       !links_in$t_qualified & links_in$t >= cspec$pt_start
     links_in$t_coordinate_role[t_pre_win & links_in$t_coordinate_role %in% c("pre", "pre_nuisance")] <- "pre_pt_all_zero"
+  }
+  if (!is.null(rates)) attr(links_in, "profile_rates") <- rates
+  attr(links_in, "calendar_spec") <- cspec
+  target_df <- if (is.data.frame(design$post_targets) && nrow(design$post_targets) > 0L) {
+    design$post_targets[, c("g", "time"), drop = FALSE]
+  } else {
+    NULL
+  }
+  build_chained_design(links_in, target_post_times = target_df)
+}
+
+restrict_chained_design_pt_ctrl <- function(design, pt_start = NULL) {
+  if (!inherits(design, "cdid_chained_design") || is.null(design$calendar_spec)) {
+    cdid_abort("`restrict_chained_design_pt_ctrl` requires a calendar `cdid_chained_design` object.",
+      c("cdid_design_calendar_error", "cdid_design_input_error"))
+  }
+  cspec <- validate_calendar_spec(
+    design$calendar_spec$calendar,
+    design$calendar_spec$cohorts,
+    design$calendar_spec$anticipation,
+    pt_assumption = "ctrl",
+    pt_start = pt_start
+  )
+  links_in <- design$links
+  idx_pos <- match("link_index", names(links_in), nomatch = 0L)
+  id_pos <- match("link_id", names(links_in), nomatch = 0L)
+  drop_link_id <- idx_pos > 0L && id_pos == idx_pos + 1L
+  derived_cols <- c("link_index", if (drop_link_id) "link_id",
+                    "start_vertex_index", "end_vertex_index",
+                    "start_param_index", "end_param_index", "link_type", "component_id")
+  keep_cols <- setdiff(names(links_in), derived_cols)
+  rates <- attr(links_in, "profile_rates", exact = TRUE)
+  links_in <- links_in[, keep_cols, drop = FALSE]
+  if ("s_coordinate_role" %in% names(links_in)) {
+    s_pre_win <- links_in$s != links_in$ref &
+      vapply(seq_len(nrow(links_in)), function(i) exact_cmp_sum(links_in$s[i], cspec$anticipation, links_in$g[i]) < 0L, logical(1L)) &
+      !links_in$s_qualified
+    links_in$s_coordinate_role[s_pre_win & links_in$s < cspec$pt_start] <- "pre_nuisance"
+    links_in$s_coordinate_role[s_pre_win & links_in$s >= cspec$pt_start] <- "pre_pt_ctrl_shared"
+  }
+  if ("t_coordinate_role" %in% names(links_in)) {
+    t_pre_win <- links_in$t != links_in$ref &
+      vapply(seq_len(nrow(links_in)), function(i) exact_cmp_sum(links_in$t[i], cspec$anticipation, links_in$g[i]) < 0L, logical(1L)) &
+      !links_in$t_qualified
+    links_in$t_coordinate_role[t_pre_win & links_in$t < cspec$pt_start] <- "pre_nuisance"
+    links_in$t_coordinate_role[t_pre_win & links_in$t >= cspec$pt_start] <- "pre_pt_ctrl_shared"
   }
   if (!is.null(rates)) attr(links_in, "profile_rates") <- rates
   attr(links_in, "calendar_spec") <- cspec

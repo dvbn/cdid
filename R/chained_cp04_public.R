@@ -51,7 +51,6 @@ cp04_public_design <- function(formula, frame, data, frame_ids, id, U, label, al
   tf <- stats::terms(formula)
   has_intercept <- identical(as.integer(attr(tf, "intercept")), 1L)
   term_labels <- attr(tf, "term.labels")
-  active <- if (all(U)) frame else frame[U, , drop = FALSE]
   mm <- function(d) {
     m <- stats::model.matrix(tf, stats::model.frame(tf, d, na.action = stats::na.pass))
     asg <- as.integer(attr(m, "assign"))
@@ -71,30 +70,77 @@ cp04_public_design <- function(formula, frame, data, frame_ids, id, U, label, al
     attr(m, "assign") <- asg
     m
   }
-  z <- mm(active)
-  chained_request_need(nrow(z) == sum(U) && (if (isTRUE(allow_zero_col)) ncol(z) >= 0L else ncol(z) > 0L) && all(is.finite(z)),
-    paste0("Covariates in `", label, "` contain missing or nonfinite values on the fitting roster; NA covariates are refused."),
-    "cdid_chained_request_covariate_error")
-  Z <- matrix(NA_real_, nrow(frame), ncol(z), dimnames = list(NULL, colnames(z)))
-  Z[U, ] <- z
+  all_u <- all(U)
+  u_idx <- if (all_u) NULL else which(U)
+  n_u <- if (all_u) nrow(frame) else length(u_idx)
+  direct_ok <- cp04_design_direct_columns(tf, vars, frame, frame) &&
+    all(vapply(vars, function(v) {
+      col_v <- if (all_u) frame[[v]] else frame[[v]][u_idx]
+      !anyNA(col_v) && all(is.finite(col_v))
+    }, logical(1L)))
+  if (direct_ok) {
+    nc_a <- as.integer(has_intercept) + length(vars)
+    chained_request_need(if (isTRUE(allow_zero_col)) nc_a >= 0L else nc_a > 0L,
+      paste0("Covariates in `", label, "` contain missing or nonfinite values on the fitting roster; NA covariates are refused."),
+      "cdid_chained_request_covariate_error")
+    cnames <- c(if (has_intercept) "(Intercept)", vars)
+    asg_vec <- as.integer(c(if (has_intercept) 0L, seq_along(vars)))
+    if (all_u) {
+      Z <- matrix(0, n_u, nc_a, dimnames = list(NULL, cnames))
+      if (has_intercept) Z[, 1L] <- 1
+      for (k in seq_along(vars)) Z[, as.integer(has_intercept) + k] <- as.double(frame[[vars[k]]])
+    } else {
+      Z <- matrix(NA_real_, nrow(frame), nc_a, dimnames = list(NULL, cnames))
+      if (has_intercept) Z[u_idx, 1L] <- 1
+      for (k in seq_along(vars)) Z[u_idx, as.integer(has_intercept) + k] <- as.double(frame[[vars[k]]][u_idx])
+    }
+  } else {
+    active <- if (all_u) frame else frame[U, , drop = FALSE]
+    z <- mm(active)
+    chained_request_need(nrow(z) == n_u && (if (isTRUE(allow_zero_col)) ncol(z) >= 0L else ncol(z) > 0L) && all(is.finite(z)),
+      paste0("Covariates in `", label, "` contain missing or nonfinite values on the fitting roster; NA covariates are refused."),
+      "cdid_chained_request_covariate_error")
+    asg_vec <- as.integer(attr(z, "assign"))
+    if (all_u) {
+      Z <- z
+      rownames(Z) <- NULL
+    } else {
+      Z <- matrix(NA_real_, nrow(frame), ncol(z), dimnames = list(NULL, colnames(z)))
+      Z[U, ] <- z
+    }
+  }
   present <- vars %in% names(data)
   if (length(vars) && all(present)) {
     if (is.null(row_frame_pos)) row_frame_pos <- match(id, frame_ids)
-    ii <- which(U[row_frame_pos])
     if (cp04_design_direct_columns(tf, vars, frame, data)) {
       # Raw-value check by unit: the model matrix of a direct formula is the
       # intercept plus these columns as doubles, so equality of the raw values
       # on every panel row is the original comparison without the NT-row matrix.
-      agree <- TRUE
-      fpos <- row_frame_pos[ii]
-      for (v in vars) {
-        dv <- data[[v]][ii]
-        if (!all(is.finite(dv)) || !all(dv == frame[[v]][fpos])) { agree <- FALSE; break }
+      c_chk <- NULL
+      if (is.integer(row_frame_pos) && exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+        fk_vf <- cdid_fast_kernel("C_cdid_verify_fast")
+        if (!is.null(fk_vf)) {
+          c_chk <- fk_vf(10L, NULL, NULL, list(unname(as.list(data[vars])), unname(as.list(frame[vars])), row_frame_pos), NULL)
+        }
+      }
+      if (identical(c_chk, 1L)) {
+        agree <- TRUE
+      } else if (all_u && !is.null(c_chk)) {
+        agree <- FALSE
+      } else {
+        ii <- which(U[row_frame_pos])
+        agree <- TRUE
+        fpos <- row_frame_pos[ii]
+        for (v in vars) {
+          dv <- data[[v]][ii]
+          if (!all(is.finite(dv)) || !all(dv == frame[[v]][fpos])) { agree <- FALSE; break }
+        }
       }
       chained_request_need(agree,
         paste0("Covariates in `", label, "` vary within unit across time, have missing values, or disagree with `frame` by id."),
         "cdid_chained_request_covariate_error")
     } else {
+      ii <- which(U[row_frame_pos])
       dz <- mm(data[ii, , drop = FALSE])
       expected <- Z[row_frame_pos[ii], , drop = FALSE]
       chained_request_need(identical(dim(dz), dim(expected)) && identical(colnames(dz), colnames(expected)) &&
@@ -105,7 +151,7 @@ cp04_public_design <- function(formula, frame, data, frame_ids, id, U, label, al
   } else if (any(present)) chained_request_abort(paste0("Covariates in `", label, "` are split between data and frame."),
     "cdid_chained_request_covariate_error")
   attr(Z, "intercept") <- has_intercept
-  attr(Z, "assign") <- as.integer(attr(z, "assign"))
+  attr(Z, "assign") <- asg_vec
   Z
 }
 
@@ -200,7 +246,8 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
                                        dr_method = NULL, treatment_columns = NULL, imputation = NULL,
                                        augmented = NULL, reference_source = NULL, ipw_method = NULL,
                                        custom_est_method = NULL, custom_dots = list(), aux_spec = NULL,
-                                       pt_assumption = NULL, run_numerical_transfer = NULL, outcome_pooling = "pooled") {
+                                       pt_assumption = NULL, run_numerical_transfer = NULL, outcome_pooling = "pooled",
+                                       missing_reference = "error") {
   M <- if (is.null(metadata)) 0L else nrow(metadata$catalog$rows)
   # CP08/D78 work ownership: the caller's cumulative prefix as received. The
   # descriptor-batch and descriptor-context work below is added to
@@ -215,9 +262,14 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
   # CP08 construction: the actual catalog is validated once before its
   # descriptor batch; every row keeps the single extractor's bound check and
   # preflight, and reads its fields through one invocation-local source.
-  descriptors <- if (M > 0L) extract_pipeline_catalog_row_specs(metadata, seq_len(M),
-    retained_entries = retained_pipeline_entries, external_work_ops = external_work_ops,
-    control = ctrl$owner_control, return_accounting = TRUE) else list(specs = list(), accounting = NULL)
+  descriptors <- if (M > 0L) {
+    fast_d <- if (identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+      cdid_fast_extract_catalog_row_specs(metadata, retained_pipeline_entries, external_work_ops, ctrl$owner_control)
+    } else NULL
+    if (!is.null(fast_d)) fast_d else extract_pipeline_catalog_row_specs(metadata, seq_len(M),
+      retained_entries = retained_pipeline_entries, external_work_ops = external_work_ops,
+      control = ctrl$owner_control, return_accounting = TRUE)
+  } else list(specs = list(), accounting = NULL)
   specs <- descriptors$specs
   if (!is.null(descriptors$accounting)) external_work_ops <- ipw_owner_safe_sum(
     c(external_work_ops, descriptors$accounting$work_ops_bound), ctrl$owner_control$max_work_ops,
@@ -261,13 +313,30 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
     built <- NULL
   }
   reference <- NULL
-  if (!is.null(reference_source) && length(views)) {
+  # Issue #16 (missing_reference = "exclude"): auxiliary reports without
+  # eligible support in their context, or lacking their own earlier-date raw
+  # value, are unavailable descriptors of the existing auxiliary path; the
+  # main catalog, its contexts and every other view are unchanged.
+  eligibility_record <- NULL; all_aux_dropped <- FALSE
+  exclude <- !is.null(reference_source) && (identical(missing_reference, "exclude") ||
+    !is.null(reference_source$eligibility))
+  if (exclude && length(views)) {
+    er <- chained_reference_registry_reader(reference_source, reader, views, M, aux_index, aux_errors, aux,
+      ctrl$owner_control, retained = retained_pipeline_entries, work = external_work_ops)
+    reference <- er$reference; views <- er$views; aux_index <- er$aux_index; aux_errors <- er$aux_errors
+    eligibility_record <- list(auxiliary_unavailable = er$record)
+    all_aux_dropped <- !length(views)
+    er <- NULL
+  } else if (!is.null(reference_source) && length(views)) {
     reference <- build_chained_reference_reader(reference_source, reader, views, M, ctrl$owner_control,
-      retained = retained_pipeline_entries, work = external_work_ops)
+      retained = retained_pipeline_entries, work = external_work_ops,
+      recover_missing_reference = identical(missing_reference, "recover"))
+  }
+  if (!is.null(reference)) {
     if (!is.null(reference$outcome_recipe)) outcome_recipe <- reference$outcome_recipe
     if (is.null(treatment_columns) && !is.null(dr_method)) treatment_columns <- reference$x_columns
   }
-  if (!is.null(ipw_method) && is.null(reference))
+  if (!is.null(ipw_method) && is.null(reference) && !all_aux_dropped)
     cp04_abort("The full-roster baseline IPW route exists only for reference-date recipes.", "unsupported")
   backend <- if (!is.null(context) && !is.null(dr_method))
     dr_public_fit(dr_method, reader, context, ctrl, retained_pipeline_entries, external_work_ops,
@@ -314,7 +383,7 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
   })
   context <- NULL
   work_accounting <- cp04_registry_work_accounting(work_prefix, external_work_ops, backend, ctrl$owner_control$max_work_ops)
-  list(cp04 = backend, cp04_reader = reader, cp04_aux = aux, cp04_aux_index = aux_index,
+  registry <- list(cp04 = backend, cp04_reader = reader, cp04_aux = aux, cp04_aux_index = aux_index,
     cp04_aux_errors = aux_errors, point_links = points[seq_len(M)], cp04_points = points,
     cp04_construction = construction, cp04_work_accounting = work_accounting,
     cp04_memory_accounting = cp04_registry_memory_accounting(retained_pipeline_entries, reader, backend),
@@ -338,6 +407,9 @@ build_cp04_public_registry <- function(metadata, frame, reader, ledger, ctrl, co
         if (length(backend$selections)) paste0("cp04:", backend$universe, ":selection:", seq_along(backend$selections))) else
       paste0("cp04:", backend$universe, ":selection:", seq_along(backend$selections)),
     nuisance_views = list(), fitted_views = list())
+  # Retain auxiliary unavailability when reference eligibility handling runs.
+  if (!is.null(eligibility_record)) registry$cp04_eligibility <- eligibility_record
+  registry
 }
 
 # The static legacy CP04 and OR/DR adapters embed X=max(0,E0-O) in borrowed_entries,
@@ -492,6 +564,12 @@ cp04_registry_work_accounting <- function(prefix, prepared, backend, max_work_op
 # actual scans and borrowed records are counted apart, as evidence only.
 cp04_public_link_views <- function(frame, specs, aux, control, retained_pipeline_entries = 0,
                                    reuse_pair_support = FALSE) {
+  if (isTRUE(reuse_pair_support) &&
+      exists("cdid_fast_cp04_public_link_views", mode = "function", inherits = TRUE) &&
+      identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+    fast_res <- cdid_fast_cp04_public_link_views(frame, specs, aux, control, retained_pipeline_entries)
+    if (!is.null(fast_res)) return(fast_res)
+  }
   M <- length(specs)
   # Only descriptor lengths are read; no pair/date/population scan. Include
   # auxiliary classes before admission so an earlier cache cannot coexist
@@ -575,12 +653,12 @@ cp04_descriptor_context <- function(metadata, frame, reader, specs, aux, ctrl, o
       !is.list(ctrl) || !is.list(ctrl$owner_control) ||
       !gmm_scalar_numeric(retained_pipeline_entries, nonneg = TRUE) || !gmm_scalar_numeric(external_work_ops, nonneg = TRUE))
     return(NULL)
-  own <- tryCatch(validate_ipw_owner_control(ctrl$owner_control), cdid_error = function(e) NULL)
-  if (is.null(own)) return(NULL)
   st <- reader$state
   if (isTRUE(st$reference_carrier) || !gmm_scalar_numeric(st$N, positive = TRUE) || !gmm_scalar_numeric(st$n_A) ||
       st$N != st$n_A || !is.double(st$w) || !is.numeric(st$cohorts) || length(st$cohorts) != 2L || anyNA(st$cohorts) ||
       sum(is.infinite(st$cohorts) & st$cohorts > 0) != 1L) return(NULL)
+  own <- tryCatch(validate_ipw_owner_control(ctrl$owner_control), cdid_error = function(e) NULL)
+  if (is.null(own)) return(NULL)
   po <- get0("panel_owner", envir = frame$panel_ref, inherits = FALSE)
   if (!is.list(po) || !inherits(po, "cdid_ipw_panel_owner") || !ipw_owner_seal_ok(po, "panel_owner") ||
       !gmm_scalar_numeric(po$n_calendar_dates, positive = TRUE) || !gmm_scalar_numeric(po$n_a_units, positive = TRUE) ||
@@ -767,9 +845,18 @@ cp04_plan_rows <- function(backend, link_sets, retained = 0, chunk_rows = NULL) 
     if (inherits(backend, "cdid_dr_corollary1")) dr_corollary1_if_envelope else
     if (inherits(backend, "cdid_dr_baseline")) dr_baseline_if_envelope else or_corollary1_if_envelope
   own <- backend$accounting$owned_entries + backend$accounting$borrowed_entries
+  use_fast_env <- identical(env_fn, dr_baseline_if_envelope) &&
+    exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
+    identical(environment(sys.function()), environment(cdid_fast_kernel))
   for (links in link_sets) {
-    one <- env_fn(backend, 1, links)
-    two <- env_fn(backend, 2, links)
+    if (use_fast_env) {
+      env12 <- cdid_fast_if_budget(backend, 0L, links, "dr_env12")
+      one <- env12$one
+      two <- env12$two
+    } else {
+      one <- env_fn(backend, 1, links)
+      two <- env_fn(backend, 2, links)
+    }
     slope <- two$output + two$scratch - one$output - one$scratch
     intercept <- one$output + one$scratch - slope
     output_slope <- two$output - one$output
@@ -791,7 +878,12 @@ cp04_plan_rows <- function(backend, link_sets, retained = 0, chunk_rows = NULL) 
 cp04_preflight_links <- function(backend, links, retained = 0, chunk_rows = NULL) {
   dom <- cp04_backend_domain(backend); ctrl <- backend$control
   B <- cp04_plan_rows(backend, list(links), retained, chunk_rows)
-  pre <- chained_full_if_budget(backend, B, links)
+  pre <- if (exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
+             identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+    cdid_fast_if_budget(backend, B, links, "full")
+  } else {
+    chained_full_if_budget(backend, B, links)
+  }
   own <- backend$accounting$owned_entries + backend$accounting$borrowed_entries
   ipw_owner_safe_sum(c(retained, own, pre$output, pre$scratch), ctrl$max_matrix_entries,
     "CP04 producer and downstream simultaneous entries")
@@ -1303,7 +1395,33 @@ cp04_retained_if_unbind <- function(backend) {
 # route owners) and the reserved snapshot of the reader's roster, scale
 # factors, frame/panel/reference/selection/design/layout references, link block
 # and row partition.
+cp04_retained_if_default_validators <- c(
+  "ipw_owner_seal_ok",
+  "validate_ipw_frame_owner",
+  "validate_ipw_panel_owner",
+  "validate_cp04_reader",
+  "validate_ipw_raw_backend",
+  "validate_dr_baseline_backend",
+  "validate_or_baseline_backend",
+  "validate_cp04_backend",
+  "validate_or_corollary1_backend",
+  "validate_dr_corollary1_backend",
+  "validate_imputation_backend",
+  "validate_augmented_backend",
+  "validate_cp04_custom_backend",
+  "validate_reference_ipw_backend",
+  "validate_selection_models"
+)
+
 cp04_retained_if_check <- function(store, backend, links, B, scale) {
+  if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(cp04_retained_if_default_validators)) {
+    fk_vf <- cdid_fast_kernel("C_cdid_verify_fast")
+    if (!is.null(fk_vf)) {
+      fast_st <- fk_vf(3L, store, backend, links, list(B, scale, 0L))
+      if (!is.null(fast_st)) return(fast_st)
+    }
+  }
   if (!is.environment(store) || !identical(store$kind, "cp04_retained_if") || identical(store$state, "released"))
     cp04_abort("Retained moment IF storage is not available.", "integrity")
   cp04_retained_if_validate_backend(backend)
@@ -1368,7 +1486,18 @@ cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, p
   completed <- FALSE
   on.exit(if (!completed && is.environment(store) && identical(store$kind, "cp04_retained_if"))
     cp04_retained_if_release(store), add = TRUE)
-  st <- cp04_retained_if_check(store, backend, links, B, scale)
+  fk_vf_slice <- if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(cp04_retained_if_default_validators)) {
+    cdid_fast_kernel("C_cdid_verify_fast")
+  } else NULL
+  check_fill <- function() {
+    if (!is.null(fk_vf_slice)) {
+      fast_st <- fk_vf_slice(3L, store, backend, links, list(B, scale, 0L))
+      if (!is.null(fast_st)) return(fast_st)
+    }
+    cp04_retained_if_check(store, backend, links, B, scale)
+  }
+  st <- check_fill()
   ctrl <- backend$control; N <- store$N; L <- store$L
   starts <- seq.int(1L, N, by = B)
   if (identical(store$state, "reserved")) {
@@ -1378,20 +1507,30 @@ cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, p
     on.exit(augmented_adjoint_replay_release(plan), add = TRUE)
     store$state <- "filling"
     phi <- matrix(0, N, L); filled <- 0; cn <- NULL
+    fk_set <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) {
+      cdid_fast_kernel("C_cdid_matrix_set_rows")
+    } else NULL
     for (s in starts) {
       rows <- seq.int(s, min(N, s + B - 1L))
       b <- chained_full_if_chunk(backend, rows, links, scale, plan)
       if (!is.list(b) || !identical(b$rows, rows) || !identical(as.integer(b$links), store$links) ||
           !identical(b$scale, scale) || !is.matrix(b$phi) || !is.double(b$phi) ||
-          nrow(b$phi) != length(rows) || ncol(b$phi) != L || any(!is.finite(b$phi)) ||
+          nrow(b$phi) != length(rows) || ncol(b$phi) != L ||
           !identical(b$id, st$id[rows]) || !identical(b$normalization_count, st$n_A))
+        cp04_abort("The producer chunk does not match the reserved retained moment IF layout.", "integrity")
+      if (is.null(fk_set) && any(!is.finite(b$phi)))
         cp04_abort("The producer chunk does not match the reserved retained moment IF layout.", "integrity")
       if (filled == 0) cn <- colnames(b$phi) else if (!identical(colnames(b$phi), cn))
         cp04_abort("The producer chunk link labels changed within one pass.", "integrity")
-      phi[rows, ] <- b$phi
+      if (!is.null(fk_set)) {
+        if (!isTRUE(fk_set(phi, s, b$phi)))
+          cp04_abort("The producer chunk does not match the reserved retained moment IF layout.", "integrity")
+      } else {
+        phi[rows, ] <- b$phi
+      }
       filled <- filled + length(rows)
       callback(b)
-      st <- cp04_retained_if_check(store, backend, links, B, scale)
+      st <- check_fill()
       if (!identical(store$state, "filling") || exists("phi", store, inherits = FALSE) ||
           exists("raw_ref", store, inherits = FALSE))
         cp04_abort("Retained moment IF storage was modified during the producer pass.", "integrity")
@@ -1415,6 +1554,10 @@ cp04_retained_if_replay <- function(store, backend, links, callback, scale, B, p
     cp04_abort("Retained moment IF storage exceeded its admitted slice passes.", "integrity")
   ipw_owner_safe_sum(c(pre$work_ops_bound, store$work), ctrl$max_work_ops, "CP04 retained moment IF slice work")
   check_slice <- function() {
+    if (!is.null(fk_vf_slice)) {
+      fast_st <- fk_vf_slice(3L, store, backend, links, list(B, scale, 1L))
+      if (!is.null(fast_st)) return(fast_st)
+    }
     st <- cp04_retained_if_check(store, backend, links, B, scale)
     if (!identical(store$state, "filled"))
       cp04_abort("Retained moment IF storage was not completely filled.", "integrity")
@@ -1504,14 +1647,48 @@ cp04_retained_if_auxiliary_map <- function(store, backend, backend_ids) {
       !is.numeric(backend_ids) || is.object(backend_ids) || !is.null(dim(backend_ids)) || !length(backend_ids) ||
       anyNA(backend_ids) || any(backend_ids != floor(backend_ids)) || any(backend_ids < 1) ||
       any(backend_ids > length(backend$links))) return(col)
+  in_store_links <- backend_ids %in% store$links
+  if (all(in_store_links)) return(col)
+  if (is.null(backend$reference_ref) && is.list(backend$links) &&
+      exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns("cp04_retained_if_recipe")) {
+    b_links <- backend$links
+    st_links <- store$links
+    n_st <- length(st_links)
+    ret_sids <- integer(n_st)
+    for (i in seq_len(n_st)) {
+      li <- b_links[[st_links[i]]]
+      s_i <- if (is.list(li)) li$support_id else NULL
+      ret_sids[i] <- if (is.integer(s_i) && length(s_i) == 1L) s_i else NA_integer_
+    }
+    any_sid_hit <- FALSE
+    for (q in which(!in_store_links)) {
+      lq <- b_links[[as.integer(backend_ids[q])]]
+      sq <- if (is.list(lq)) lq$support_id else NULL
+      if (is.numeric(sq) && length(sq) == 1L && !is.na(sq) && (as.integer(sq) %in% ret_sids)) {
+        any_sid_hit <- TRUE
+        break
+      }
+    }
+    if (!any_sid_hit) return(col)
+  }
   retained <- lapply(store$links, function(k) cp04_retained_if_recipe(backend, k))
+  ret_keys <- vapply(retained, function(r) {
+    if (is.null(r)) NA_character_ else paste(unlist(r, use.names = FALSE), collapse = ":")
+  }, character(1L))
+  valid_ret <- !is.na(ret_keys)
+  dup_ret <- duplicated(ret_keys, incomparables = NA_character_) |
+    duplicated(ret_keys, fromLast = TRUE, incomparables = NA_character_)
+  unique_ret_idx <- which(valid_ret & !dup_ret)
+  if (!length(unique_ret_idx)) return(col)
+  unique_keys <- ret_keys[unique_ret_idx]
   for (q in seq_along(backend_ids)) {
+    if (in_store_links[q]) next
     id <- as.integer(backend_ids[q])
-    if (id %in% store$links) next
     rq <- cp04_retained_if_recipe(backend, id)
     if (is.null(rq)) next
-    hit <- which(vapply(retained, function(r) !is.null(r) && identical(r, rq), logical(1)))
-    if (length(hit) == 1L) col[q] <- hit
+    m_idx <- match(paste(unlist(rq, use.names = FALSE), collapse = ":"), unique_keys)
+    if (!is.na(m_idx)) col[q] <- unique_ret_idx[m_idx]
   }
   col
 }
@@ -1647,7 +1824,19 @@ cp04_retained_if_auxiliary_slices <- function(store, backend, backend_ids, callb
   # The auxiliary consumer keeps its original whole-request partition, which
   # need not equal the main producer's stored partition. Its original output
   # envelope covers these requested-column slices at this issued B.
+  fk_vf_aux <- if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(cp04_retained_if_default_validators)) {
+    cdid_fast_kernel("C_cdid_verify_fast")
+  } else NULL
   check <- function() {
+    if (!is.null(fk_vf_aux)) {
+      fast_st <- fk_vf_aux(3L, store, backend, store$links, list(store$B, "core", 1L))
+      if (!is.null(fast_st) && isTRUE(fast_st$lambda == 1) &&
+          identical(as.double(fast_st$N), as.double(fast_st$n_A)) &&
+          isTRUE(store$lambda == 1) && identical(as.double(store$N), as.double(store$n_A))) {
+        return(fast_st)
+      }
+    }
     st <- cp04_retained_if_check(store, backend, store$links, store$B, "core")
     if (!identical(store$state, "filled")) cp04_abort("Retained moment IF storage was not completely filled.", "integrity")
     if (!isTRUE(st$lambda == 1) || !identical(as.double(st$N), as.double(st$n_A)) ||
@@ -1779,10 +1968,12 @@ cp04_stream_plan_legacy <- function(backend, links, retained = 0) {
     B <- min(B, cp04_plan_rows(backend, list(ids), retained + 4 * L * L))
   }
   work <- 0; peak <- 0
+  use_fast_b <- exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
+    identical(environment(sys.function()), environment(cdid_fast_kernel))
   # Complete preflight before replay/allocations, including both Gram buffers.
   for (a in seq_along(blocks)) for (b in a:length(blocks)) {
     ids <- unique(c(links[blocks[[a]]], links[blocks[[b]]]))
-    pre <- chained_full_if_budget(backend, B, ids)
+    pre <- if (use_fast_b) cdid_fast_if_budget(backend, B, ids, "full") else chained_full_if_budget(backend, B, ids)
     work <- ipw_owner_safe_sum(c(work, 2 * ceiling(st$N / B) * pre$work + 4 * st$N * length(ids)^2),
       ctrl$max_work_ops, "CP04 covariance cumulative work")
     peak <- max(peak, pre$output + pre$scratch)
@@ -1838,7 +2029,12 @@ cp04_stream_plan_full_block <- function(backend, links, retained = 0, legacy = N
     # different width is unnecessary when this exact B is safely admitted.
     B_exp <- cp04_plan_rows(backend, list(links), ret_gram, chunk_rows = B)
     if (!isTRUE(B_exp == B)) return(NULL)
-    pre <- chained_full_if_budget(backend, B, links)
+    pre <- if (exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
+               identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+      cdid_fast_if_budget(backend, B, links, "full")
+    } else {
+      chained_full_if_budget(backend, B, links)
+    }
     peak <- ipw_owner_safe_sum(c(pre$output, pre$scratch, consumer), ctrl$max_matrix_entries,
       "CP04 covariance producer and consumer workspace")
     ipw_owner_safe_sum(c(retained, gram_entries, backend$accounting$owned_entries,
@@ -1860,6 +2056,11 @@ cp04_stream_plan_full_block <- function(backend, links, retained = 0, legacy = N
 
 cp04_stream_plan <- function(backend, links, retained = 0) {
   legacy <- cp04_stream_plan_legacy(backend, links, retained)
+  if (length(legacy$blocks) <= 1L &&
+      exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns("cp04_stream_plan_full_block")) {
+    return(legacy)
+  }
   full <- cp04_stream_plan_full_block(backend, links, retained, legacy)
   if (is.null(full)) legacy else full
 }
@@ -1885,24 +2086,78 @@ cp04_stream_covariance <- function(backend, links, retained = 0) {
   }
   cp04_budget(ctrl, c(retained, backend$accounting$owned_entries, backend$accounting$borrowed_entries, store_entries),
     c(peak, 4 * L * L), work, 4 * L * L, "CP04 complete Gram")
+  was_reserved <- !is.null(store) && identical(store$state, "reserved")
   producer <- if (is.null(store)) backend else cp04_retained_if_bind(backend, store)
-  means <- numeric(L)
-  for (ix in blocks) cp04_replay_links(producer, links[ix], function(b) {
-    means[ix] <<- means[ix] + colSums(b$phi) / st$N
-  }, chunk_rows = plan$chunk_rows)
-  V <- matrix(0, L, L)
-  for (a in seq_along(blocks)) for (b in a:length(blocks)) {
-    ia <- blocks[[a]]; ib <- blocks[[b]]; ids <- unique(c(ia, ib)); gram <- matrix(0, length(ia), length(ib))
-    cp04_replay_links(producer, links[ids], function(z) {
-      x <- sweep(z$phi, 2L, means[ids], "-")
-      gram <<- gram + (if (a == b) crossprod(x) else
-        crossprod(x[, match(ia, ids), drop = FALSE], x[, match(ib, ids), drop = FALSE])) / st$n_A
+  fast_cov <- if (length(blocks) == 1L && identical(as.integer(blocks[[1L]]), seq_len(L)) &&
+                  (is.null(store) || was_reserved) &&
+                  exists("cdid_fast_stream_covariance", mode = "function", inherits = TRUE) &&
+                  identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+    cdid_fast_stream_covariance(store, backend, links, plan, st, ctrl)
+  } else {
+    NULL
+  }
+  if (!is.null(fast_cov)) {
+    means <- fast_cov$means
+    V <- fast_cov$V
+  } else {
+    means <- numeric(L)
+    for (ix in blocks) cp04_replay_links(producer, links[ix], function(b) {
+      means[ix] <<- means[ix] + colSums(b$phi) / st$N
     }, chunk_rows = plan$chunk_rows)
-    if (a == b) {
-      for (j in seq_along(ia)) if (j > 1L) gram[j, seq_len(j - 1L)] <- gram[seq_len(j - 1L), j]
-      V[ia, ia] <- gram
-    } else {
-      V[ia, ib] <- gram; V[ib, ia] <- t(gram)
+    V <- NULL
+  }
+  if (is.null(V) && !is.null(store) && identical(store$state, "filled") && length(blocks) == 1L &&
+      identical(as.integer(blocks[[1L]]), seq_len(L)) &&
+      exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+      cdid_are_default_fns(c("cp04_replay_links", "cp04_retained_if_replay", "cp04_retained_if_check",
+                             cp04_retained_if_default_validators))) {
+    fk_vf <- cdid_fast_kernel("C_cdid_verify_fast")
+    fk_rcov <- cdid_fast_kernel("C_cdid_retained_cov_gram")
+    if (!is.null(fk_vf) && !is.null(fk_rcov)) {
+      slice_limit <- if (is.null(store$gmm_transfer)) store$max_slice_passes else store$gmm_transfer$max_slice_passes
+      if (is.null(slice_limit) || store$slice_passes < slice_limit) {
+        c_rows <- if (was_reserved) {
+          plan$chunk_rows
+        } else {
+          pre_sl <- cp04_preflight_links(backend, links, chunk_rows = plan$chunk_rows)
+          ipw_owner_safe_sum(c(pre_sl$work_ops_bound, store$work), ctrl$max_work_ops, "CP04 retained moment IF slice work")
+          pre_sl$chunk_rows
+        }
+        st_chk <- fk_vf(3L, store, backend, links, list(plan$chunk_rows, "core", 1L))
+        if (!is.null(st_chk)) {
+          V_fast <- fk_rcov(store$phi, as.double(means), c_rows, as.double(st$n_A), 0L)
+          if (!is.null(V_fast)) {
+            V <- V_fast
+            store$slice_passes <- store$slice_passes + 1L
+          }
+        }
+      }
+    }
+  }
+  if (is.null(V)) {
+    V <- matrix(0, L, L)
+    for (a in seq_along(blocks)) for (b in a:length(blocks)) {
+      ia <- blocks[[a]]; ib <- blocks[[b]]; ids <- unique(c(ia, ib)); gram <- matrix(0, length(ia), length(ib))
+      fk_gram <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE)) cdid_fast_kernel("C_cdid_center_gram") else NULL
+      ma_idx <- if (a == b) NULL else as.integer(match(ia, ids))
+      mb_idx <- if (a == b) NULL else as.integer(match(ib, ids))
+      cp04_replay_links(producer, links[ids], function(z) {
+        g_ch <- if (!is.null(fk_gram)) fk_gram(z$phi, means[ids], ma_idx, mb_idx, a == b, st$n_A) else NULL
+        if (!is.null(g_ch)) {
+          gram <<- gram + g_ch
+        } else {
+          x <- sweep(z$phi, 2L, means[ids], "-")
+          gram <<- gram + (if (a == b) crossprod(x) else
+            crossprod(x[, ma_idx, drop = FALSE], x[, mb_idx, drop = FALSE])) / st$n_A
+        }
+      }, chunk_rows = plan$chunk_rows)
+      if (a == b) {
+        for (j in seq_along(ia)) if (j > 1L) gram[j, seq_len(j - 1L)] <- gram[seq_len(j - 1L), j]
+        V[ia, ia] <- gram
+      } else {
+        V[ia, ib] <- gram; V[ib, ia] <- t(gram)
+      }
     }
   }
   estimates <- vapply(links, function(j) chained_full_link_estimate(backend, j), numeric(1))
@@ -1924,11 +2179,24 @@ cp04_public_diagnostics <- function(res, control, public_object = NULL) {
 
 cp04_public_diagnostics_route <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
+  if (inherits(b, "cdid_cross_pair_backend")) return(cross_pair_public_diagnostics(res, control, public_object))
   if (inherits(b, "cdid_reference_ipw_backend")) return(reference_ipw_public_diagnostics(res, control))
   if (inherits(b, "cdid_augmented_backend")) return(augmented_public_diagnostics(res, control, public_object))
   if (inherits(b, "cdid_imputation_backend")) return(imputation_public_diagnostics(res, control, public_object))
-  if (inherits(b, c("cdid_dr_baseline", "cdid_dr_corollary1"))) return(dr_public_diagnostics(res, control, public_object))
-  if (inherits(b, c("cdid_or_baseline", "cdid_or_corollary1"))) return(or_public_diagnostics(res, control, public_object))
+  if (inherits(b, c("cdid_dr_baseline", "cdid_dr_corollary1"))) {
+    if (inherits(b, "cdid_dr_baseline") && identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+      fast_diag <- cdid_fast_or_dr_baseline_diagnostics(res, control, public_object)
+      if (!is.null(fast_diag)) return(fast_diag)
+    }
+    return(dr_public_diagnostics(res, control, public_object))
+  }
+  if (inherits(b, c("cdid_or_baseline", "cdid_or_corollary1"))) {
+    if (inherits(b, "cdid_or_baseline") && identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+      fast_diag <- cdid_fast_or_dr_baseline_diagnostics(res, control, public_object)
+      if (!is.null(fast_diag)) return(fast_diag)
+    }
+    return(or_public_diagnostics(res, control, public_object))
+  }
   # Reserve the compact copy before constructing lists; source factors are
   # borrowed, without owner/design/IF copies. Conservative header allowance.
   bound <- 4 * b$accounting$owned_entries + 4096

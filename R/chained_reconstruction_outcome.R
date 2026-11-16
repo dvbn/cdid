@@ -15,11 +15,15 @@ reconstruction_or_block <- function(sh, bid) {
 # Stage1, treatment and link adjoints remain their actual distinct allocations.
 reconstruction_retained_bound <- function(cat, recipe, pooled, theta_ids = NULL) {
   p <- recipe$p; G <- length(cat$or_blocks); incidence <- domains <- forcing <- 0
-  for (b in seq_along(cat$or_blocks)) {
-    ctrl <- cat$or_blocks[[b]]$control_cell_ids
-    target <- vapply(cat$links[vapply(cat$links, function(l) l$or_block_id == b, logical(1))], `[[`, integer(1), "target_cell_id")
-    incidence <- incidence + length(ctrl); domains <- domains + length(union(ctrl, target))
-    if (!is.null(theta_ids)) forcing <- forcing + length(unique(unlist(theta_ids[ctrl])))
+  if (G > 0L) {
+    link_bid <- vapply(cat$links, `[[`, integer(1), "or_block_id")
+    link_tcell <- vapply(cat$links, `[[`, integer(1), "target_cell_id")
+    for (b in seq_len(G)) {
+      ctrl <- cat$or_blocks[[b]]$control_cell_ids
+      target <- link_tcell[link_bid == b]
+      incidence <- incidence + length(ctrl); domains <- domains + length(union(ctrl, target))
+      if (!is.null(theta_ids)) forcing <- forcing + length(unique(unlist(theta_ids[ctrl])))
+    }
   }
   group_fields <- G * (8192 + 128 * (p + 2)^2 + 64 * sum(nchar(recipe$columns, type = "bytes"))) +
     64 * (incidence + domains + length(cat$links)) * (p + 2)^2 + 32 * forcing * (p + 4)
@@ -28,15 +32,19 @@ reconstruction_retained_bound <- function(cat, recipe, pooled, theta_ids = NULL)
 }
 
 reconstruction_fit_extra <- function(cat, recipe, st) {
-  p <- recipe$p; peak <- aliases <- 0
-  for (b in seq_along(cat$or_blocks)) {
-    ctrl <- cat$or_blocks[[b]]$control_cohort_indices
-    target <- vapply(cat$links[vapply(cat$links, function(l) l$or_block_id == b, logical(1))], `[[`, integer(1), "target_cohort_index")
-    ids <- union(ctrl, target); peak <- max(peak, length(ids))
-    aliases <- aliases + sum(st$cohort_end[ids] - st$cohort_start[ids] + 1)
+  p <- recipe$p; G <- length(cat$or_blocks); peak <- aliases <- 0
+  if (G > 0L) {
+    link_bid <- vapply(cat$links, `[[`, integer(1), "or_block_id")
+    link_tcoh <- vapply(cat$links, `[[`, integer(1), "target_cohort_index")
+    for (b in seq_len(G)) {
+      ctrl <- cat$or_blocks[[b]]$control_cohort_indices
+      target <- link_tcoh[link_bid == b]
+      ids <- union(ctrl, target); peak <- max(peak, length(ids))
+      aliases <- aliases + sum(st$cohort_end[ids] - st$cohort_start[ids] + 1)
+    }
   }
   list(scratch = 64 * (peak + 2) * (p + 2)^2 + 32 * length(cat$links),
-    work = 256 * (length(cat$or_blocks) * (p + 2)^3 + aliases * (p + 2)^2 *
+    work = 256 * (G * (p + 2)^3 + aliases * (p + 2)^2 *
       (1 + ceiling(log2(st$n_A + 1)))))
 }
 
@@ -49,9 +57,16 @@ reconstruction_stage1_forward_plan <- function(backend, B, gids, X_F, n_links, d
   if (details || !reconstruction_separate(backend$shared_or) || !length(gids) ||
       !is.null(rownames(X_F))) return(declined)
   rows <- min(B, backend$control$max_chunk_rows)
-  p <- vapply(backend$groups[gids], `[[`, integer(1L), "p")
-  column_bytes <- sum(vapply(backend$groups[gids], function(g)
-    sum(nchar(g$kept_columns, type = "bytes")), numeric(1L)))
+  c_env <- cdid_ia_get_env_cache(backend, inherits(backend, "cdid_augmented_backend"))
+  inv <- if (!is.null(c_env)) c_env$rec_inv else NULL
+  if (!is.null(inv)) {
+    p <- inv$imp_p[gids]
+    column_bytes <- sum(inv$grp_col_bytes[gids])
+  } else {
+    p <- vapply(backend$groups[gids], `[[`, integer(1L), "p")
+    column_bytes <- sum(vapply(backend$groups[gids], function(g)
+      sum(nchar(g$kept_columns, type = "bytes")), numeric(1L)))
+  }
   peak <- max(c(0, p))
   # Retained group rows, names and the peak score/RHS/transposed/pivoted
   # triangular solves, scaling, reorder and returned transpose coexist.
@@ -67,24 +82,18 @@ reconstruction_score_cache_plan <- function(backend, B, cids, X_F, n_links, rese
   if (!length(cids) || !is.null(rownames(X_F)))
     return(declined)
   rows <- min(B, backend$control$max_chunk_rows)
-  # The unchanged envelope reserves 16*B*(4*nl) = 64*B*nl for row/link
-  # work. Pure replay retains phi, three psi matrices and a scaled phi;
-  # augmented replay retains phi/scaled phi. Layout storage/aggregation adds
-  # at most three such matrices. Leave 32*B*nl for all of these; detailed
-  # per-link records and per-link vectors keep their separate old charges.
-  # Cache records, including names/headers, fit entirely in the other half.
-  # Generic IPW/pooled envelopes retain larger row/link terms; the same slice
-  # fits there. Their unchanged global-cell metadata funds the full position
-  # map, selected-slot bookkeeping and planning vectors before any reads.
-  # Use the core-subchunk cap even when the envelope's B is layout-expanded.
-  # Generic callers fund their larger, unchanged 64*B*32nl or64*B*48nl
-  # row/link slabs, leaving32*B*nl for all old phi/psi/layout buffers. Separate
-  # callers keep their original32*B*nl cache allowance and forward sharing.
   funding <- (if (is.null(funding_entries)) 32 * rows * n_links else funding_entries) - reserved_entries
   if (funding <= 1024) return(declined)
-  p <- vapply(backend$cells[cids], function(cf) backend$groups[[cf$group_id]]$p, integer(1))
-  column_bytes <- vapply(backend$cells[cids], function(cf)
-    sum(nchar(backend$groups[[cf$group_id]]$kept_columns, type = "bytes")), numeric(1))
+  c_env <- cdid_ia_get_env_cache(backend, inherits(backend, "cdid_augmented_backend"))
+  inv <- if (!is.null(c_env)) c_env$rec_inv else NULL
+  if (!is.null(inv)) {
+    p <- inv$cell_p[cids]
+    column_bytes <- inv$cell_col_bytes[cids]
+  } else {
+    p <- vapply(backend$cells[cids], function(cf) backend$groups[[cf$group_id]]$p, integer(1))
+    column_bytes <- vapply(backend$cells[cids], function(cf)
+      sum(nchar(backend$groups[[cf$group_id]]$kept_columns, type = "bytes")), numeric(1))
+  }
   record_entries <- 4 * rows * (p + 2) + 256 + 8 * column_bytes
   entries <- 1024; selected <- logical(length(cids))
   for (j in seq_along(cids)) if (record_entries[j] <= funding - entries) {
@@ -120,19 +129,78 @@ reconstruction_cached_cell_reader <- function(read, plan, n_cells) {
 # Both reconstructed routes retain the same local OR and stage1/treatment row
 # shapes. Selection adds only its existing upstream admission and q channels.
 reconstruction_if_envelope <- function(backend, B, links, details, augmented = FALSE) {
+  can_cache <- !details && is.null(attributes(links)) && is.null(backend$layout) &&
+    is.null(backend$reference_ref) &&
+    identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+    cdid_are_default_fns(c(
+      "augmented_if_needed_sets", "imputation_if_needed_sets",
+      "reconstruction_stage1_forward_plan", "reconstruction_score_cache_plan",
+      "selection_if_budget", "cp04_budget"
+    ))
+  c_env <- if (can_cache) cdid_ia_get_env_cache(backend, augmented) else NULL
+  env_key <- NULL
+  if (!is.null(c_env)) {
+    nl_req <- length(links)
+    if (nl_req == 1L && B == 1L) {
+      env_key <- paste0("re1_", as.integer(links[1L]))
+    } else if (nl_req == length(backend$links) && identical(as.integer(links), seq_along(backend$links))) {
+      env_key <- paste0("rea_", as.integer(B))
+    }
+    if (!is.null(env_key)) {
+      hit <- get0(env_key, envir = c_env, inherits = FALSE)
+      if (!is.null(hit)) return(hit)
+    }
+  }
+  cache_tag <- if (B == 1L) "rec_env_1" else if (B == 2L) "rec_env_2" else "rec_env_B"
+  if (can_cache) {
+    meta <- cdid_get_if_chunk_meta(backend, B, links, cache_tag)
+    if (!is.null(meta) && identical(meta$link_names, isTRUE(augmented))) return(meta$pre)
+  }
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- if (!augmented && !is.null(backend$layout)) backend$layout$state else reader$state
   if (!is.null(backend$layout)) B <- B * max(1, backend$layout$by_orig$count)
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
   nc_all <- length(backend$cells); ng_all <- length(backend$groups)
   nb_all <- length(backend$or_blocks); nt_all <- length(backend$treatments)
-  incidence <- 0
-  for (b in backend$shared_or$blocks) incidence <- incidence + length(b$control_cell_ids)
-  for (j in links) incidence <- incidence + length(backend$links[[j]]$control_cell_ids)
-  for (g in backend$groups) incidence <- incidence + length(g$cell_ids)
-  if (augmented) {
-    for (c in backend$cells) incidence <- incidence + length(c$theta_ids)
-    for (ids in backend$up_map$theta_coords) incidence <- incidence + length(ids)
+  inv <- if (!is.null(c_env)) c_env$rec_inv else NULL
+  if (is.null(inv) && !is.null(c_env)) {
+    base_inc <- 0
+    for (b in backend$shared_or$blocks) base_inc <- base_inc + length(b$control_cell_ids)
+    for (g in backend$groups) base_inc <- base_inc + length(g$cell_ids)
+    if (augmented) {
+      for (c in backend$cells) base_inc <- base_inc + length(c$theta_ids)
+      for (ids in backend$up_map$theta_coords) base_inc <- base_inc + length(ids)
+    }
+    link_inc <- vapply(backend$links, function(lk) length(lk$control_cell_ids), integer(1))
+    imp_p_v <- vapply(backend$groups, `[[`, integer(1), "p")
+    grp_col_bytes <- vapply(backend$groups, function(g) sum(nchar(g$kept_columns, type = "bytes")), numeric(1))
+    cell_gid <- vapply(backend$cells, `[[`, integer(1), "group_id")
+    inv <- list(
+      base_inc = base_inc,
+      link_inc = link_inc,
+      imp_p = imp_p_v,
+      grp_col_bytes = grp_col_bytes,
+      cell_p = imp_p_v[cell_gid],
+      cell_col_bytes = grp_col_bytes[cell_gid],
+      all_local_p = vapply(backend$shared_or$outcome_groups$groups, function(g) length(g$keep), integer(1)),
+      all_op_peak = if (augmented) vapply(backend$shared_or$blocks, function(b) as.double(length(b$q_beta)), numeric(1)) else numeric(0),
+      name_bytes = sum(nchar(c(backend$outcome_recipe$columns, backend$treatment_recipe$columns), type = "bytes")),
+      link_bytes_vec = nchar(vapply(backend$links, `[[`, character(1), "link_id"), type = "bytes"),
+      adjoint = sum((imp_p_v + 1)^3) + nc_all * (backend$outcome_recipe$p + 2)
+    )
+    c_env$rec_inv <- inv
+  }
+  if (!is.null(inv)) {
+    incidence <- inv$base_inc + sum(inv$link_inc[links])
+  } else {
+    incidence <- 0
+    for (b in backend$shared_or$blocks) incidence <- incidence + length(b$control_cell_ids)
+    for (j in links) incidence <- incidence + length(backend$links[[j]]$control_cell_ids)
+    for (g in backend$groups) incidence <- incidence + length(g$cell_ids)
+    if (augmented) {
+      for (c in backend$cells) incidence <- incidence + length(c$theta_ids)
+      for (ids in backend$up_map$theta_coords) incidence <- incidence + length(ids)
+    }
   }
   maps <- 4096 + 64 * (nc_all + ng_all + nb_all + nt_all + length(links) + incidence)
   cp04_budget(backend$control, c(backend$accounting$owned_entries, backend$accounting$borrowed_entries),
@@ -141,15 +209,24 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
     imputation_if_needed_sets(backend, links, backend$est_method, details)
   nc <- length(sets$cids); ng <- length(sets$gids); nb <- length(sets$bids); nt <- length(sets$tids)
   nl <- length(links); J <- length(st$cohorts); p <- backend$outcome_recipe$p; pt <- backend$treatment_recipe$p
-  local_p <- vapply(backend$shared_or$outcome_groups$groups[sets$bids], function(g) length(g$keep), integer(1))
-  imp_p <- vapply(backend$groups, `[[`, integer(1), "p")
-  # The augmented OR multiplication materializes one local forcing transpose.
-  operator_peak <- if (augmented) max(c(0, vapply(backend$shared_or$blocks[sets$bids],
-    function(b) as.double(length(b$q_beta)), numeric(1)))) else 0
+  if (!is.null(inv)) {
+    local_p <- inv$all_local_p[sets$bids]
+    imp_p <- inv$imp_p
+    operator_peak <- if (augmented && length(sets$bids)) max(c(0, inv$all_op_peak[sets$bids])) else 0
+    name_bytes <- inv$name_bytes
+    link_bytes <- sum(inv$link_bytes_vec[links])
+    adjoint <- inv$adjoint
+  } else {
+    local_p <- vapply(backend$shared_or$outcome_groups$groups[sets$bids], function(g) length(g$keep), integer(1))
+    imp_p <- vapply(backend$groups, `[[`, integer(1), "p")
+    operator_peak <- if (augmented) max(c(0, vapply(backend$shared_or$blocks[sets$bids],
+      function(b) as.double(length(b$q_beta)), numeric(1)))) else 0
+    name_bytes <- sum(nchar(c(backend$outcome_recipe$columns, backend$treatment_recipe$columns), type = "bytes"))
+    link_bytes <- sum(nchar(vapply(backend$links[links], `[[`, character(1), "link_id"), type = "bytes"))
+    adjoint <- sum((imp_p + 1)^3) + nc_all * (p + 2)
+  }
   nu <- if (augmented) length(sets$uids) else 0L
   nz <- if (augmented) length(sets$zids) else 0L
-  name_bytes <- sum(nchar(c(backend$outcome_recipe$columns, backend$treatment_recipe$columns), type = "bytes"))
-  link_bytes <- sum(nchar(vapply(backend$links[links], `[[`, character(1), "link_id"), type = "bytes"))
   metadata <- 8192 + 8 * link_bytes + B * frame$id_byte_metadata$max +
     if (details) 2048 * (nc + ng + nb + nt + nl + 1) +
       32 * name_bytes * (ng + nb + nt + nl + 1) + 32 * (nc_all + nt_all + nu) else 256 * nl
@@ -161,14 +238,9 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
   stage1_forward <- reconstruction_stage1_forward_plan(backend, B, sets$gids, X_F, nl, details)
   score_cache <- reconstruction_score_cache_plan(backend, B, sets$cids, X_F, nl,
     reserved_entries = stage1_forward$entries)
-  # xi_a/tau/eta, requested treatment rows and X_chunk exist in ordinary replay;
-  # stage1 forcing uses scalar adjoints and one local OR operator at a time.
   scratch <- maps + output + 2 * operator_peak + 16 * B * (3 * J + length(backend$design_columns) +
     5 * nt * pt + 4 * nl + 12 * (max(c(0, local_p)) + 1) + nu + nz + 24) +
     64 * nc_all * (p + 2) + 128 * ((p + 2)^2 + (pt + 2)^2)
-  # A scalar adjoint still solves every stage1 group in the existing kernel;
-  # its score replay reads only cids. Charge that visible global solve loop.
-  adjoint <- sum((imp_p + 1)^3) + nc_all * (p + 2)
   work <- 128 * maps + 128 * B * ((nc + 1) * (p + 2)^2 *
     (1 + ceiling(log2(st$n_A + 1))) + (sum(local_p + 1) + 2 * nl) * (adjoint + nc * (p + 2)) +
     nt * (pt + 2) * (pt + J + 4) + J + nl * (p + pt + 8) + (nz + nb + 2 * nl) * (nu + 4))
@@ -176,6 +248,11 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
     sp <- selection_if_budget(backend$selection_backend, B, sets$q_ids, details = details)
     scratch <- scratch + sp$output + sp$scratch; work <- work + sp$work
   }
-  c(sets, list(output = output, scratch = scratch, work = work, score_cache = score_cache,
+  pre <- c(sets, list(output = output, scratch = scratch, work = work, score_cache = score_cache,
     stage1_forward = stage1_forward))
+  if (can_cache) {
+    cdid_set_if_chunk_meta(backend, B, links, pre, isTRUE(augmented), cache_tag)
+    if (!is.null(c_env) && !is.null(env_key)) assign(env_key, pre, envir = c_env)
+  }
+  pre
 }

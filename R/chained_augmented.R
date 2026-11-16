@@ -87,7 +87,14 @@ augmented_cell_rows <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows,
 # imputation_retained_core_bound(); augmented cell, block, global q-forcing and
 # link fields are charged here with the unreduced p as the slope bound.
 augmented_retained_core_bounds <- function(cat, recipe, trt_recipe, theta_ids) {
-  E <- function(x) unname(cp04_payload(x)["entries"])
+  E <- if (identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+           cdid_are_default_fns(c("cp04_payload", "cp04_payload_native_kernel"))) {
+    pk <- cp04_payload_native_kernel()
+    e_env <- environment()
+    function(x) pk(x, TRUE, e_env)[[1L]]
+  } else {
+    function(x) unname(cp04_payload(x)["entries"])
+  }
   A <- function(n, nm = NULL) n + 8 + if (is.null(nm)) 0 else 9 + E(nm)
   M <- function(nr, nc, rn = NULL, cn = NULL, dn = FALSE) {
     nr * nc + 27 + if (dn) 1 + E(list(rn, cn)) else 0
@@ -107,15 +114,22 @@ augmented_retained_core_bounds <- function(cat, recipe, trt_recipe, theta_ids) {
   has_trt <- length(cat$treatment_specs) > 0L
   dq <- vapply(theta_ids, length, integer(1L))
   pure <- imputation_retained_core_bounds(cat, recipe, trt_recipe)$compact
+  a_1 <- A(1)
+  a_p_z <- A(p, z)
+  a_q <- A(q)
+  a_q_trt <- A(q, trt_recipe$columns)
+  clip_e <- E(ipw_clip_summary(q = 0.5, weights = 1))
+  r_cell_base <- R(c(group_id = a_1, local_id = a_1, n_pair = a_1, weight_sum = a_1, mass = a_1,
+    alpha = a_1, mean_d = a_p_z, mean_y = a_1, a_k = a_1, M_one = a_1,
+    Y_one = a_1, M_z = a_p_z, Y_z = a_p_z, M_d_kept = a_p_z))
 
   cells <- V(vapply(seq_len(nc), function(cid) {
     cs <- cat$cell_specs[[cid]]
-    E(cs) + R(c(group_id = A(1), local_id = A(1), n_pair = A(1), weight_sum = A(1), mass = A(1),
-      alpha = A(1), mean_d = A(p, z), mean_y = A(1), a_k = A(1), M_one = A(1),
-      Y_one = A(1), M_z = A(p, z), Y_z = A(p, z), M_d_kept = A(p, z))) +
-      R(c(q_id = A(1), theta_ids = A(dq[cid]), Yaug_one = A(1), Yaug_z = A(p, z),
-        MW_one = A(1), MW_d = A(p, z), MD_one = A(1), MD_d = A(p, z), Rq_one = A(dq[cid]),
-        clipping = E(ipw_clip_summary(q = 0.5, weights = 1))))
+    a_dq <- A(dq[cid])
+    E(cs) + r_cell_base +
+      R(c(q_id = a_1, theta_ids = a_dq, Yaug_one = a_1, Yaug_z = a_p_z,
+        MW_one = a_1, MW_d = a_p_z, MD_one = a_1, MD_d = a_p_z, Rq_one = a_dq,
+        clipping = clip_e))
   }, numeric(1L)))
 
   shared <- if (has_or) {
@@ -128,32 +142,41 @@ augmented_retained_core_bounds <- function(cat, recipe, trt_recipe, theta_ids) {
   } else 0
 
   dense_adjoint <- R(c(tilde_lambda = A(nc), tilde_nu = ng + 8 + ng * A(p)))
+  e_kind_adj <- E("compact_reconstruction_adjoint")
+  a_p <- A(p)
   adjoint <- function(k) {
     g <- min(k, ng)
-    compact <- R(c(kind = E("compact_reconstruction_adjoint"), cell_ids = A(k),
-      tilde_lambda = A(k), group_ids = A(g), tilde_nu = g + 8 + g * A(p)))
+    a_k_len <- A(k)
+    compact <- R(c(kind = e_kind_adj, cell_ids = a_k_len,
+      tilde_lambda = a_k_len, group_ids = A(g), tilde_nu = g + 8 + g * a_p))
     min(dense_adjoint, compact)
   }
+  adj_1 <- adjoint(1L)
+  mu_fields <- if (has_or && has_trt) c(mu = a_1, mu_dr = a_1) else
+    c(mu = a_1, mu_ipw = a_1, mu_or = a_1, mu_reg = a_1, mu_dr = a_1)
   links <- vapply(cat$links, function(lk) {
     k <- length(lk$control_cell_ids)
     dg <- dq[lk$target_cell_id]
     dc <- sum(dq[lk$control_cell_ids])
+    a_k_len <- A(k)
+    a_dg <- A(dg)
+    a_dc <- A(dc)
+    adj_k <- if (has_trt) adjoint(k) else 0
     compact_link <- E(lk) + R(c(
-      if (has_or && has_trt) c(mu = A(1), mu_dr = A(1)) else
-        c(mu = A(1), mu_ipw = A(1), mu_or = A(1), mu_reg = A(1), mu_dr = A(1)),
-      d_plus = A(1), num_T = A(1), T_gl = A(1), num_Bg = A(1), B_gl = A(1),
-      d_minus = A(1), num_C = A(1), C_ol = A(1), num_Bo = A(1), B_ol = A(1),
-      d_bar_plus_or = A(p, z), d_bar_minus_or = A(p, z), d_bar_diff_or = A(p, z),
-      a_coeff_T_g = A(1), a_coeff_Bg_g = A(1), a_coeff_C_k = A(k), a_coeff_Bo_k = A(k),
-      m_minus_k = A(k), lam_T = A(1), nu_T = A(p, z), lam_C_k = A(k),
-      nu_C_k = k + 8 + k * A(p, z), denminus_gamma = A(q),
-      g_C_gamma = A(q, trt_recipe$columns), g_Bo_gamma = A(q, trt_recipe$columns),
-      g_dr_gamma = A(q, trt_recipe$columns),
-      sel_T_ids = A(dg), sel_T = A(dg), sel_C_ids = A(dc), sel_C = A(dc),
-      adjoint_T = adjoint(1L),
-      if (has_trt) c(adjoint_C = adjoint(k))))
-    c(compact = compact_link, dense = compact_link + dense_adjoint - adjoint(1L) +
-      if (has_trt) dense_adjoint - adjoint(k) else 0)
+      mu_fields,
+      d_plus = a_1, num_T = a_1, T_gl = a_1, num_Bg = a_1, B_gl = a_1,
+      d_minus = a_1, num_C = a_1, C_ol = a_1, num_Bo = a_1, B_ol = a_1,
+      d_bar_plus_or = a_p_z, d_bar_minus_or = a_p_z, d_bar_diff_or = a_p_z,
+      a_coeff_T_g = a_1, a_coeff_Bg_g = a_1, a_coeff_C_k = a_k_len, a_coeff_Bo_k = a_k_len,
+      m_minus_k = a_k_len, lam_T = a_1, nu_T = a_p_z, lam_C_k = a_k_len,
+      nu_C_k = k + 8 + k * a_p_z, denminus_gamma = a_q,
+      g_C_gamma = a_q_trt, g_Bo_gamma = a_q_trt,
+      g_dr_gamma = a_q_trt,
+      sel_T_ids = a_dg, sel_T = a_dg, sel_C_ids = a_dc, sel_C = a_dc,
+      adjoint_T = adj_1,
+      if (has_trt) c(adjoint_C = adj_k)))
+    c(compact = compact_link, dense = compact_link + dense_adjoint - adj_1 +
+      if (has_trt) dense_adjoint - adj_k else 0)
   }, numeric(2))
 
   # The pure-imputation convention charges the shared-OR alias field twice.
@@ -292,9 +315,10 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   )
 
   records <- vector("list", L)
+  lv_ok <- cdid_fast_validate_link_views(link_views, frame)
   for (ell in seq_len(L)) {
     v <- link_views[[ell]]
-    validate_ipw_link_view(v, frame_owner = frame)
+    if (!lv_ok) validate_ipw_link_view(v, frame_owner = frame)
     source <- v$functional_key
     if (!gmm_scalar_character(source) || !startsWith(source, "cmpcat:")) {
       augmented_abort("The augmented backend requires the supplied comparison-catalog functional key.")
@@ -356,19 +380,44 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
 
   # S1. Observation-probability models on the SAME reader. Refusals propagate
   # unchanged; nothing falls back to pure imputation or to weighting.
-  sel_fit <- fit_selection_models(
-    reader = reader,
-    link_views = link_views,
-    selection_model = selection_model,
-    selection_pooling = selection_pooling,
-    control = ctrl,
-    glm_control = gc,
-    retained_external_entries = des$owned_entries + des$borrowed_entries +
-      retained_external_entries + pair_entries + header,
-    external_work_ops = external_work_ops + des$work_ops,
-    view_cohorts = if (is.null(lay)) NULL else lay$view_cohorts,
-    families = if (is.null(lay)) NULL else lay$families
-  )
+  sel_ret_ext <- des$owned_entries + des$borrowed_entries + retained_external_entries + pair_entries + header
+  sel_work_ext <- external_work_ops + des$work_ops
+  sel_fit <- if (is.null(lay) && is.null(reference) &&
+                 identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+                 cdid_are_default_fns(c(
+                   "fit_selection_models", "build_selection_block_catalog",
+                   "partition_selection_cells", "extract_selection_design_spec",
+                   "fit_pooled_selection_block", "fit_selection_block_provider",
+                   "selection_owner_block_provider", "cp04_selection_fit",
+                   "cp04_date_rows", "cp04_pair_rows", "cp04_logit",
+                   "ipw_glm_fit_internal", "or_pooled_wls_fit", "or_wls_fit"
+                 ))) {
+    cdid_ia_fast_fit_selection_models(
+      reader = reader,
+      panel = get0("panel_owner", reader$panel_ref, inherits = FALSE),
+      link_views = link_views,
+      selection_model = selection_model,
+      selection_pooling = selection_pooling,
+      ctrl = ctrl,
+      gc = gc,
+      retained_external_entries = sel_ret_ext,
+      external_work_ops = sel_work_ext
+    )
+  } else NULL
+  if (is.null(sel_fit)) {
+    sel_fit <- fit_selection_models(
+      reader = reader,
+      link_views = link_views,
+      selection_model = selection_model,
+      selection_pooling = selection_pooling,
+      control = ctrl,
+      glm_control = gc,
+      retained_external_entries = sel_ret_ext,
+      external_work_ops = sel_work_ext,
+      view_cohorts = if (is.null(lay)) NULL else lay$view_cohorts,
+      families = if (is.null(lay)) NULL else lay$families
+    )
+  }
 
   # Catalog identity: the selection pair-cohort catalog is C_imp itself.
   q_of_cell <- vapply(cat$cell_specs, function(cs) {
@@ -586,6 +635,43 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     st$cohort_order[seq.int(start, min(st$cohort_end[ci], start + B_chunk - 1L))]
   }
 
+  can_fast_aug_base <- is.null(lay) && is.null(reference) &&
+    identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+    cdid_are_default_fns(c(
+      "selection_prediction_operation", "predict_pair_selection",
+      "selection_pair_cohort_log_deriv", "imputation_fit_core",
+      "or_outcome_fit_blocks", "or_pooled_fit_blocks",
+      "augmented_cell_rows", "fit_selection_models",
+      "cp04_pair_rows", "or_pooled_support_start", "or_pooled_support_add",
+      "or_pooled_wls_gram_solve", "or_wls_gram_solve",
+      "ipw_logit_values", "reconstruction_zero_template",
+      "reconstruction_zero_template_run", "reconstruction_pack_plain_adjoint",
+      "reconstruction_pack_adjoint", "cp04_finite"
+    ))
+  pair_outcomes_matches_panel <- is.null(pair_outcomes)
+  if (!pair_outcomes_matches_panel && can_fast_aug_base) {
+    pair_outcomes_matches_panel <- TRUE
+    for (cs in cat$cell_specs) {
+      for (start in chunk_starts(cs$cohort_index)) {
+        r_ch <- chunk_rows(cs$cohort_index, start)
+        pr_panel <- cp04_pair_rows(reader, r_ch, cs$pair, TRUE)
+        pr_hook <- pair_reader(r_ch, cs$pair, TRUE)
+        if (!identical(pr_panel$dy, pr_hook$dy)) {
+          pair_outcomes_matches_panel <- FALSE
+          break
+        }
+      }
+      if (!pair_outcomes_matches_panel) break
+    }
+  }
+  can_fast_aug <- can_fast_aug_base && pair_outcomes_matches_panel
+  aug_panel <- if (can_fast_aug && is.environment(reader$panel_ref) &&
+                   exists("panel_owner", reader$panel_ref, inherits = FALSE)) {
+    get("panel_owner", reader$panel_ref, inherits = FALSE)
+  } else {
+    NULL
+  }
+
   # S2-S3. Accepted group-local imputation WLS and roster treatment logits.
   core <- imputation_fit_core(
     st = st,
@@ -600,104 +686,120 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     glm_control = gc,
     rank_tol = rank_tol,
     ctrl = ctrl,
-    stage1_only = (est_method == "reg")
+    stage1_only = (est_method == "reg"),
+    panel = aug_panel,
+    skip_links = can_fast_aug
   )
   groups <- core$groups
   treatments <- core$treatments
   core$links <- NULL # All pure-core link/solve checks ran; augmented links own their adjoints.
 
-  # Full-F cohort column maxima for the shared-OR alias verification (same rule
-  # as the pure-imputation OR stage).
-  cohort_colmax_F <- vector("list", G)
-  if (n_blocks > 0L) {
-    for (ci in cat$active_cohorts) {
-      cmax <- numeric(p_or_raw)
-      if (p_or_raw > 0L) for (start in chunk_starts(ci)) {
-        Z_sl <- abs(X_F[chunk_rows(ci, start), slope_cols_F, drop = FALSE])
-        if (nrow(Z_sl) > 0L) cmax <- pmax(cmax, apply(Z_sl, 2L, max))
-      }
-      cohort_colmax_F[[ci]] <- cmax
-    }
-  }
+  s45a_fast <- if (can_fast_aug && !is.null(aug_panel)) {
+    cdid_ia_fast_aug_stage456(
+      1L, st, aug_panel, X_F, sel_fit, up_map, cat, recipe,
+      or_frame_index, trt_recipe, B_chunk, core$cells, groups,
+      q_of_cell, theta_ids, d_q
+    )
+  } else NULL
 
-  # The package-owned static pair reader may share one selection operation
-  # within numerical scans, never across the earlier imputation GLM or the
-  # OR fitter/visitor boundary. Other private/reference routes keep defaults.
   fit_op <- NULL
   fit_sources <- NULL
   fit_cell_worker <- augmented_cell_rows
   on.exit(if (!is.null(fit_op)) fit_op$abort(), add = TRUE)
-  if (is.null(lay) && is.null(reference) && is.null(pair_outcomes)) {
-    fit_op <- selection_prediction_operation(sel_fit, source_reader = reader)
-    fit_sources <- fit_op$sources
-    fit_pair_predictor <- function(sel_fit, rows, pair_cohort_id) fit_op$pair(rows, pair_cohort_id)
-    fit_log_derivative <- function(sel_fit, up_map, q, rows) fit_op$deriv(up_map, q, rows)
-    fit_cell_worker <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv = FALSE)
-      augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv,
-        pair_predictor = fit_pair_predictor, log_derivative = fit_log_derivative)
-  }
 
-  # S4. Augmentation scan per cell (link independent).
-  cells <- vector("list", n_cells)
-  for (cid in seq_len(n_cells)) {
-    cf <- core$cells[[cid]]
-    gf <- groups[[cf$group_id]]
-    cf$q_id <- q_of_cell[cid]
-    cf$theta_ids <- theta_ids[[cid]]
-    ci <- cf$cohort_index
-    a_k <- st$a[ci]
-    Y_aug <- 0
-    Y_aug_z <- numeric(p_or_raw)
-    MW_one <- 0
-    MW_d <- numeric(gf$p)
-    Rq_one <- numeric(d_q[cid])
-    n_obs <- 0
-    clip_c <- ipw_clip_summary(q = numeric(0), weights = numeric(0))
-    for (start in chunk_starts(ci)) {
-      rows <- chunk_rows(ci, start)
-      ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, TRUE)
-      w_syn <- st$w[rows] * a_k
-      Y_aug <- Y_aug + sum(w_syn * ev$Z)
-      if (p_or_raw > 0L) {
-        Y_aug_z <- Y_aug_z + as.vector(crossprod(w_syn * ev$Z, X_F[rows, slope_cols_F, drop = FALSE]))
-      }
-      ob <- ev$obs
-      if (length(ob)) {
-        w_pi <- w_syn[ob] * ev$pi
-        clip_c <- ipw_clip_summary_merge(clip_c, ipw_clip_summary(q = ev$q, weights = w_pi))
-        MW_one <- MW_one + sum(w_pi)
-        if (gf$p > 0L) {
-          MW_d <- MW_d + as.vector(crossprod(w_pi, cf$L * X_F[rows[ob], gf$kept_cols_F, drop = FALSE]))
+  if (!is.null(s45a_fast)) {
+    cohort_colmax_F <- s45a_fast$cohort_colmax_F
+    cells <- s45a_fast$cells
+  } else {
+    # Full-F cohort column maxima for the shared-OR alias verification (same rule
+    # as the pure-imputation OR stage).
+    cohort_colmax_F <- vector("list", G)
+    if (n_blocks > 0L) {
+      for (ci in cat$active_cohorts) {
+        cmax <- numeric(p_or_raw)
+        if (p_or_raw > 0L) for (start in chunk_starts(ci)) {
+          Z_sl <- abs(X_F[chunk_rows(ci, start), slope_cols_F, drop = FALSE])
+          if (nrow(Z_sl) > 0L) cmax <- pmax(cmax, apply(Z_sl, 2L, max))
         }
-        if (d_q[cid] > 0L) Rq_one <- Rq_one - as.vector(crossprod(w_pi * ev$e, ev$T_logit))
-        n_obs <- n_obs + length(ob)
+        cohort_colmax_F[[ci]] <- cmax
       }
     }
-    if (n_obs != cf$n_pair) {
-      augmented_abort(paste0("Observed-pair support of cell `", cf$name,
-        "` changed between the imputation fit and the augmentation scan."), "integrity")
+
+    # The package-owned static pair reader may share one selection operation
+    # within numerical scans, never across the earlier imputation GLM or the
+    # OR fitter/visitor boundary. Other private/reference routes keep defaults.
+    if (is.null(lay) && is.null(reference) && is.null(pair_outcomes)) {
+      fit_op <- selection_prediction_operation(sel_fit, source_reader = reader)
+      fit_sources <- fit_op$sources
+      fit_pair_predictor <- function(sel_fit, rows, pair_cohort_id) fit_op$pair(rows, pair_cohort_id)
+      fit_log_derivative <- function(sel_fit, up_map, q, rows) fit_op$deriv(up_map, q, rows)
+      fit_cell_worker <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv = FALSE)
+        augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv,
+          pair_predictor = fit_pair_predictor, log_derivative = fit_log_derivative)
     }
-    Y_aug <- Y_aug / N
-    Y_aug_z <- Y_aug_z / N
-    MW_one <- MW_one / N
-    MW_d <- MW_d / N
-    Rq_one <- Rq_one / N
-    names(Y_aug_z) <- recipe$slope_columns
-    names(MW_d) <- gf$kept_columns
-    MD_one <- cf$M_one - MW_one
-    MD_d <- as.double(cf$M_d_kept) - MW_d
-    names(MD_d) <- gf$kept_columns
-    cp04_finite(c(Y_aug, Y_aug_z, MW_one, MW_d, MD_one, MD_d, Rq_one), "augmented cell moments")
-    cells[[cid]] <- c(cf, list(
-      Yaug_one = Y_aug,
-      Yaug_z = Y_aug_z,
-      MW_one = MW_one,
-      MW_d = MW_d,
-      MD_one = MD_one,
-      MD_d = MD_d,
-      Rq_one = Rq_one,
-      clipping = clip_c
-    ))
+
+    # S4. Augmentation scan per cell (link independent).
+    cells <- vector("list", n_cells)
+    for (cid in seq_len(n_cells)) {
+      cf <- core$cells[[cid]]
+      gf <- groups[[cf$group_id]]
+      cf$q_id <- q_of_cell[cid]
+      cf$theta_ids <- theta_ids[[cid]]
+      ci <- cf$cohort_index
+      a_k <- st$a[ci]
+      Y_aug <- 0
+      Y_aug_z <- numeric(p_or_raw)
+      MW_one <- 0
+      MW_d <- numeric(gf$p)
+      Rq_one <- numeric(d_q[cid])
+      n_obs <- 0
+      clip_c <- ipw_clip_summary(q = numeric(0), weights = numeric(0))
+      for (start in chunk_starts(ci)) {
+        rows <- chunk_rows(ci, start)
+        ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, TRUE)
+        w_syn <- st$w[rows] * a_k
+        Y_aug <- Y_aug + sum(w_syn * ev$Z)
+        if (p_or_raw > 0L) {
+          Y_aug_z <- Y_aug_z + as.vector(crossprod(w_syn * ev$Z, X_F[rows, slope_cols_F, drop = FALSE]))
+        }
+        ob <- ev$obs
+        if (length(ob)) {
+          w_pi <- w_syn[ob] * ev$pi
+          clip_c <- ipw_clip_summary_merge(clip_c, ipw_clip_summary(q = ev$q, weights = w_pi))
+          MW_one <- MW_one + sum(w_pi)
+          if (gf$p > 0L) {
+            MW_d <- MW_d + as.vector(crossprod(w_pi, cf$L * X_F[rows[ob], gf$kept_cols_F, drop = FALSE]))
+          }
+          if (d_q[cid] > 0L) Rq_one <- Rq_one - as.vector(crossprod(w_pi * ev$e, ev$T_logit))
+          n_obs <- n_obs + length(ob)
+        }
+      }
+      if (n_obs != cf$n_pair) {
+        augmented_abort(paste0("Observed-pair support of cell `", cf$name,
+          "` changed between the imputation fit and the augmentation scan."), "integrity")
+      }
+      Y_aug <- Y_aug / N
+      Y_aug_z <- Y_aug_z / N
+      MW_one <- MW_one / N
+      MW_d <- MW_d / N
+      Rq_one <- Rq_one / N
+      names(Y_aug_z) <- recipe$slope_columns
+      names(MW_d) <- gf$kept_columns
+      MD_one <- cf$M_one - MW_one
+      MD_d <- as.double(cf$M_d_kept) - MW_d
+      names(MD_d) <- gf$kept_columns
+      cp04_finite(c(Y_aug, Y_aug_z, MW_one, MW_d, MD_one, MD_d, Rq_one), "augmented cell moments")
+      cells[[cid]] <- c(cf, list(
+        Yaug_one = Y_aug,
+        Yaug_z = Y_aug_z,
+        MW_one = MW_one,
+        MW_d = MW_d,
+        MD_one = MD_one,
+        MD_d = MD_d,
+        Rq_one = Rq_one,
+        clipping = clip_c
+      ))
+    }
   }
 
   # S5. Shared counterfactual OR on Z over every deduplicated block (roster
@@ -709,21 +811,26 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   kept_or_cols_F <- integer(0L)
   kept_or_names <- character(0L)
   beta_or <- numeric(0L)
+  s5b6_fast <- NULL
   if (n_blocks > 0L) {
   used_ctrl <- sort(unique(unlist(lapply(cat$or_blocks, `[[`, "control_cell_ids"))))
-  ctrl_acc <- vector("list", n_cells)
-  for (cid in used_ctrl) {
-    cf <- cells[[cid]]
-    gf <- groups[[cf$group_id]]
-    a_k <- st$a[cf$cohort_index]
-    acc <- or_pooled_support_start(recipe, cf$L)
-    for (start in chunk_starts(cf$cohort_index)) {
-      rows <- chunk_rows(cf$cohort_index, start)
-      ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, FALSE)
-      acc <- or_pooled_support_add(acc, recipe, X_F[rows, or_frame_index, drop = FALSE], ev$Z,
-        st$w[rows] * a_k, "augmented_or")
+  if (!is.null(s45a_fast)) {
+    ctrl_acc <- s45a_fast$ctrl_acc
+  } else {
+    ctrl_acc <- vector("list", n_cells)
+    for (cid in used_ctrl) {
+      cf <- cells[[cid]]
+      gf <- groups[[cf$group_id]]
+      a_k <- st$a[cf$cohort_index]
+      acc <- or_pooled_support_start(recipe, cf$L)
+      for (start in chunk_starts(cf$cohort_index)) {
+        rows <- chunk_rows(cf$cohort_index, start)
+        ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, FALSE)
+        acc <- or_pooled_support_add(acc, recipe, X_F[rows, or_frame_index, drop = FALSE], ev$Z,
+          st$w[rows] * a_k, "augmented_or")
+      }
+      ctrl_acc[[cid]] <- acc
     }
-    ctrl_acc[[cid]] <- acc
   }
   supports_or <- lapply(seq_len(n_cells), function(cid) {
     acc <- ctrl_acc[[cid]]
@@ -746,21 +853,34 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     fit_op$abort()
     fit_op <- NULL
   }
-  fit_or_fun <- if (separate_or) function(...) or_outcome_fit_blocks(..., mode = "separate") else or_pooled_fit_blocks
-  fit_or <- tryCatch(fit_or_fun(
-    recipe = recipe,
-    supports = supports_or,
-    blocks = blocks_or_spec,
-    links = links_or_spec,
-    rank_tol = rank_tol,
-    N = N,
-    visit_rows = visit_or_rows,
-    route = "augmented_or"
-  ), cdid_or_wls_rank_error = function(e) {
-    e$message <- paste0(conditionMessage(e), " This computation failure does not establish population ATT nonidentification.")
-    e$is_identifiability_claim <- FALSE
-    stop(e)
-  })
+  fit_or <- if (can_fast_aug) {
+    if (separate_or) {
+      cdid_ia_fast_or_outcome_fit_blocks(
+        recipe = recipe, supports = supports_or, blocks = blocks_or_spec,
+        links = links_or_spec, rank_tol = rank_tol, N = N,
+        route = "augmented_or", mode = "separate"
+      )
+    } else {
+      cdid_ia_fast_or_pooled_fit(recipe, supports_or, blocks_or_spec, rank_tol, N)
+    }
+  } else NULL
+  if (is.null(fit_or)) {
+    fit_or_fun <- if (separate_or) function(...) or_outcome_fit_blocks(..., mode = "separate") else or_pooled_fit_blocks
+    fit_or <- tryCatch(fit_or_fun(
+      recipe = recipe,
+      supports = supports_or,
+      blocks = blocks_or_spec,
+      links = links_or_spec,
+      rank_tol = rank_tol,
+      N = N,
+      visit_rows = visit_or_rows,
+      route = "augmented_or"
+    ), cdid_or_wls_rank_error = function(e) {
+      e$message <- paste0(conditionMessage(e), " This computation failure does not establish population ATT nonidentification.")
+      e$is_identifiability_claim <- FALSE
+      stop(e)
+    })
+  }
   if (!separate_or) {
   keep_or <- fit_or$keep
   p_or <- length(keep_or)
@@ -786,16 +906,16 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     q_beta_ids <- as.integer(sort(unique(c(integer(0L), unlist(theta_ids[used_ctrl])))))
     q_beta <- matrix(0.0, p_or, length(q_beta_ids))
   }
-  or_block_fits <- vector("list", n_blocks)
+  block_specs_aug_fast <- vector("list", n_blocks)
   for (bid in seq_len(n_blocks)) {
     b_spec <- cat$or_blocks[[bid]]
     if (separate_or) {
       local_or <- fit_or$groups[[bid]]
       keep_or <- local_or$keep; p_or <- length(keep_or)
-      kept_or_cols_F <- slope_cols_F[keep_or]; kept_or_names <- recipe$slope_columns[keep_or]
-      beta_or <- local_or$beta
+      kept_or_cols_F <- if (p_or > 0L) slope_cols_F[keep_or] else integer(0L)
+      kept_or_names <- if (p_or > 0L) recipe$slope_columns[keep_or] else character(0L)
+      beta_or <- as.double(local_or$beta)
       q_beta_ids <- as.integer(sort(unique(c(integer(0L), unlist(theta_ids[b_spec$control_cell_ids])))))
-      q_beta <- matrix(0, p_or, length(q_beta_ids))
     }
     reg_b <- if (separate_or) local_or$regressions[[1L]] else fit_or$regressions[[bid]]
     cids_b <- b_spec$control_cell_ids
@@ -807,66 +927,121 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     mean_d_b <- if (recipe$intercept && p_or > 0L) as.double(reg_b$mean_d) else numeric(p_or)
     names(mean_d_b) <- kept_or_names
     alpha_b <- if (recipe$intercept) as.double(reg_b$alpha) else 0.0
+    q_alpha_ids <- as.integer(sort(unique(c(integer(0L), unlist(theta_ids[cids_b])))))
+    block_specs_aug_fast[[bid]] <- list(
+      kept_or_cols_F = as.integer(kept_or_cols_F),
+      kept_or_names = kept_or_names,
+      beta_or = as.double(beta_or),
+      alpha_b = alpha_b,
+      mean_d_b = mean_d_b,
+      mass_b = mass_b,
+      w_sum_b = w_sum_b,
+      q_alpha_ids = q_alpha_ids,
+      q_beta_ids = q_beta_ids
+    )
+  }
+
+  if (!is.null(s45a_fast)) {
+    s5b6_fast <- cdid_ia_fast_aug_stage456(
+      2L, st, aug_panel, X_F, sel_fit, up_map, cat, recipe,
+      or_frame_index, trt_recipe, B_chunk, cells, groups,
+      q_of_cell, theta_ids, d_q,
+      cell_ev_cache = s45a_fast$cell_ev_cache,
+      block_specs = block_specs_aug_fast,
+      trt_fits = treatments,
+      separate_or = separate_or
+    )
+  }
+
+  or_block_fits <- vector("list", n_blocks)
+  for (bid in seq_len(n_blocks)) {
+    b_spec <- cat$or_blocks[[bid]]
+    bs_f <- block_specs_aug_fast[[bid]]
+    kept_or_cols_F <- bs_f$kept_or_cols_F
+    kept_or_names <- bs_f$kept_or_names
+    beta_or <- bs_f$beta_or
+    names(beta_or) <- kept_or_names
+    p_or <- length(beta_or)
+    alpha_b <- bs_f$alpha_b
+    mean_d_b <- bs_f$mean_d_b
+    mass_b <- bs_f$mass_b
+    w_sum_b <- bs_f$w_sum_b
+    q_alpha_ids <- bs_f$q_alpha_ids
+    q_beta_ids <- bs_f$q_beta_ids
+    cids_b <- b_spec$control_cell_ids
     L_b <- b_spec$L
     n_kb <- length(cids_b)
-    a_force_alpha <- numeric(n_kb)
-    a_force_beta <- matrix(0.0, p_or, n_kb)
-    j_force_alpha_alpha <- numeric(n_kb)
-    j_force_alpha_beta <- vector("list", n_kb)
-    j_force_beta_alpha <- matrix(0.0, p_or, n_kb)
-    j_force_beta_beta <- vector("list", n_kb)
-    q_alpha_ids <- as.integer(sort(unique(c(integer(0L), unlist(theta_ids[cids_b])))))
-    q_alpha <- numeric(length(q_alpha_ids))
 
-    for (idx_k in seq_len(n_kb)) {
-      cid <- cids_b[idx_k]
-      cf <- cells[[cid]]
-      gf <- groups[[cf$group_id]]
-      a_k <- st$a[cf$cohort_index]
-      sum_w_r <- 0
-      sum_w_r_dtilde <- numeric(p_or)
-      sum_wD_dtilde <- numeric(p_or)
-      sum_wD_dtilde_dimp <- matrix(0.0, p_or, gf$p)
-      Rq_dtilde <- matrix(0.0, p_or, d_q[cid])
-      for (start in chunk_starts(cf$cohort_index)) {
-        rows <- chunk_rows(cf$cohort_index, start)
-        n_r <- length(rows)
-        ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, p_or > 0L)
-        w_raw <- st$w[rows]
-        w_syn <- w_raw * a_k
-        d_or <- if (p_or > 0L) L_b * X_F[rows, kept_or_cols_F, drop = FALSE] else matrix(0.0, n_r, 0L)
-        mhat <- if (p_or > 0L) alpha_b + as.vector(d_or %*% beta_or) else rep(alpha_b, n_r)
-        r_or <- ev$Z - mhat
-        sum_w_r <- sum_w_r + sum(w_raw * r_or)
-        if (p_or > 0L) {
-          one_minus_pi <- rep(1, n_r)
-          if (length(ev$obs)) one_minus_pi[ev$obs] <- 1 - ev$pi
-          w_D <- w_syn * one_minus_pi
-          d_tilde <- if (recipe$intercept) sweep(d_or, 2L, mean_d_b, FUN = "-") else d_or
-          sum_w_r_dtilde <- sum_w_r_dtilde + as.vector(crossprod(w_raw * r_or, d_tilde))
-          sum_wD_dtilde <- sum_wD_dtilde + as.vector(crossprod(w_D, d_tilde))
-          if (gf$p > 0L) {
-            d_imp <- L_b * X_F[rows, gf$kept_cols_F, drop = FALSE]
-            sum_wD_dtilde_dimp <- sum_wD_dtilde_dimp + crossprod(w_D * d_tilde, d_imp)
-          }
-          if (length(ev$obs) && d_q[cid] > 0L) {
-            Rq_dtilde <- Rq_dtilde - crossprod(
-              d_tilde[ev$obs, , drop = FALSE] * (w_syn[ev$obs] * ev$pi * ev$e), ev$T_logit)
+    if (!is.null(s5b6_fast) && !is.null(s5b6_fast$block_forcing)) {
+      bf_c <- s5b6_fast$block_forcing[[bid]]
+      a_force_alpha <- bf_c$a_force_alpha
+      a_force_beta <- bf_c$a_force_beta
+      j_force_alpha_alpha <- bf_c$j_force_alpha_alpha
+      j_force_alpha_beta <- bf_c$j_force_alpha_beta
+      j_force_beta_alpha <- bf_c$j_force_beta_alpha
+      j_force_beta_beta <- bf_c$j_force_beta_beta
+      q_alpha <- bf_c$q_alpha
+      if (separate_or) q_beta <- bf_c$q_beta
+    } else {
+      if (separate_or) q_beta <- matrix(0, p_or, length(q_beta_ids))
+      a_force_alpha <- numeric(n_kb)
+      a_force_beta <- matrix(0.0, p_or, n_kb)
+      j_force_alpha_alpha <- numeric(n_kb)
+      j_force_alpha_beta <- vector("list", n_kb)
+      j_force_beta_alpha <- matrix(0.0, p_or, n_kb)
+      j_force_beta_beta <- vector("list", n_kb)
+      q_alpha <- numeric(length(q_alpha_ids))
+
+      for (idx_k in seq_len(n_kb)) {
+        cid <- cids_b[idx_k]
+        cf <- cells[[cid]]
+        gf <- groups[[cf$group_id]]
+        a_k <- st$a[cf$cohort_index]
+        sum_w_r <- 0
+        sum_w_r_dtilde <- numeric(p_or)
+        sum_wD_dtilde <- numeric(p_or)
+        sum_wD_dtilde_dimp <- matrix(0.0, p_or, gf$p)
+        Rq_dtilde <- matrix(0.0, p_or, d_q[cid])
+        for (start in chunk_starts(cf$cohort_index)) {
+          rows <- chunk_rows(cf$cohort_index, start)
+          n_r <- length(rows)
+          ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, p_or > 0L)
+          w_raw <- st$w[rows]
+          w_syn <- w_raw * a_k
+          d_or <- if (p_or > 0L) L_b * X_F[rows, kept_or_cols_F, drop = FALSE] else matrix(0.0, n_r, 0L)
+          mhat <- if (p_or > 0L) alpha_b + as.vector(d_or %*% beta_or) else rep(alpha_b, n_r)
+          r_or <- ev$Z - mhat
+          sum_w_r <- sum_w_r + sum(w_raw * r_or)
+          if (p_or > 0L) {
+            one_minus_pi <- rep(1, n_r)
+            if (length(ev$obs)) one_minus_pi[ev$obs] <- 1 - ev$pi
+            w_D <- w_syn * one_minus_pi
+            d_tilde <- if (recipe$intercept) sweep(d_or, 2L, mean_d_b, FUN = "-") else d_or
+            sum_w_r_dtilde <- sum_w_r_dtilde + as.vector(crossprod(w_raw * r_or, d_tilde))
+            sum_wD_dtilde <- sum_wD_dtilde + as.vector(crossprod(w_D, d_tilde))
+            if (gf$p > 0L) {
+              d_imp <- L_b * X_F[rows, gf$kept_cols_F, drop = FALSE]
+              sum_wD_dtilde_dimp <- sum_wD_dtilde_dimp + crossprod(w_D * d_tilde, d_imp)
+            }
+            if (length(ev$obs) && d_q[cid] > 0L) {
+              Rq_dtilde <- Rq_dtilde - crossprod(
+                d_tilde[ev$obs, , drop = FALSE] * (w_syn[ev$obs] * ev$pi * ev$e), ev$T_logit)
+            }
           }
         }
-      }
-      a_force_alpha[idx_k] <- sum_w_r / N
-      a_force_beta[, idx_k] <- sum_w_r_dtilde / N
-      j_force_alpha_alpha[idx_k] <- if (recipe$intercept) cf$MD_one else 0.0
-      j_force_alpha_beta[[idx_k]] <- as.double(cf$MD_d)
-      j_force_beta_alpha[, idx_k] <- if (recipe$intercept) (sum_wD_dtilde / N) else numeric(p_or)
-      j_force_beta_beta[[idx_k]] <- sum_wD_dtilde_dimp / N
-      if (d_q[cid] > 0L) {
-        pos <- match(cf$theta_ids, q_alpha_ids)
-        q_alpha[pos] <- q_alpha[pos] - cf$Rq_one
-        if (p_or > 0L) {
-          gpos <- match(cf$theta_ids, q_beta_ids)
-          q_beta[, gpos] <- q_beta[, gpos, drop = FALSE] - Rq_dtilde / N
+        a_force_alpha[idx_k] <- sum_w_r / N
+        a_force_beta[, idx_k] <- sum_w_r_dtilde / N
+        j_force_alpha_alpha[idx_k] <- if (recipe$intercept) cf$MD_one else 0.0
+        j_force_alpha_beta[[idx_k]] <- as.double(cf$MD_d)
+        j_force_beta_alpha[, idx_k] <- if (recipe$intercept) (sum_wD_dtilde / N) else numeric(p_or)
+        j_force_beta_beta[[idx_k]] <- sum_wD_dtilde_dimp / N
+        if (d_q[cid] > 0L) {
+          pos <- match(cf$theta_ids, q_alpha_ids)
+          q_alpha[pos] <- q_alpha[pos] - cf$Rq_one
+          if (p_or > 0L) {
+            gpos <- match(cf$theta_ids, q_beta_ids)
+            q_beta[, gpos] <- q_beta[, gpos, drop = FALSE] - Rq_dtilde / N
+          }
         }
       }
     }
@@ -898,6 +1073,9 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
       cp04_finite(q_beta, "augmented block-local selection forcing")
     }
   }
+  if (!separate_or && !is.null(s5b6_fast) && !is.null(s5b6_fast$q_beta_global)) {
+    q_beta <- s5b6_fast$q_beta_global
+  }
   if (separate_or) {
     shared_or <- list(outcome_pooling = "separate", n_blocks = as.integer(n_blocks), blocks = or_block_fits,
       outcome_groups = fit_or, slope_cols_F = slope_cols_F, rss = fit_or$rss, objective = fit_or$objective)
@@ -925,46 +1103,88 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     objective = fit_or$objective
   )
   }
+  } else if (!is.null(s45a_fast) && !is.null(treatments)) {
+    s5b6_fast <- cdid_ia_fast_aug_stage456(
+      2L, st, aug_panel, X_F, sel_fit, up_map, cat, recipe,
+      or_frame_index, trt_recipe, B_chunk, cells, groups,
+      q_of_cell, theta_ids, d_q,
+      cell_ev_cache = s45a_fast$cell_ev_cache,
+      block_specs = NULL,
+      trt_fits = treatments,
+      separate_or = FALSE
+    )
   }
+  s45a_fast <- NULL # release cached per-cell evaluation payloads if any
 
   # S6. Links: augmented T/C numerators, unchanged normalizers, M^Delta adjoint
   # weights and merged selection loadings over the theta coordinates.
   zero_adjoints <- vector("list", n_groups)
-  solve_adjoint <- function(lambda_vec, nu_list, structural_cids) {
-    active_groups <- unique(vapply(cells[structural_cids], `[[`, integer(1L), "group_id"))
-    tilde_lambda <- numeric(n_cells)
-    tilde_nu <- vector("list", n_groups)
-    for (gid in seq_len(n_groups)) {
-      gf <- groups[[gid]]
-      cached <- reconstruction_zero_template(zero_adjoints, gid, gid %in% active_groups, gf, cells, N)
-      if (!is.null(cached)) {
-        tilde_lambda[gf$cell_ids] <- cached$lambda
-        tilde_nu[[gid]] <- cached$nu
-        next
-      }
-      rhs_r <- numeric(gf$p)
-      for (cid in gf$cell_ids) {
-        cf <- cells[[cid]]
-        lam_c <- if (recipe$intercept) lambda_vec[cid] else 0.0
-        if (recipe$intercept) tilde_lambda[cid] <- lam_c / cf$mass
-        if (gf$p > 0L) rhs_r <- rhs_r + nu_list[[cid]] - lam_c * cf$mean_d
-      }
-      if (gf$p > 0L) {
-        rhs_mat <- matrix(rhs_r, nrow = gf$p, ncol = 1L)
-        sol <- if (recipe$intercept) {
-          or_pooled_wls_gram_solve(gf$fit, rhs_mat, normalizer = N)
-        } else {
-          or_wls_gram_solve(gf$fit, rhs_mat, normalizer = N)
+  if (can_fast_aug) {
+    zero_tilde_nu <- lapply(groups, function(gf) numeric(gf$p))
+    solve_adjoint <- function(lambda_vec, nu_list, structural_cids) {
+      active_groups <- unique(vapply(cells[structural_cids], `[[`, integer(1L), "group_id"))
+      tilde_lambda <- numeric(n_cells)
+      tilde_nu <- zero_tilde_nu
+      for (gid in active_groups) {
+        gf <- groups[[gid]]
+        rhs_r <- numeric(gf$p)
+        for (cid in gf$cell_ids) {
+          cf <- cells[[cid]]
+          lam_c <- if (recipe$intercept) lambda_vec[cid] else 0.0
+          if (recipe$intercept) tilde_lambda[cid] <- lam_c / cf$mass
+          if (gf$p > 0L) rhs_r <- rhs_r + nu_list[[cid]] - lam_c * cf$mean_d
         }
-        tilde_nu[[gid]] <- as.double(sol[, 1L])
-      } else {
-        tilde_nu[[gid]] <- numeric(0L)
+        if (gf$p > 0L) {
+          rhs_mat <- matrix(rhs_r, nrow = gf$p, ncol = 1L)
+          sol <- if (recipe$intercept) {
+            or_pooled_wls_gram_solve(gf$fit, rhs_mat, normalizer = N)
+          } else {
+            or_wls_gram_solve(gf$fit, rhs_mat, normalizer = N)
+          }
+          tilde_nu[[gid]] <- as.double(sol[, 1L])
+        } else {
+          tilde_nu[[gid]] <- numeric(0L)
+        }
       }
-      if (!gid %in% active_groups) zero_adjoints[[gid]] <<- list(
-        lambda = tilde_lambda[gf$cell_ids], nu = tilde_nu[[gid]],
-        group = gf, cells = cells[gf$cell_ids], N = N)
+      reconstruction_pack_plain_adjoint(tilde_lambda, tilde_nu, structural_cids, cells)
     }
-    reconstruction_pack_plain_adjoint(tilde_lambda, tilde_nu, structural_cids, cells)
+  } else {
+    solve_adjoint <- function(lambda_vec, nu_list, structural_cids) {
+      active_groups <- unique(vapply(cells[structural_cids], `[[`, integer(1L), "group_id"))
+      tilde_lambda <- numeric(n_cells)
+      tilde_nu <- vector("list", n_groups)
+      for (gid in seq_len(n_groups)) {
+        gf <- groups[[gid]]
+        cached <- reconstruction_zero_template(zero_adjoints, gid, gid %in% active_groups, gf, cells, N)
+        if (!is.null(cached)) {
+          tilde_lambda[gf$cell_ids] <- cached$lambda
+          tilde_nu[[gid]] <- cached$nu
+          next
+        }
+        rhs_r <- numeric(gf$p)
+        for (cid in gf$cell_ids) {
+          cf <- cells[[cid]]
+          lam_c <- if (recipe$intercept) lambda_vec[cid] else 0.0
+          if (recipe$intercept) tilde_lambda[cid] <- lam_c / cf$mass
+          if (gf$p > 0L) rhs_r <- rhs_r + nu_list[[cid]] - lam_c * cf$mean_d
+        }
+        if (gf$p > 0L) {
+          rhs_mat <- matrix(rhs_r, nrow = gf$p, ncol = 1L)
+          sol <- if (recipe$intercept) {
+            or_pooled_wls_gram_solve(gf$fit, rhs_mat, normalizer = N)
+          } else {
+            or_wls_gram_solve(gf$fit, rhs_mat, normalizer = N)
+          }
+          tilde_nu[[gid]] <- as.double(sol[, 1L])
+        } else {
+          tilde_nu[[gid]] <- numeric(0L)
+        }
+        if (!gid %in% active_groups) zero_adjoints[[gid]] <<- list(
+          lambda = tilde_lambda[gf$cell_ids], nu = tilde_nu[[gid]],
+          group = gf, cells = cells[gf$cell_ids], N = N)
+      }
+      reconstruction_pack_plain_adjoint(tilde_lambda, tilde_nu, structural_cids, cells)
+    }
   }
   zero_loadings <- function() lapply(cells, function(cf) numeric(groups[[cf$group_id]]$p))
 
@@ -1037,80 +1257,99 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
     if (!is.null(treatments)) {
       tfit <- treatments[[lk$trt_id]]
       n_ctrl <- length(lk$control_cohort_indices)
-      sum_wm <- 0
-      sum_wm_Z <- 0
-      sum_wm_m <- 0
-      sum_wm_dor <- numeric(p_or)
-      sum_wm_by_k <- numeric(n_ctrl)
-      sum_w_odds_Z_by_k <- numeric(n_ctrl)
-      sum_w_odds_by_k <- numeric(n_ctrl)
-      sum_w_odds_m_by_k <- numeric(n_ctrl)
-      sum_wdot_Z_X <- numeric(p_trt)
-      sum_wdot_X <- numeric(p_trt)
-      sum_wdot_m_X <- numeric(p_trt)
-      lam_C_k <- numeric(n_ctrl)
-      nu_C_k <- vector("list", n_ctrl)
-      sel_C_ids <- as.integer(sort(unique(c(integer(0L), unlist(lapply(lk$control_cell_ids,
-        function(cid) cells[[cid]]$theta_ids))))))
-      sel_C <- numeric(length(sel_C_ids))
-      for (idx_k in seq_len(n_ctrl)) {
-        ci_k <- lk$control_cohort_indices[idx_k]
-        cid_k <- lk$control_cell_ids[idx_k]
-        cf_k <- cells[[cid_k]]
-        gf_k <- groups[[cf_k$group_id]]
-        a_k <- st$a[ci_k]
-        sum_wmD_k <- 0
-        sum_dimpD_k <- numeric(gf_k$p)
-        Rq_o_k <- numeric(d_q[cid_k])
-        for (start in chunk_starts(ci_k)) {
-          rows <- chunk_rows(ci_k, start)
-          n_r <- length(rows)
-          w_raw <- st$w[rows]
-          w_syn <- w_raw * a_k
-          X_trt_rows <- X_F[rows, trt_cols_F, drop = FALSE]
-          lv_t <- ipw_logit_values(X_trt_rows, tfit$coefficients)
-          odds <- lv_t$odds
-          wm <- w_syn * odds
-          # Odds derivative rows: wm on active rows, zero where the cap binds.
-          wdot <- wm * lv_t$active
-          ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf_k, gf_k, rows, TRUE)
-          Z_rows <- ev$Z
-          one_minus_pi <- rep(1, n_r)
-          if (length(ev$obs)) one_minus_pi[ev$obs] <- 1 - ev$pi
-          wmD <- wm * one_minus_pi
-          sum_wm <- sum_wm + sum(wm)
-          sum_wm_Z <- sum_wm_Z + sum(wm * Z_rows)
-          sum_wm_by_k[idx_k] <- sum_wm_by_k[idx_k] + sum(wm)
-          sum_wmD_k <- sum_wmD_k + sum(wmD)
-          if (gf_k$p > 0L) {
-            sum_dimpD_k <- sum_dimpD_k +
-              as.vector(crossprod(wmD, lk$L * X_F[rows, gf_k$kept_cols_F, drop = FALSE]))
-          }
-          sum_w_odds_Z_by_k[idx_k] <- sum_w_odds_Z_by_k[idx_k] + sum(w_raw * odds * Z_rows)
-          sum_w_odds_by_k[idx_k] <- sum_w_odds_by_k[idx_k] + sum(w_raw * odds)
-          sum_wdot_Z_X <- sum_wdot_Z_X + as.vector(crossprod(wdot * Z_rows, X_trt_rows))
-          sum_wdot_X <- sum_wdot_X + as.vector(crossprod(wdot, X_trt_rows))
-          if (!is.null(shared_or)) {
-            d_or <- if (p_or > 0L) lk$L * X_F[rows, kept_or_cols_F, drop = FALSE] else matrix(0.0, n_r, 0L)
-            mhat <- if (p_or > 0L) {
-              (if (recipe$intercept) b_fit$alpha else 0.0) + as.vector(d_or %*% beta_or)
-            } else {
-              rep(if (recipe$intercept) b_fit$alpha else 0.0, n_r)
+      if (!is.null(s5b6_fast) && !is.null(s5b6_fast$link_ctrl)) {
+        lc_c <- s5b6_fast$link_ctrl[[ell]]
+        sum_wm <- lc_c$sum_wm
+        sum_wm_Z <- lc_c$sum_wm_Z
+        sum_wm_m <- lc_c$sum_wm_m
+        sum_wm_dor <- lc_c$sum_wm_dor
+        sum_wm_by_k <- lc_c$sum_wm_by_k
+        sum_w_odds_Z_by_k <- lc_c$sum_w_odds_Z_by_k
+        sum_w_odds_by_k <- lc_c$sum_w_odds_by_k
+        sum_w_odds_m_by_k <- lc_c$sum_w_odds_m_by_k
+        sum_wdot_Z_X <- lc_c$sum_wdot_Z_X
+        sum_wdot_X <- lc_c$sum_wdot_X
+        sum_wdot_m_X <- lc_c$sum_wdot_m_X
+        lam_C_k <- lc_c$lam_C_k
+        nu_C_k <- lc_c$nu_C_k
+        sel_C_ids <- lc_c$sel_C_ids
+        sel_C <- lc_c$sel_C
+      } else {
+        sum_wm <- 0
+        sum_wm_Z <- 0
+        sum_wm_m <- 0
+        sum_wm_dor <- numeric(p_or)
+        sum_wm_by_k <- numeric(n_ctrl)
+        sum_w_odds_Z_by_k <- numeric(n_ctrl)
+        sum_w_odds_by_k <- numeric(n_ctrl)
+        sum_w_odds_m_by_k <- numeric(n_ctrl)
+        sum_wdot_Z_X <- numeric(p_trt)
+        sum_wdot_X <- numeric(p_trt)
+        sum_wdot_m_X <- numeric(p_trt)
+        lam_C_k <- numeric(n_ctrl)
+        nu_C_k <- vector("list", n_ctrl)
+        sel_C_ids <- as.integer(sort(unique(c(integer(0L), unlist(lapply(lk$control_cell_ids,
+          function(cid) cells[[cid]]$theta_ids))))))
+        sel_C <- numeric(length(sel_C_ids))
+        for (idx_k in seq_len(n_ctrl)) {
+          ci_k <- lk$control_cohort_indices[idx_k]
+          cid_k <- lk$control_cell_ids[idx_k]
+          cf_k <- cells[[cid_k]]
+          gf_k <- groups[[cf_k$group_id]]
+          a_k <- st$a[ci_k]
+          sum_wmD_k <- 0
+          sum_dimpD_k <- numeric(gf_k$p)
+          Rq_o_k <- numeric(d_q[cid_k])
+          for (start in chunk_starts(ci_k)) {
+            rows <- chunk_rows(ci_k, start)
+            n_r <- length(rows)
+            w_raw <- st$w[rows]
+            w_syn <- w_raw * a_k
+            X_trt_rows <- X_F[rows, trt_cols_F, drop = FALSE]
+            lv_t <- ipw_logit_values(X_trt_rows, tfit$coefficients)
+            odds <- lv_t$odds
+            wm <- w_syn * odds
+            # Odds derivative rows: wm on active rows, zero where the cap binds.
+            wdot <- wm * lv_t$active
+            ev <- fit_cell_worker(sel_fit, up_map, X_F, pair_reader, cf_k, gf_k, rows, TRUE)
+            Z_rows <- ev$Z
+            one_minus_pi <- rep(1, n_r)
+            if (length(ev$obs)) one_minus_pi[ev$obs] <- 1 - ev$pi
+            wmD <- wm * one_minus_pi
+            sum_wm <- sum_wm + sum(wm)
+            sum_wm_Z <- sum_wm_Z + sum(wm * Z_rows)
+            sum_wm_by_k[idx_k] <- sum_wm_by_k[idx_k] + sum(wm)
+            sum_wmD_k <- sum_wmD_k + sum(wmD)
+            if (gf_k$p > 0L) {
+              sum_dimpD_k <- sum_dimpD_k +
+                as.vector(crossprod(wmD, lk$L * X_F[rows, gf_k$kept_cols_F, drop = FALSE]))
             }
-            sum_wm_m <- sum_wm_m + sum(wm * mhat)
-            if (p_or > 0L) sum_wm_dor <- sum_wm_dor + as.vector(crossprod(wm, d_or))
-            sum_w_odds_m_by_k[idx_k] <- sum_w_odds_m_by_k[idx_k] + sum(w_raw * odds * mhat)
-            sum_wdot_m_X <- sum_wdot_m_X + as.vector(crossprod(wdot * mhat, X_trt_rows))
+            sum_w_odds_Z_by_k[idx_k] <- sum_w_odds_Z_by_k[idx_k] + sum(w_raw * odds * Z_rows)
+            sum_w_odds_by_k[idx_k] <- sum_w_odds_by_k[idx_k] + sum(w_raw * odds)
+            sum_wdot_Z_X <- sum_wdot_Z_X + as.vector(crossprod(wdot * Z_rows, X_trt_rows))
+            sum_wdot_X <- sum_wdot_X + as.vector(crossprod(wdot, X_trt_rows))
+            if (!is.null(shared_or)) {
+              d_or <- if (p_or > 0L) lk$L * X_F[rows, kept_or_cols_F, drop = FALSE] else matrix(0.0, n_r, 0L)
+              mhat <- if (p_or > 0L) {
+                (if (recipe$intercept) b_fit$alpha else 0.0) + as.vector(d_or %*% beta_or)
+              } else {
+                rep(if (recipe$intercept) b_fit$alpha else 0.0, n_r)
+              }
+              sum_wm_m <- sum_wm_m + sum(wm * mhat)
+              if (p_or > 0L) sum_wm_dor <- sum_wm_dor + as.vector(crossprod(wm, d_or))
+              sum_w_odds_m_by_k[idx_k] <- sum_w_odds_m_by_k[idx_k] + sum(w_raw * odds * mhat)
+              sum_wdot_m_X <- sum_wdot_m_X + as.vector(crossprod(wdot * mhat, X_trt_rows))
+            }
+            if (length(ev$obs) && d_q[cid_k] > 0L) {
+              Rq_o_k <- Rq_o_k - as.vector(crossprod(wm[ev$obs] * ev$pi * ev$e, ev$T_logit))
+            }
           }
-          if (length(ev$obs) && d_q[cid_k] > 0L) {
-            Rq_o_k <- Rq_o_k - as.vector(crossprod(wm[ev$obs] * ev$pi * ev$e, ev$T_logit))
+          lam_C_k[idx_k] <- sum_wmD_k
+          nu_C_k[[idx_k]] <- sum_dimpD_k
+          if (d_q[cid_k] > 0L) {
+            pos <- match(cf_k$theta_ids, sel_C_ids)
+            sel_C[pos] <- sel_C[pos] - Rq_o_k
           }
-        }
-        lam_C_k[idx_k] <- sum_wmD_k
-        nu_C_k[[idx_k]] <- sum_dimpD_k
-        if (d_q[cid_k] > 0L) {
-          pos <- match(cf_k$theta_ids, sel_C_ids)
-          sel_C[pos] <- sel_C[pos] - Rq_o_k
         }
       }
       d_minus <- sum_wm / N
@@ -1139,12 +1378,14 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
         g_dr_gamma <- g_C_gamma - g_Bo_gamma
         names(g_Bo_gamma) <- names(g_dr_gamma) <- trt_recipe$columns
       }
-      lam_C_vec <- numeric(n_cells)
-      nu_C_list <- zero_loadings()
-      for (idx_k in seq_len(n_ctrl)) {
-        cid_k <- lk$control_cell_ids[idx_k]
-        if (recipe$intercept) lam_C_vec[cid_k] <- lam_C_vec[cid_k] + lam_C_k[idx_k]
-        nu_C_list[[cid_k]] <- nu_C_list[[cid_k]] + nu_C_k[[idx_k]]
+      if (!can_fast_aug) {
+        lam_C_vec <- numeric(n_cells)
+        nu_C_list <- zero_loadings()
+        for (idx_k in seq_len(n_ctrl)) {
+          cid_k <- lk$control_cell_ids[idx_k]
+          if (recipe$intercept) lam_C_vec[cid_k] <- lam_C_vec[cid_k] + lam_C_k[idx_k]
+          nu_C_list[[cid_k]] <- nu_C_list[[cid_k]] + nu_C_k[[idx_k]]
+        }
       }
     }
 
@@ -1169,13 +1410,30 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
       cp04_finite(c(mu_or), "augmented link OR summary")
     }
 
-    lam_T_vec <- numeric(n_cells)
-    nu_T_list <- zero_loadings()
-    if (recipe$intercept) lam_T_vec[lk$target_cell_id] <- lam_T
-    nu_T_list[[lk$target_cell_id]] <- as.double(nu_T)
+    if (can_fast_aug) {
+      adj_T <- cdid_ia_solve_adjoint_fast(
+        groups, cells, n_cells, N, recipe$intercept,
+        zero_tilde_nu, lk$target_cell_id,
+        if (recipe$intercept) lam_T else 0.0,
+        list(as.double(nu_T))
+      )
+      adj_C <- if (!is.null(treatments)) {
+        cdid_ia_solve_adjoint_fast(
+          groups, cells, n_cells, N, recipe$intercept,
+          zero_tilde_nu, lk$control_cell_ids,
+          if (recipe$intercept) lam_C_k else numeric(length(lk$control_cell_ids)),
+          nu_C_k
+        )
+      } else NULL
+    } else {
+      lam_T_vec <- numeric(n_cells)
+      nu_T_list <- zero_loadings()
+      if (recipe$intercept) lam_T_vec[lk$target_cell_id] <- lam_T
+      nu_T_list[[lk$target_cell_id]] <- as.double(nu_T)
 
-    adj_T <- solve_adjoint(lam_T_vec, nu_T_list, lk$target_cell_id)
-    adj_C <- if (!is.null(treatments)) solve_adjoint(lam_C_vec, nu_C_list, lk$control_cell_ids) else NULL
+      adj_T <- solve_adjoint(lam_T_vec, nu_T_list, lk$target_cell_id)
+      adj_C <- if (!is.null(treatments)) solve_adjoint(lam_C_vec, nu_C_list, lk$control_cell_ids) else NULL
+    }
 
     link_fields <- if (est_method == "dr") {
       list(
@@ -1280,12 +1538,22 @@ fit_augmented_backend <- function(reader, link_views, control, glm_control, rank
   obj$accounting$owned_entries <- actual
   obj$accounting$character_bytes <- unname(payload["char_bytes"])
   if (!is.null(fit_op)) fit_op$finish()
-  ipw_owner_seal(obj, "augmented_backend")
+  sealed <- cdid_fast_seal(obj, "augmented_backend")
+  if (is.null(reference) && is.null(lay)) {
+    cdid_ia_record_validated_aug_backend(
+      sealed, reader, frame,
+      get("panel_owner", reader$panel_ref, inherits = FALSE),
+      sel_fit,
+      if (!is.null(design_owner)) design_owner else des$d_owner
+    )
+  }
+  sealed
 }
 
 fit_chained_augmented <- fit_augmented_backend
 
 validate_augmented_backend <- function(backend) {
+  if (cdid_ia_check_validated_aug_backend(backend)) return(invisible(backend))
   if (!inherits(backend, "cdid_augmented_backend") ||
       !ipw_owner_seal_ok(backend, "augmented_backend")) {
     augmented_abort("Expected the immutable sealed augmented observation-correction backend (`cdid_augmented_backend`).",
@@ -1384,6 +1652,32 @@ augmented_if_needed_sets <- function(backend, links, details = FALSE) {
 augmented_if_envelope <- function(backend, B, links = seq_along(backend$links), details = FALSE) {
   validate_augmented_backend(backend)
   if (reconstruction_separate(backend$shared_or)) return(reconstruction_if_envelope(backend, B, links, details, augmented = TRUE))
+  can_cache_env <- !details && is.null(attributes(links)) && is.null(backend$layout) &&
+    is.null(backend$reference_ref) &&
+    identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+    cdid_are_default_fns(c("selection_if_budget", "reconstruction_score_cache_plan",
+      "reconstruction_ordinary_if_envelope", "augmented_if_needed_sets"))
+  c_env_map <- if (can_cache_env) cdid_ia_get_env_cache(backend, augmented = TRUE) else NULL
+  env_key <- NULL
+  if (!is.null(c_env_map)) {
+    nl_req <- length(links)
+    if (nl_req == 1L && B == 1L) {
+      env_key <- paste0("ae1_", as.integer(links[1L]))
+    } else if (nl_req == length(backend$links) && identical(as.integer(links), seq_along(backend$links))) {
+      env_key <- paste0("aea_", as.integer(B))
+    }
+    if (!is.null(env_key)) {
+      hit <- get0(env_key, envir = c_env_map, inherits = FALSE)
+      if (!is.null(hit)) return(hit)
+    }
+  }
+  cache_slot <- if (can_cache_env) {
+    if (B == 1) "aug_env_1" else if (B == 2) "aug_env_2" else "aug_env_B"
+  } else NULL
+  if (!is.null(cache_slot)) {
+    c_env <- cdid_get_if_chunk_meta(backend, B, links, cache_slot)
+    if (!is.null(c_env)) return(c_env$pre)
+  }
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state
   # The retained layout matrix holds all recipe copies of the original rows,
@@ -1438,6 +1732,10 @@ augmented_if_envelope <- function(backend, B, links = seq_along(backend$links), 
     funding_entries = 3040 * min(B, backend$control$max_chunk_rows) * nl)
   if (!details && is.null(backend$reference_ref) && is.null(backend$layout))
     pre <- reconstruction_ordinary_if_envelope(backend, B, links, pre, width, metadata, selection_pre)
+  if (!is.null(cache_slot)) {
+    cdid_set_if_chunk_meta(backend, B, links, pre, NULL, cache_slot)
+    if (!is.null(c_env_map) && !is.null(env_key)) assign(env_key, pre, envir = c_env_map)
+  }
   pre
 }
 
@@ -2262,53 +2560,76 @@ evaluate_augmented_if_chunk <- function(backend, rows, links = seq_along(backend
   if (!is.null(backend$layout)) return(evaluate_augmented_layout_if_chunk(backend, reader, rows, links, scale, details))
   pre <- if (details) NULL else augmented_adjoint_replay_preflight(plan, backend, links, length(rows))
   if (is.null(pre)) pre <- augmented_if_budget(backend, length(rows), links, details)
-  adjoint_replay <- if (details) NULL else augmented_adjoint_replay_access(plan, backend, links, length(rows), pre)
   X_F <- augmented_backend_X_F(backend)
-  pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "reconstruction", details)
-  on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
-  pair_reader <- function(r_sub, pair, read_outcomes = TRUE) {
-    pr <- if (is.null(pair_op)) cp04_pair_rows(reader, r_sub, pair, read_outcomes) else
-      pair_op$pair(r_sub, pair, read_outcomes)
-    if (read_outcomes && !is.null(backend$pair_outcomes)) {
-      pk <- paste0(as.character(pair$s), ":", as.character(pair$t))
-      dy <- backend$pair_outcomes[[pk]][r_sub]
-      observed <- pr$S == 1
-      if (!identical(!is.na(dy), observed) || any(!is.finite(dy[observed]))) {
-        augmented_abort("Retained private pair differences disagree with the sealed panel.", "support")
-      }
-      pr$dy <- numeric(length(r_sub))
-      pr$dy[observed] <- dy[observed]
-    }
-    pr
+  pair_op <- NULL
+  op <- NULL
+  res <- NULL
+  called_internally <- sys.nframe() > 1L &&
+    identical(environment(sys.function(-1L)), environment(cdid_fast_kernel))
+  if (!details && is.null(backend$reference_ref) && is.null(backend$pair_outcomes) &&
+      called_internally &&
+      identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+      cdid_are_default_fns(c(
+        "augmented_evaluate_if_chunk_core", "augmented_if_needed_sets", "augmented_cell_rows",
+        "augmented_adjoint_replay_access", "augmented_adjoint_replay_preflight",
+        "reconstruction_sparse_adjoint_ids", "reconstruction_coarse_operation",
+        "ipw_logit_values", "cp04_solve", "cp04_pair_rows", "cp04_date_rows",
+        "cp04_pair_read_operation", "cp04_pair_consumer_operation",
+        "evaluate_selection_upstream_chunk", "evaluate_selection_block_if",
+        "or_pooled_wls_gram_solve", "or_wls_gram_solve", "selection_prediction_operation"
+      ))) {
+    res <- cdid_ia_fast_aug_if_chunk_core(st, X_F, backend, rows, links, scale, pre, NULL)
   }
 
-  # Only this ordinary wrapper owns both the sealed reader and its pair
-  # callback. The default cell/core helpers retain standalone validation.
-  op <- NULL
-  on.exit(if (!is.null(op)) op$abort(), add = TRUE)
-  cell_worker <- augmented_cell_rows
-  if (!details && is.null(backend$reference_ref) && is.null(backend$pair_outcomes)) {
-    op <- selection_prediction_operation(backend$selection_backend, source_reader = reader,
-      pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair)
-    pair_predictor <- function(sel_fit, rows, pair_cohort_id) op$pair(rows, pair_cohort_id)
-    cell_worker <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv = FALSE)
-      augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv,
-        pair_predictor = pair_predictor)
+  if (is.null(res)) {
+    cdid_fast_kernel_cache$last_retained_if <- NULL
+    adjoint_replay <- if (details) NULL else augmented_adjoint_replay_access(plan, backend, links, length(rows), pre)
+    pair_op <- cp04_pair_consumer_operation(backend, reader, rows, links, pre, "reconstruction", details)
+    on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
+    pair_reader <- function(r_sub, pair, read_outcomes = TRUE) {
+      pr <- if (is.null(pair_op)) cp04_pair_rows(reader, r_sub, pair, read_outcomes) else
+        pair_op$pair(r_sub, pair, read_outcomes)
+      if (read_outcomes && !is.null(backend$pair_outcomes)) {
+        pk <- paste0(as.character(pair$s), ":", as.character(pair$t))
+        dy <- backend$pair_outcomes[[pk]][r_sub]
+        observed <- pr$S == 1
+        if (!identical(!is.na(dy), observed) || any(!is.finite(dy[observed]))) {
+          augmented_abort("Retained private pair differences disagree with the sealed panel.", "support")
+        }
+        pr$dy <- numeric(length(r_sub))
+        pr$dy[observed] <- dy[observed]
+      }
+      pr
+    }
+
+    # Only this ordinary wrapper owns both the sealed reader and its pair
+    # callback. The default cell/core helpers retain standalone validation.
+    op <- NULL
+    on.exit(if (!is.null(op)) op$abort(), add = TRUE)
+    cell_worker <- augmented_cell_rows
+    if (!details && is.null(backend$reference_ref) && is.null(backend$pair_outcomes)) {
+      op <- selection_prediction_operation(backend$selection_backend, source_reader = reader,
+        pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair)
+      pair_predictor <- function(sel_fit, rows, pair_cohort_id) op$pair(rows, pair_cohort_id)
+      cell_worker <- function(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv = FALSE)
+        augmented_cell_rows(sel_fit, up_map, X_F, pair_reader, cf, gf, rows, need_logderiv,
+          pair_predictor = pair_predictor)
+    }
+    res <- augmented_evaluate_if_chunk_core(
+      st = st,
+      X_F = X_F,
+      pair_reader = pair_reader,
+      backend = backend,
+      rows = as.integer(rows),
+      links = as.integer(links),
+      scale = scale,
+      details = details,
+      sets = pre,
+      cell_worker = cell_worker,
+      pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair,
+      adjoint_replay = adjoint_replay
+    )
   }
-  res <- augmented_evaluate_if_chunk_core(
-    st = st,
-    X_F = X_F,
-    pair_reader = pair_reader,
-    backend = backend,
-    rows = as.integer(rows),
-    links = as.integer(links),
-    scale = scale,
-    details = details,
-    sets = pre,
-    cell_worker = cell_worker,
-    pair_response_reader = if (is.null(pair_op)) NULL else pair_op$pair,
-    adjoint_replay = adjoint_replay
-  )
 
   out <- list(
     rows = res$rows,

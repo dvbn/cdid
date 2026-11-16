@@ -121,7 +121,7 @@ augmented_adjoint_replay_plan <- function(backend, links, B, phase_store = NULL)
     replay_preflight = replay_preflight, replay_preflight_retained_bound = preflight_retained,
     entry_bounds = c(rep(dense, q), alpha_bounds), retained_bound = retained + treatment_retained + preflight_retained,
     construction_peak = peak + treatment_peak, funded_entries = funded + treatment_funded)
-  ipw_owner_seal(plan, "augmented_adjoint_replay_plan")
+  cdid_fast_seal(plan, "augmented_adjoint_replay_plan")
 }
 
 # The public wrapper has already validated the actual backend, row/link
@@ -162,9 +162,11 @@ augmented_adjoint_replay_access <- local({
         !identical(plan$links, as.integer(links)) || !identical(plan$bids, pre$bids) || !identical(plan$treatment_ids, pre$tids) ||
         !isTRUE(B == plan$B || B == plan$min_B))
       augmented_abort("OR adjoint replay differs from its sealed producer and partition.", "integrity")
-    owner <- environment(augmented_adjoint_replay_plan)
-    for (nm in names(defaults)) if ((exists(nm, owner, inherits = FALSE) && bindingIsActive(nm, owner)) ||
-        !identical(get(nm, owner, inherits = TRUE), defaults[[nm]])) return(NULL)
+    if (!cdid_are_default_fns(helpers)) {
+      owner <- environment(augmented_adjoint_replay_plan)
+      for (nm in names(defaults)) if ((exists(nm, owner, inherits = FALSE) && bindingIsActive(nm, owner)) ||
+          !identical(get(nm, owner, inherits = TRUE), defaults[[nm]])) return(NULL)
+    }
     store <- plan$store
     if (!isTRUE(store$active)) return(NULL)
     seed <- store$seed

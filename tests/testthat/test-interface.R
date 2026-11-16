@@ -28,12 +28,16 @@ test_that("att_gt keeps did's formals, order and defaults, plus the extensions",
          selection_model = "pair_logit", selection_pooling = "separate",
          selection_xformla = NULL, selection_universe = "F", selection_rho = NULL, selection_justification = NULL,
          selection_est_method = "ipw", imputation_pooling = "separate",
-         gmm_weighting = quote(c("optimal", "identity")),
+         gmm_weighting = quote(c("optimal", "identity", "within")),
          gmm_covariance = quote("tikhonov"),
-         pt_assumption = quote(c("post", "all")),
+         pt_assumption = quote(c("post", "all", "ctrl")),
          pt_start = NULL,
+         cross_pair = FALSE,
          control = NULL,
-         outcome_pooling = "separate")
+         outcome_pooling = "separate",
+         dname = NULL,
+         imputation_scale = "per_period", switchers = "both", switch_times = NULL,
+         missing_reference = "exclude")
   )
   # the forwarded formal list tracks the loaded did
   expect_identical(cdid:::upstream_att_gt_formals, setdiff(names(ref), "..."))
@@ -52,8 +56,9 @@ test_that("workflow functions are did's own objects", {
   up <- names(formals(did::conditional_did_pretest))
   expect_identical(names(formals(cdid::conditional_did_pretest))[seq_along(up)], up)
   expect_identical(sort(getNamespaceExports("cdid")),
-                   sort(c("att_gt", "aggte", "ggdid", "tidy", "glance",
-                          "conditional_did_pretest")))
+                   sort(c("att_gt", "aggte", "chain_report",
+                          "ggdid", "tidy", "glance",
+                          "conditional_did_pretest", "nuisance_models")))
 })
 
 test_that("panel default resolves to chained DR; unsupported est_method strings are refused before touching data", {
@@ -157,6 +162,7 @@ test_that("ordinary mode delegates without validating chained-only arguments", {
               gmm_covariance = list(gmm_covariance = "invalid_handler"),
               pt_assumption = list(pt_assumption = "all"),
               pt_start = list(pt_start = list(NA_real_, Inf)),
+              cross_pair = list(cross_pair = TRUE),
               control = list(control = list(bogus = 1)))
   base <- list(yname = "y", tname = "period", idname = "id", gname = "G",
                data = d, bstrap = FALSE, mode = "ordinary")
@@ -180,6 +186,7 @@ test_that("ordinary dispatch never forces chained-only promises", {
     gmm_weighting = stop("forced weighting"),
     gmm_covariance = stop("forced gmm_covariance"),
     pt_assumption = stop("forced PT"), pt_start = stop("forced pt_start"),
+    cross_pair = stop("forced cross_pair"),
     control = stop("forced control")))
   ref <- with_conditions(did::att_gt(yname = "y", tname = "period",
     idname = "id", gname = "G", data = d, bstrap = FALSE))
@@ -196,7 +203,7 @@ test_that("neutral extension values are accepted in ordinary mode", {
                     data = d, bstrap = FALSE, mode = "ordinary", frame = NULL,
                     selection = "none", selection_xformla = NULL,
                     gmm_weighting = "optimal", gmm_covariance = "tikhonov",
-                    pt_assumption = "post",
+                    pt_assumption = "post", cross_pair = FALSE,
                     control = NULL)
   set.seed(1)
   b <- did::att_gt(yname = "y", tname = "period", idname = "id", gname = "G",

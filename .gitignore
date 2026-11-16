@@ -5,3 +5,5 @@ validation/setup-receipts/
 .Rproj.user/
 cdid_*.tar.gz
 cdid.Rcheck/
+src/*.o
+src/*.so

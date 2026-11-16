@@ -4,9 +4,17 @@ Preparing longitudinal data carefully before calling `cdid::att_gt()` prevents c
 
 For an introduction to how chained difference in differences combines outcome changes across observation windows, see [Estimate treatment effects from incomplete panels](../examples/incomplete-panels.md), [Get started](../get-started.md), and [Coming from `did`](../from-did.md).
 
+## If treatment can stop and restart
+
+For the static binary `dname` model, supply a row for every unit and study date, with a known `0` or `1` treatment indicator even when the outcome is `NA`. Required covariates must be known at the transition reference dates. Units may already be treated at the first study date; their earlier adoption date is not needed for this static model. Missing treatment histories are not supported.
+
+The static model assumes no lingering effect of past treatment. Its input is the long `data` table, without a separate `frame` argument. The [entry and exit guide](../methods/static-entry-exit.md#what-your-input-needs) gives the complete input requirements and a runnable example.
+
+The rest of this page describes the absorbing-treatment `gname` interface, including its unit table, sampling weights and cohort reference dates.
+
 ## Core requirements for `data` and `frame`
 
-In chained mode, `cdid::att_gt()` reads a long panel data frame (`data`) and an optional table of study units (`frame`, referred to after first introduction as the unit table).
+On the cohort route, `cdid::att_gt()` reads a long panel data frame (`data`) and an optional table of study units (`frame`, referred to after first introduction as the unit table).
 
 For the simplest unweighted specification without covariates or clustering, the essential columns are a unit identifier, a finite numeric date, a numeric outcome with `NA` for missing values, and the unit's known first-treatment cohort (constant within unit, with `0` for never treated). Each unit/date pair must be unique. A balanced panel and an observed outcome at the reference date for every unit are not required. Valid columns, or two observed outcomes per unit, do not by themselves guarantee that the requested effects are estimable.
 
@@ -72,7 +80,33 @@ This cutoff compares numeric date values, using `anticipation` in that scale. It
 
 - **Auxiliary preperiod comparisons:** Preperiod reports evaluate covariates at the earlier endpoint of the date pair.
 - **Read from actual `(id, date)` rows, including rows with `y = NA`:** Reference date covariate values come directly from the `(idname, tname)` rows in `data`; a static value in `frame` cannot override changing values in `data`. Crucially, a unit's covariate row at `(id, b_g)` may be needed even when the unit's outcome `y` at date $b_g$ is missing (`NA`). For instance, if a unit in cohort $g = 3$ (with $b_3 = 2$ under `anticipation = 0`) has observed outcomes only at $t = 3$ and $t = 4$, its covariate values at `(id, time = 2)` are still required to form the reference design for cohort $g = 3$ comparisons. Keep the `(id, time = 2)` row in `data` with its covariate values and `y = NA`.
-- **No blanket full history or baseline outcome requirement:** You do not need observed outcomes at $b_g$ for every unit, nor do you need covariate rows at dates that no active comparison or model reads. Covariate values are required only at the `(id, date)` anchors read by the requested estimator: on observed pairs for baseline treatment adjustment (`selection = "none"`), on every unit in $F$ of each cohort for change imputation and doubly robust adjustment for missing outcomes (`selection_est_method = "imputation"` or `"dr"`), and on the selection universe for observation probability models. If a required reference value is missing, `cdid` refuses the call and reports the unit ID, date, variable, and support context rather than carrying values forward across time.
+- **No blanket full history or baseline outcome requirement:** You do not need observed outcomes at $b_g$ for every unit, nor do you need covariate rows at dates that no active comparison or model reads. Covariate values are required only at the `(id, date)` anchors read by the requested estimator: on observed pairs for baseline treatment adjustment (`selection = "none"`), on every unit in $F$ of each cohort for change imputation and doubly robust adjustment for missing outcomes (`selection_est_method = "imputation"` or `"dr"`), and on the selection universe for observation probability models. If a required covariate is missing, the default warns and excludes units with missing covariates from the affected cohort’s comparisons. Set `missing_reference = "error"` to stop and see the unit ID, date, variable and comparison that needs it.
+
+### Add a known reference covariate row
+
+Suppose unit 1 in cohort 3 has outcomes in years 3 and 4, and its year-2
+row is absent. If you know its year-2 covariate `x` from another source,
+add that value on a year-2 row. With `y = NA`, the row supplies reference
+information and the unit still contributes its change from years 3 to 4.
+
+```r
+# panel has columns id, t, g, y and x.
+# x_year2 is unit 1's known covariate in year 2.
+panel <- rbind(panel, data.frame(id = 1L, t = 2L, g = 3L,
+                                y = NA_real_, x = x_year2))
+```
+
+If the row already exists, fill the known covariate on that row. Include
+any other required fields, such as cluster or weight information, in your
+data. For a variable such as age, a recorded date of birth can supply the
+reference value if it determines age at the date used by the analysis.
+
+If the year-2 value is genuinely unknown, the default excludes unit 1 from
+the comparisons for cohort 3. It can still contribute to an eligible
+comparison for cohort 4, which uses year-3 covariates. If an affected unit
+belongs to the treated cohort, the reported cohort effect describes the
+remaining treated units. Review `fit$chained$reference_eligibility`
+for cohort and reference-date counts.
 
 ### Changing sampling weights and `fix_weights`
 
@@ -104,11 +138,9 @@ Treatment propensity logits (`est_method = "ipw"` or `"dr"`) and active observat
 
 ### 2. Collinearity preprocessing versus unsupported covariate predictions
 
-In built in outcome regression (`est_method = "reg"` or `"dr"`) and change imputation (`selection_est_method = "imputation"` or `"dr"`), `cdid` uses standard pivoted QR decomposition (tolerance `1e-7`) to propose aliased (collinear) columns on the fitting design:
-- **Prediction row reconstruction check:** A proposed alias is accepted only after reconstruction at arithmetic roundoff (`64 * .Machine$double.eps` times the original column count) on the required prediction rows. Counterfactual regression checks its control/treated supports; each imputation pooling group checks its own observed training rows and full-F cohort prediction rows.
-- **Unsupported treated covariate directions:** If a predictor is constant or collinear among the control fitting rows (for example, a factor level that appears only among treated units) so that it varies on treated prediction rows in a null direction of the control design, the retained control columns cannot reconstruct the treated prediction rows. `cdid` refuses that unsupported prediction direction rather than silently setting its slope to zero. Near-collinear columns that fail exact-alias verification are retained and remain subject to the regression rank/conditioning check.
-- **Support within the requested outcome model:** With `outcome_pooling = "separate"` (default), each comparison block must support its required control and treated predictions after valid alias removal. With `"pooled"`, the shared slope can be identified across blocks even when one block is rank deficient on its own, provided all required predictions can be reconstructed. The package never changes a failed separate fit to pooling automatically.
-- Dropping a truly redundant aliased column is a numerical reparameterization of collinear predictors; it is not an identifying assumption that an underlying structural effect is zero, and it does not relax general ATT identification requirements. Treatment and observation logits do not drop aliased columns and refuse directly on rank deficiency.
+Outcome regression and change imputation can drop a redundant predictor when the remaining columns still give the same predictions for every required row. For example, two identical columns provide the same information as one.
+
+Check that the fitting data support the predictions you need. A factor level found only among treated units may have no coefficient in a regression fitted on controls. Separate regressions need enough information in each comparison. A pooled regression can use variation across comparisons when their slopes are assumed to be shared. Treatment and observation logits require a full-rank design.
 
 ### 3. Covariance regularization versus ATT identification
 
@@ -259,7 +291,7 @@ fit_sel <- cdid::att_gt(
 
 ---
 
-**Reading path, step 6 of 20** · Previous: [How to compare precision](../examples/precision.md) · Next: [Treatment adjustment](../methods/treatment.md)
+**Reading path, step 6 of 22** · Previous: [How to compare precision](../examples/precision.md) · Next: [Treatment adjustment](../methods/treatment.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -286,6 +318,8 @@ fit_sel <- cdid::att_gt(
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](../examples/short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

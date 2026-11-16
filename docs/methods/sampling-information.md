@@ -175,59 +175,25 @@ After a fit with observation weighting, the selection record shows what you decl
 ```r
 # Requires `fit`, a result of cdid::att_gt() fitted with
 # selection = "conditional_mtar" and selection_est_method = "ipw".
-str(fit$chained$selection)
+str(fit$chained$selection[c("selection_model", "selection_pooling",
+                            "fitting_universe", "empirical_repeat_rates")])
 ```
 
 <details>
 <summary>Console output</summary>
 
 ```text
-List of 23
- $ method                : chr "corollary1"
- $ canonical_assumption  : chr "conditional_mtar"
- $ requested_selection   : chr "conditional_mtar"
+List of 4
  $ selection_model       : chr "independent_period_logit"
  $ selection_pooling     : chr "separate"
- $ link                  : chr "logit"
  $ fitting_universe      : chr "F"
- $ population            : chr "supplied representative frame"
- $ formula               :Class 'formula'  language ~x
-  .. ..- attr(*, ".Environment")=<environment: 0x8287fbb60> 
- $ transport             : chr "rho=1"
- $ justification         : NULL
- $ active_cells          :'data.frame':	12 obs. of  5 variables:
-  ..$ cell_id : int [1:12] 1 2 3 4 5 6 7 8 9 10 ...
-  ..$ kind    : chr [1:12] "date" "date" "date" "date" ...
-  ..$ cohort  : num [1:12] 3 3 3 3 3 ...
-  ..$ label   : chr [1:12] "k1_t1" "k1_t2" "k1_t3" "k1_t4" ...
-  ..$ block_id: int [1:12] 1 2 3 4 5 6 7 8 9 10 ...
- $ n_active_cells        : int 12
- $ n_selection_blocks    : int 12
- $ n_selection_parameters: int 24
  $ empirical_repeat_rates: Named num [1:2] 0.963 0.968
   ..- attr(*, "names")= chr [1:2] "3" "Inf"
- $ assumptions           : chr "Each active pair/cohort requires population conditional mean trend-MAR on F, positivity, used-pair conditional "| __truncated__
- $ if_scale              : chr "phi_F on ALL N roster rows; core psi=(n_A/N)*phi_F with 1/n_A covariance normalization"
- $ unsupported           : chr [1:4] "known pair probabilities (including design p=1)" "custom IPW callbacks without an explicit log_weight_gradient" "estimated or unnormalized transport" "probit"
- $ models                :List of 10
-  ..$ n_selection_fits      : int 12
-  ..$ n_selection_cells     : int 12
-  ..$ n_selection_blocks    : int 12
-  ..$ n_selection_parameters: int 24
-  ..$ n_regression_fits     : int 1
-  ..$ n_regression_blocks   : int 15
-  ..$ n_local_intercepts    : int 15
-  ..$ n_shared_slopes       : int 1
-  ..$ n_supports            : int 30
-  ..$ n_treatment_fits      : int 15
- $ outcome_model         : chr "shared one-period outcome-change control-mean regression"
- $ duration_convention   : chr "stored-calendar transition count L_e = i_t - i_s"
- $ treatment_model       : chr "risk-set treatment propensity logit"
 ```
 
 </details>
 
-Its entries include the observation model, the pooling, the fitting set, the transport, your justification, the stated assumptions and the counts of fitted models. For observation weighting the `method` entry is `"corollary1"`, the legacy record name, with `canonical_assumption = "conditional_mtar"`.
+This fit uses date logits with separate slopes and the full study-unit table. The last entries show the proportion of repeat observers in cohort 3 and in the never-treated group, stored as `Inf`.
 
 ## Related pages
 
@@ -239,7 +205,7 @@ Its entries include the observation model, the pooling, the fitting set, the tra
 
 ---
 
-**Reading path, step 10 of 20** · Previous: [Handling missing outcomes](missing-outcomes.md) · Next: [Choose an observation model](../examples/observation-models.md)
+**Reading path, step 10 of 22** · Previous: [Handling missing outcomes](missing-outcomes.md) · Next: [Choose an observation model](../examples/observation-models.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -266,6 +232,8 @@ Its entries include the observation model, the pooling, the fitting set, the tra
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](../examples/short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

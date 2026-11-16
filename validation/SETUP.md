@@ -1,31 +1,23 @@
 # Install cdid
 
-The GitHub repository is public; no special account access is needed to install from it.
-
 ## Usual installation
 
-Install `cdid` 1.2.0.1 from [CRAN](https://cran.r-project.org/package=cdid):
-
-```r
-install.packages("cdid")
-```
-
-The GitHub installation is also available:
+Install `cdid` 1.3.0.0 from the root of this development checkout:
 
 ```r
 # install.packages("remotes")
-remotes::install_github("dvbn/cdid")
+remotes::install_local(".")
 ```
 
 `cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Source installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
 
-This is all that is needed to use the package. Version 1.2.0.1 was published on CRAN on November 7, 2026. Mirrors and platform binaries may update later; check `packageVersion("cdid")` and, if needed, install the source with `install.packages("cdid", repos = "https://cran.r-project.org", type = "source")`.
+Version 1.2.0.1 is available on [CRAN](https://cran.r-project.org/package=cdid) with `install.packages("cdid")`.
 
 ## Optional: pinned validation setup
 
 The setup script `validation/setup.R` installs `cdid` together with exactly the tested versions, `did` 2.5.1 and `DRDID` 1.4.0, into a dedicated library and checks the result. Use it to check this revision against its tested baseline; historical guide outputs record their original dependency versions. It is not required to install or load `cdid`.
 
-The repository includes the unchanged CRAN source archives of these two versions in `validation/vendor/`. `remotes::install_github()` or `R CMD INSTALL` alone does not install these exact versions: they resolve `did` and `DRDID` from your libraries or the current CRAN repository, which may provide later versions. The setup script installs the archived versions, the other dependencies and `cdid` itself into the dedicated library.
+The repository includes the CRAN source archives of these two versions in `validation/vendor/`. Standard installation resolves `did` and `DRDID` from your libraries or the current CRAN repository, which may provide later versions. The setup script installs the archived versions, the other dependencies and `cdid` itself into the dedicated library.
 
 ### Prerequisites
 
@@ -38,8 +30,7 @@ The repository includes the unchanged CRAN source archives of these two versions
 ### Install with the setup script
 
 ```sh
-git clone https://github.com/dvbn/cdid.git cdid
-cd cdid
+# Run from the root of the candidate checkout.
 Rscript --vanilla validation/setup.R --project . --library validation/.lib --repository https://cloud.r-project.org --check-only
 Rscript --vanilla validation/setup.R --project . --library validation/.lib --repository https://cloud.r-project.org --install
 Rscript --vanilla validation/setup.R --project . --library validation/.lib --repository https://cloud.r-project.org --check-only
@@ -53,7 +44,7 @@ Start a fresh R session and put the setup library first:
 
 ```r
 .libPaths(c(normalizePath("validation/.lib"), .libPaths()))  # from the repository root
-packageVersion("cdid")    # 1.2.0.1
+packageVersion("cdid")    # 1.3.0.0
 ?cdid::att_gt
 ```
 
@@ -82,7 +73,7 @@ The installer has been exercised on macOS arm64 with R 4.5.2, before the version
 
 ### Running package checks and the full test suite
 
-Ordinary `R CMD check` executes the bounded regression suite in `tests/testthat/test-cran-regression.R` via `tests/testthat.R`. All 172 comprehensive development, numerical-verification, and Monte Carlo test files remain packaged in `tests/testthat/` and are run unfiltered (`filter = NULL`) as a mandatory CI and validation gate.
+Ordinary `R CMD check` runs the bounded cohort and static switching tests in `tests/testthat/test-cran-regression.R` and `tests/testthat/test-cran-regression-static.R`. The separate full check runs all 191 packaged test files without a filter, including the cross-pair and missing-reference tests.
 
 To run the complete unfiltered test suite against an installed `cdid` library (such as `check/cdid.Rcheck` after `R CMD check` or `validation/.lib` after `validation/setup.R --install`):
 

@@ -3,6 +3,15 @@
 # once. Extraction, pool keys, upstream fitting, links and IF replay live later.
 
 or_wls_compress <- function(augmented) {
+  if (nrow(augmented) > 0L &&
+      exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns("or_wls_compress")) {
+    fk <- cdid_fast_kernel("C_cdid_wls_compress")
+    if (!is.null(fk)) {
+      fast_fac <- fk(augmented)
+      if (!is.null(fast_fac)) return(fast_fac)
+    }
+  }
   if (any(!is.finite(augmented))) {
     cdid_abort("Nonfinite weighted WLS rows or merged factor.", "cdid_or_wls_numeric_error")
   }

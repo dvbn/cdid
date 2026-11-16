@@ -32,7 +32,9 @@ dr_sparse_native_plan <- function(backend, links, B) {
       !is.integer(post$date_start) || !is.integer(post$date_end) ||
       length(post$post_a_index) < 1L || length(post$post_a_index) > .Machine$integer.max ||
       length(post$post_a_index) != length(post$post_obs_index)) return(NULL)
-  pre <- dr_baseline_if_budget(backend, B, links, FALSE)
+  use_fast_b <- exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
+    identical(environment(sys.function()), environment(cdid_fast_kernel))
+  pre <- if (use_fast_b) cdid_fast_if_budget(backend, B, links, "dr") else dr_baseline_if_budget(backend, B, links, FALSE)
   if (any(vapply(pre[c("sids", "gids", "beta_gids", "tids")], function(x) !is.null(names(x)), logical(1)))) return(NULL)
   p <- backend$shared$p; pt <- backend$treatment_recipe$p
   ns <- length(pre$sids); nb <- length(pre$beta_gids); nt <- length(pre$tids); nl <- length(links)
@@ -55,7 +57,7 @@ dr_sparse_native_plan <- function(backend, links, B) {
   metadata <- 8192 + 64 * (ns + G + nt + nl + J) + B * frame$id_byte_metadata$max +
     8 * sum(nchar(vapply(backend$links[links], `[[`, character(1), "link_id"), type = "bytes"))
   tail <- st$N %% B; min_B <- if (tail) min(B, tail) else B
-  small <- if (min_B == B) pre else dr_baseline_if_budget(backend, min_B, links, FALSE)
+  small <- if (min_B == B) pre else if (use_fast_b) cdid_fast_if_budget(backend, min_B, links, "dr") else dr_baseline_if_budget(backend, min_B, links, FALSE)
   one <- dr_sparse_native_inventory(B, ns, length(dates), nt, nl, p, pt, metadata)
   last <- dr_sparse_native_inventory(min_B, ns, length(dates), nt, nl, p, pt, metadata)
   reservation <- retained + construction
@@ -141,36 +143,90 @@ dr_sparse_native_refuse <- function(status) {
   or_baseline_native_refuse(status, dr_baseline_abort)
 }
 
-dr_sparse_native_if <- function(backend, reader, rows, links, scale, pre, plan) {
-  dr_sparse_native_check(plan, backend, links, length(rows), pre)
-  st <- reader$state; frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
-  panel <- get("panel_owner", reader$panel_ref, inherits = FALSE); B <- length(rows)
+dr_sparse_native_if <- function(backend, reader, rows, links, scale, pre, plan, link_names = NULL) {
+  B <- length(rows); st <- reader$state
   p <- backend$shared$p; pt <- backend$treatment_recipe$p; nt <- length(pre$tids)
-  inventory <- dr_sparse_native_inventory(B, length(pre$sids), length(plan$dates), nt, length(links), p, pt, plan$metadata)
-  a <- or_baseline_native_kernel("C_gmm_dr_sparse_prepare")(panel$observations$y,
+  use_fast <- !is.null(link_names) && is.list(plan) && !is.null(plan$ref) &&
+    exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns(c("dr_sparse_native_check", "or_baseline_native_check",
+                           "dr_sparse_native_inventory", "or_baseline_native_kernel", "cp04_payload"))
+  fast_meta <- if (use_fast) cdid_get_if_chunk_meta(backend, B, links, "dr_sp_kern_meta") else NULL
+  if (!is.null(fast_meta) && is.list(fast_meta$extra) &&
+      identical(fast_meta$extra$plan_ref, plan$ref) &&
+      ipw_owner_seal_ok(plan$ref, "dr_sparse_native_plan")) {
+    inventory <- fast_meta$extra$inventory
+    fn_prep <- fast_meta$extra$fn_prep
+    fn_asm <- fast_meta$extra$fn_asm
+    frame <- fast_meta$extra$frame
+    panel <- fast_meta$extra$panel
+  } else {
+    dr_sparse_native_check(plan, backend, links, B, pre)
+    frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+    panel <- get("panel_owner", reader$panel_ref, inherits = FALSE)
+    inventory <- dr_sparse_native_inventory(B, length(pre$sids), length(plan$dates), nt, length(links), p, pt, plan$metadata)
+    fn_prep <- or_baseline_native_kernel("C_gmm_dr_sparse_prepare")
+    fn_asm <- or_baseline_native_kernel("C_gmm_dr_sparse_assemble")
+    if (use_fast) {
+      cdid_set_if_chunk_meta(backend, B, links, pre, link_names, "dr_sp_kern_meta",
+                             extra = list(plan_ref = plan$ref, inventory = inventory,
+                                          fn_prep = fn_prep, fn_asm = fn_asm,
+                                          frame = frame, panel = panel))
+    }
+  }
+  a <- fn_prep(panel$observations$y,
     panel$postings$post_a_index, panel$postings$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$bounds, frame$Z_a, plan$data, as.double(inventory$prepare))
   code <- a$status
   if (!identical(code[1L], 0L) && identical(code[2L], 1L)) dr_sparse_native_refuse(code)
   # Keep the original normalized global OR solve and its finite-input refusal.
-  xi_beta <- if (p) t(if (backend$outcome_recipe$intercept)
-    or_pooled_wls_gram_solve(backend$shared$fit, t(a$or_score), normalizer = st$N) else
-    or_wls_gram_solve(backend$shared$fit, t(a$or_score), normalizer = st$N)) else matrix(0, B, 0L)
+  xi_beta <- if (p) {
+    sfit <- backend$shared$fit
+    if (use_fast && cdid_are_default_fns(c("or_pooled_wls_gram_solve", "or_wls_gram_solve")) &&
+        is.list(sfit) && is.matrix(sfit$R) && nrow(sfit$R) == p && ncol(sfit$R) == p &&
+        is.integer(sfit$pivot) && length(sfit$pivot) == p && all(abs(diag(sfit$R)) > 0) &&
+        is.finite(sum(a$or_score))) {
+      piv <- sfit$pivot
+      R_mat <- sfit$R
+      Z_sol <- forwardsolve(R_mat, t(a$or_score)[piv, , drop = FALSE], upper.tri = TRUE, transpose = TRUE)
+      X_piv <- backsolve(R_mat, Z_sol)
+      X_out <- matrix(0.0, B, p)
+      X_out[, piv] <- st$N * t(X_piv)
+      if (!is.finite(sum(X_out))) {
+        X_out <- t(if (backend$outcome_recipe$intercept)
+          or_pooled_wls_gram_solve(sfit, t(a$or_score), normalizer = st$N) else
+          or_wls_gram_solve(sfit, t(a$or_score), normalizer = st$N))
+      }
+      X_out
+    } else {
+      t(if (backend$outcome_recipe$intercept)
+        or_pooled_wls_gram_solve(sfit, t(a$or_score), normalizer = st$N) else
+        or_wls_gram_solve(sfit, t(a$or_score), normalizer = st$N))
+    }
+  } else matrix(0, B, 0L)
   n_ok <- if (identical(code[1L], 0L)) nt else code[3L] - 1L
-  xi <- vector("list", n_ok)
-  for (j in seq_len(n_ok)) {
-    ix <- (j - 1L) * pt + seq_len(pt)
-    xi[[j]] <- t(cp04_solve(backend$treatments[[pre$tids[j]]]$H_chol, t(a$rhs[, ix, drop = FALSE])))
+  xi <- NULL
+  if (pt > 0L && n_ok > 0L && cdid_are_default_fns("cp04_solve")) {
+    fk_chol <- cdid_fast_kernel("C_cdid_dr_batch_chol_solve")
+    if (!is.null(fk_chol)) {
+      xi <- fk_chol(backend$treatments, as.integer(pre$tids), a$rhs, as.integer(c(pt, n_ok)))
+    }
+  }
+  if (is.null(xi)) {
+    xi <- vector("list", n_ok)
+    for (j in seq_len(n_ok)) {
+      ix <- (j - 1L) * pt + seq_len(pt)
+      xi[[j]] <- t(cp04_solve(backend$treatments[[pre$tids[j]]]$H_chol, t(a$rhs[, ix, drop = FALSE])))
+    }
   }
   # A later model's read/replay failure is deferred until all earlier model
   # gamma/four-coordinate checks have run, matching the complete staged path.
-  b <- or_baseline_native_kernel("C_gmm_dr_sparse_assemble")(a$up, xi_beta, a$direct, xi,
+  b <- fn_asm(a$up, xi_beta, a$direct, xi,
     plan$data, as.integer(n_ok), as.double(inventory$assembler))
   if (!identical(b$status[1L], 0L)) dr_sparse_native_refuse(b$status)
   if (!identical(code[1L], 0L)) dr_sparse_native_refuse(code)
   phi <- b$phi
   if (scale == "core") phi <- st$lambda * phi
-  dimnames(phi) <- list(NULL, vapply(backend$links[links], `[[`, character(1), "link_id"))
+  dimnames(phi) <- list(NULL, if (!is.null(link_names)) link_names else vapply(backend$links[links], `[[`, character(1), "link_id"))
   out <- list(rows = rows, id = st$id[rows], links = links, phi = phi, scale = scale,
     normalization_count = if (scale == "core") st$n_A else st$N,
     diagnostics = list(n_rate_score_evaluations = length(pre$sids),
@@ -178,7 +234,9 @@ dr_sparse_native_if <- function(backend, reader, rows, links, scale, pre, plan) 
       n_global_beta_blocks = if (p) length(pre$beta_gids) else 0L, n_treatment_score_evaluations = nt,
       output_entries_bound = pre$output, concurrent_scratch_bound = pre$scratch,
       work_ops_bound = pre$work, execution = "native_sparse_pooled_dr"))
-  if (unname(cp04_payload(out)["entries"]) > pre$output)
-    dr_baseline_abort("Sparse DR IF output bound underestimated.", "bound")
+  if (!(use_fast && (as.double(B) * (length(links) + 6) + 256) <= pre$output)) {
+    if (unname(cp04_payload(out)["entries"]) > pre$output)
+      dr_baseline_abort("Sparse DR IF output bound underestimated.", "bound")
+  }
   out
 }

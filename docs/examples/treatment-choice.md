@@ -196,7 +196,7 @@ Each entry in `fits` is a `cdid_MP` object ([Results](../reference/results.md#gr
 
 Even when both $p$ and $m$ are correct in the population, IPW, OR, and DR solve different sample equations before two step GMM combination: IPW uses normalized Hajek weights from risk set logits, OR subtracts predictions $\hat{\alpha}(b) + L(e) X_i \hat{\beta}$ from one pooled control regression across all blocks, and DR applies IPW to the control regression residuals ([Treatment adjustment](../methods/treatment.md#doubly-robust-treatment-estimation-dr)). Their finite sample estimates and standard errors can therefore differ. Covariate imbalance does not force a difference: fitted corrections can coincide or cancel in particular samples.
 
-Passing the same `xformla = ~ x` formula to `cdid` and `did` likewise does not imply identical finite sample OR or DR estimates: `cdid` pools control changes across blocks with one shared duration scaled slope $L(e) z(X_i)' \beta$ and combines links by GMM, whereas `did` fits period pair regressions separately. If the full fitted procedure coincides, including coefficient restrictions, nuisance fitting, retained comparisons and weights, point estimates should agree up to numerical rounding; method labels alone establish neither equality nor a difference. With incomplete outcomes and explicit `allow_unbalanced_panel = TRUE`, ordinary mode uses `did`'s RCS routines based on levels. With `FALSE` or its ordinary mode default, it instead keeps complete cases and estimates changes within units. Each route has its own sampling conditions; the independent mask here is compatible with them, but their fitted constructions differ. Use `mode = "ordinary"` when exact `did` behavior is required ([Moving from did](../from-did.md#why-can-balanced-results-differ-and-which-should-i-use)).
+Passing the same `xformla = ~ x` formula to `cdid` and `did` likewise does not imply identical finite sample OR or DR estimates: `cdid` and `did` both fit separate control regressions by default. This example explicitly uses `outcome_pooling = "pooled"`, which shares a per-step slope across comparisons. Chaining can also combine a different set of comparisons, even with separate slopes. If the full fitted procedure coincides, including coefficient restrictions, nuisance fitting, retained comparisons and weights, point estimates should agree up to numerical rounding; method labels alone establish neither equality nor a difference. With incomplete outcomes and explicit `allow_unbalanced_panel = TRUE`, ordinary mode uses `did`'s RCS routines based on levels. With `FALSE` or its ordinary mode default, it instead keeps complete cases and estimates changes within units. Each route has its own sampling conditions; the independent mask here is compatible with them, but their fitted constructions differ. Use `mode = "ordinary"` when exact `did` behavior is required ([Moving from did](../from-did.md#why-can-balanced-results-differ-and-which-should-i-use)).
 
 ### Practical choice among IPW, OR, and DR
 
@@ -220,7 +220,7 @@ There is no general finite sample unbiasedness guarantee for IPW, OR, or DR, and
 
 ---
 
-**Reading path, step 8 of 20** · Previous: [Treatment adjustment](../methods/treatment.md) · Next: [Handling missing outcomes](../methods/missing-outcomes.md)
+**Reading path, step 8 of 22** · Previous: [Treatment adjustment](../methods/treatment.md) · Next: [Handling missing outcomes](../methods/missing-outcomes.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -247,6 +247,8 @@ There is no general finite sample unbiasedness guarantee for IPW, OR, or DR, and
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

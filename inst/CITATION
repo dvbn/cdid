@@ -1,7 +1,8 @@
 bibentry(
   bibtype = "Article",
   header = paste("To cite the chained difference-in-differences estimator",
-                 "implemented by cdid, please use:"),
+                 "implemented by cdid (both cohort gname and static dname",
+                 "panel routes), please use:"),
   title = "The Chained Difference-in-Differences",
   author = c(
     person("Christophe", "Bellego"),
@@ -22,8 +23,8 @@ bibentry(
 
 bibentry(
   bibtype = "Article",
-  header = paste("Ordinary mode delegates to the did package; for those",
-                 "estimators please also cite:"),
+  header = paste("For the cohort gname route and ordinary mode (which",
+                 "delegates to the did package), please also cite:"),
   title = "Difference-in-Differences with Multiple Time Periods",
   author = c(
     person("Brantly", "Callaway"),
@@ -40,5 +41,28 @@ bibentry(
     "\"Difference-in-Differences with Multiple Time Periods.\"",
     "Journal of Econometrics 225(2), 200-230.",
     "doi:10.1016/j.jeconom.2020.12.001."
+  )
+)
+
+bibentry(
+  bibtype = "Misc",
+  header = paste("For the static no-carryover entry/exit/re-entry panel route",
+                 "(att_gt with dname), please cite Bellego, Benatia and",
+                 "Dortet-Bernadet (2025) alongside:"),
+  title = "Difference-in-Differences Estimators for Treatments Continuously Distributed at Every Period",
+  author = c(
+    person("Clement", "de Chaisemartin"),
+    person("Xavier", "D'Haultfoeuille"),
+    person("Felix", "Pasquier"),
+    person("Doulo", "Sow"),
+    person("Gonzalo", "Vazquez-Bare")
+  ),
+  year = "2026",
+  note = "Working paper, arXiv:2201.06898v7 (revised 2026-07-22), static binary specialization",
+  url = "https://arxiv.org/abs/2201.06898v7",
+  textVersion = paste(
+    "de Chaisemartin C., D'Haultfoeuille X., Pasquier F., Sow D. and G. Vazquez-Bare (2026).",
+    "\"Difference-in-Differences Estimators for Treatments Continuously Distributed at Every Period.\"",
+    "Working paper, arXiv:2201.06898v7 (revised 2026-07-22), static binary specialization."
   )
 )

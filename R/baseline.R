@@ -79,5 +79,6 @@ check_upstream_baseline <- function(deps = cdid_dependencies()) {
 }
 
 .onLoad <- function(libname, pkgname) {
+  cdid_snapshot_default_fns(asNamespace(pkgname))
   check_upstream_baseline()
 }

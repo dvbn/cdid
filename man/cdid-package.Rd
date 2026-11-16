@@ -4,53 +4,56 @@
 \alias{cdid-package}
 \title{cdid: The Chained Difference-in-Differences}
 \description{
-cdid 1.2.0.0, an update of the package after version 0.1.1, is a small layer on
-the did package. It keeps did's \code{att_gt()} and \code{aggte()} interface and
-adds an estimation mode for panel data with missing outcomes.
-
-\itemize{
-  \item \code{mode = "ordinary"} delegates unchanged to \code{did::att_gt()}
-    and \code{did::aggte()}. This is also the default for repeated cross
-    sections.
-  \item Chained estimation (Bellego, Benatia and Dortet-Bernadet, 2025)
-    is the default for panel data. Built-in doubly robust \code{est_method="dr"}
-    (the default), \code{est_method="ipw"}, and control-mean outcome regression
-    \code{est_method="reg"} are supported, with baseline (\code{selection = "none"})
-    or conditional-MTAR (\code{"conditional_mtar"} / legacy \code{"corollary1"})
-    missing-outcome handling via observation weighting (\code{selection_est_method = "ipw"}),
-    change imputation (\code{"imputation"}) or the augmented correction (\code{"dr"}).
-    Custom panel IPW callbacks support baseline selection and, when they return
-    \code{log_weight_gradient}, conditional-MTAR observation weighting
-    (\code{selection_est_method = "ipw"}).
-}
-
-cdid requires did 2.5.1 or later and DRDID 1.4.0 or later, and has been
-tested with did 2.5.1 and DRDID 1.4.0. Later versions are accepted without a
-guarantee that everything works with them or that results are unchanged. The
-optional pinned setup in \file{validation/SETUP.md} of the source repository
-installs exactly the tested versions and verifies their library paths. Use
-\code{citation("cdid")} for references.
+Estimate difference-in-differences effects with panels in which some outcomes
+are missing. Chained estimation combines changes measured within units
+across the dates when they are observed. Use \code{mode = "ordinary"} for
+\pkg{did}'s estimator or for repeated cross sections.
 }
 \details{
-Quick navigation for offline help:
+Use \code{gname} to estimate effects by first-treatment cohort and date
+when treatment is absorbing. Use \code{dname} for effects at entry and exit
+when a binary treatment can change and past treatment has no carryover.
+
+Choose the treatment adjustment with \code{est_method}. If the units
+observed at both dates represent their cohort with respect to mean changes
+only after conditioning on covariates, use
+\code{selection = "conditional_mtar"}. Choose observation weighting,
+imputation of actual changes or their augmented combination with
+\code{selection_est_method}.
+
 \itemize{
-  \item \code{\link{att_gt}}: estimate group-time average treatment effects from
-    long panel data (\code{data}) and an optional study-population unit table
-    (\code{frame}). Returns a \code{cdid_MP} object in chained mode.
-  \item \code{\link{aggte}}: aggregate a fitted result into \code{"simple"},
-    \code{"group"}, \code{"dynamic"} or \code{"calendar"} summaries without
-    refitting (\code{cdid_AGGTEobj} in chained mode).
-  \item \code{\link{conditional_did_pretest}}: run the chained conditional
-    pretrend test on panel data (or \pkg{did}'s \code{conditional_did_pretest()} in
-    ordinary mode).
-  \item \code{\link{reexports}}: \code{\link{tidy}}, \code{\link{glance}} and
-    \code{\link{ggdid}} generics re-exported from \pkg{did}, with chained S3
-    methods that report cell and bin availability and support reasons.
+  \item \code{\link{att_gt}()} fits the model from a long data frame and,
+    for cohort models, an optional study-unit table.
+  \item \code{\link{aggte}()} summarizes cohort effects. A switching fit
+    already contains the switcher-weighted estimate in \code{fit$aggregate}.
+  \item \code{\link{chain_report}()} shows which comparisons identify
+    cohort effects and how they are weighted.
+  \item \code{\link{nuisance_models}()} displays fitted equations and
+    coefficient tables when requested during estimation.
+  \item \code{\link{conditional_did_pretest}()} tests pre-treatment trends
+    conditional on the model covariates.
+  \item \code{\link{tidy}()}, \code{\link{glance}()} and \code{\link{ggdid}()}
+    return tables, summaries and plots.
 }
 
-Run \code{vignette("cdid", package = "cdid")} for a self-contained introductory
-walkthrough. Extended documentation on panel data preparation, investigating
-missingness and observation models is available at
-\url{https://github.com/dvbn/cdid}.
+Open \code{vignette("cdid", package = "cdid")} for a hands-on introduction.
+The \href{https://github.com/dvbn/cdid/tree/main/docs}{user guide}
+covers preparing data, choosing a model and inspecting results.
+Use \code{citation("cdid")} for references.
 }
-\seealso{\code{\link{att_gt}}, \code{\link{aggte}}, \code{\link{conditional_did_pretest}}, \code{\link{reexports}}, \code{vignette("cdid", package = "cdid")}}
+\references{
+Bellego, C., Benatia, D. and Dortet-Bernadet, V. (2025). The Chained
+Difference-in-Differences. \emph{Journal of Econometrics} 248, 105783.
+\doi{10.1016/j.jeconom.2024.105783}
+
+Callaway, B. and Sant'Anna, P. H. C. (2021). Difference-in-Differences with
+Multiple Time Periods. \emph{Journal of Econometrics} 225(2), 200--230.
+\doi{10.1016/j.jeconom.2020.12.001}
+
+de Chaisemartin, C., D'Haultfoeuille, X., Pasquier, F., Sow, D. and
+Vazquez-Bare, G. (2026). Difference-in-Differences Estimators for Treatments
+Continuously Distributed at Every Period. Working paper, arXiv:2201.06898v7
+(revised 2026-07-22). Static binary specialization, used on the \code{dname}
+route.
+}
+\seealso{\code{\link{att_gt}}, \code{\link{aggte}}, \code{\link{chain_report}}, \code{\link{conditional_did_pretest}}, \code{\link{nuisance_models}}, \code{\link{reexports}}, \code{vignette("cdid", package = "cdid")}}

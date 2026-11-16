@@ -39,8 +39,13 @@
     "gmm_covariance",
     "pt_assumption",
     "pt_start",
+    "cross_pair",
     "control",
-    "outcome_pooling"
+    "outcome_pooling",
+    "dname",
+    "imputation_scale",
+    "switchers",
+    "switch_times"
   ],
   "DID_ATT_GT_FORMALS": [
     "yname",

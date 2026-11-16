@@ -36,6 +36,11 @@ cpt_abort <- function(message, class = character(), diagnostics = NULL) {
 cpt_distinct_grid <- function(Z) {
   Z <- unname(as.matrix(Z))
   storage.mode(Z) <- "double"
+  if (identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+      cdid_are_default_fns("cpt_distinct_grid")) {
+    fast <- cdid_fast_cpt_distinct_grid(Z)
+    if (!is.null(fast)) return(fast)
+  }
   if (!nrow(Z) || any(!is.finite(Z))) cpt_abort("The conditional grid design must be finite on every original unit.",
     "cdid_conditional_pretest_integrity_error")
   key <- if (ncol(Z)) do.call(paste, c(lapply(seq_len(ncol(Z)), function(j) sprintf("%a", Z[, j] + 0)), sep = "|")) else
@@ -63,6 +68,11 @@ cpt_chunks <- function(n, size) {
 # Empty accumulator of one cell on its recipe grid. `keep_rows` additionally
 # retains the original-unit rows (A, kappa, xi) for small diagnostic checks.
 cpt_cell_acc <- function(spec, grid, n_clusters, n_total, keep_rows = FALSE) {
+  if (identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+      cdid_are_default_fns(c("cpt_cell_acc", "cpt_cell_add", "cpt_cell_finalize", "cpt_indicator", "cpt_rowsum_into"))) {
+    fast <- cdid_fast_cpt_acc_init(spec, grid, n_clusters, n_total, keep_rows)
+    if (!is.null(fast)) return(fast)
+  }
   R <- length(spec$s); Dl <- length(spec$coords); Md <- grid$n_distinct
   acc <- list(Vd = matrix(0, Md, R), Pd = matrix(0, Md, Dl), Bl = matrix(0, Dl, R),
     AggX = matrix(0, n_clusters, Dl), AggKu = matrix(0, n_clusters, R),
@@ -84,6 +94,10 @@ cpt_rowsum_into <- function(target, x, group) {
 # One extractor chunk of one cell. Rows are original F positions; nu/rho are
 # rows x terms; P/xi rows x coordinates; blam coordinates x terms (chunk sums).
 cpt_cell_add <- function(acc, spec, piece, grid, cmap) {
+  if (is.list(acc) && !is.null(acc$.cpt_c_acc)) {
+    fast <- cdid_fast_cpt_cell_add(acc, spec, piece, grid, cmap)
+    if (!is.null(fast)) return(fast)
+  }
   rows <- piece$rows
   if (!length(rows)) return(acc)
   R <- length(spec$s); Dl <- length(spec$coords)
@@ -121,6 +135,10 @@ cpt_cell_add <- function(acc, spec, piece, grid, cmap) {
 # Process values at every distinct grid point (grid chunks of `gchunk`
 # columns), the scalar link (h = 1) and the compact multiplier state.
 cpt_cell_finalize <- function(acc, spec, grid, N, gchunk) {
+  if (is.list(acc) && !is.null(acc$.cpt_c_acc)) {
+    fast <- cdid_fast_cpt_cell_finalize(acc, spec, grid, N)
+    if (!is.null(fast)) return(fast)
+  }
   R <- length(spec$s); Dl <- length(spec$coords); Md <- grid$n_distinct
   sD <- spec$s / spec$D
   Vn <- sweep(acc$Vd, 2L, spec$D, "/")
@@ -198,6 +216,11 @@ cpt_batch_cvmb <- function(E, cells, N, gchunk, echunk) {
 # Rademacher sample may annihilate a nonzero process; realized draws therefore
 # cannot decide whether the process is globally degenerate. No RNG is used.
 cpt_process_nonzero <- function(cells, n_clusters, gchunk, echunk) {
+  if (identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+      cdid_are_default_fns(c("cpt_process_nonzero", "cpt_indicator", "cpt_rowsum_into"))) {
+    fast <- cdid_fast_cpt_process_nonzero(cells, n_clusters)
+    if (!is.null(fast)) return(fast)
+  }
   for (cl in cells) for (cols in cpt_chunks(nrow(cl$zd), gchunk)) {
     Q <- matrix(0, n_clusters, length(cols))
     ne <- length(cl$A_v)
@@ -224,8 +247,17 @@ cpt_multiplier <- function(cells, N, n_clusters, B, br, gchunk, echunk, fixed_si
     cpt_abort("fixed_signs must be a biters by declared-clusters matrix of +/-1.", "cdid_conditional_pretest_input_error")
   batches <- cpt_chunks(B, br)
   out <- numeric(B)
-  f <- cpt_batch_cvmb
   route <- if (workers > 1) chained_parallel_route() else "serial"
+  use_fast_batch <- !identical(route, "psock") &&
+    identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
+    cdid_are_default_fns(c("cpt_multiplier", "cpt_batch_cvmb")) &&
+    !is.null(cdid_fast_kernel("C_cdid_cpt_batch_cvmb"))
+  f <- if (use_fast_batch) {
+    function(E, cells, N, gchunk, echunk) {
+      res <- cdid_fast_cpt_batch_cvmb(E, cells, N)
+      if (!is.null(res)) res else cpt_batch_cvmb(E, cells, N, gchunk, echunk)
+    }
+  } else cpt_batch_cvmb
   cl_psock <- NULL
   if (identical(route, "psock")) {
     cl_psock <- parallel::makePSOCKcluster(as.integer(workers))

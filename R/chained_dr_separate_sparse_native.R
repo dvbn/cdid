@@ -36,7 +36,12 @@ dr_separate_sparse_prospective <- function(backend, links, B, pre, counts) {
   # the issued dependency maps and original output/scaling reserves survive.
   count_reservation <- 4 * counts$count_entries
   reservation <- counts$bound + retained + peak + count_reservation
-  small <- if (counts$min_B == B) pre else dr_baseline_if_budget(backend, counts$min_B, links, FALSE)
+  small <- if (counts$min_B == B) pre else if (exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
+             identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+    cdid_fast_if_budget(backend, counts$min_B, links, "dr")
+  } else {
+    dr_baseline_if_budget(backend, counts$min_B, links, FALSE)
+  }
   if (any(!is.finite(c(flat, reservation))) || max(c(P, M, pt * nt, ng, ns, nt, nl, nd)) >= .Machine$integer.max ||
       reservation + dr_separate_sparse_inventory(B, ns, nd, nt, nl, metadata) > pre$scratch ||
       reservation + dr_separate_sparse_inventory(counts$min_B, ns, nd, nt, nl, metadata) > small$scratch ||
@@ -52,7 +57,12 @@ dr_separate_sparse_plan <- function(backend, links, B, v11) {
       !is.null(backend$separate_complete)) return(v11)
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE); st <- reader$state
   panel <- get("panel_owner", reader$panel_ref, inherits = FALSE); post <- panel$postings
-  pre <- dr_baseline_if_budget(backend, B, links, FALSE)
+  pre <- if (exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
+             identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+    cdid_fast_if_budget(backend, B, links, "dr")
+  } else {
+    dr_baseline_if_budget(backend, B, links, FALSE)
+  }
   dr_separate_baseline_replay_identity(v11, backend, links, B, pre)
   if (!isTRUE(B == v11$B)) dr_baseline_abort("Sparse separate DR construction changed its issued chunk.", "integrity")
   counts <- dr_separate_baseline_replay_counts(backend, links, B, pre, st$N)
@@ -82,11 +92,22 @@ dr_separate_sparse_plan <- function(backend, links, B, v11) {
     data$support[, j] <- as.integer(c(s$cohort, match(s$pair$s_calendar_index, dates), match(s$pair$t_calendar_index, dates)))
     data$support_par[, j] <- c(u$rate, u$massA, u$v)
   }
+  use_fast_plan <- exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns("or_outcome_block_fit")
   for (k in seq_len(ng)) {
-    of <- or_outcome_block_fit(backend$outcome_groups, pre$gids[k]); ii <- span(start[k], of$p)
-    data$block_par[, k] <- c(of$L, of$alpha)
-    data$keep[ii] <- backend$or_frame_index[backend$outcome_recipe$slope_index[of$keep]]
-    data$beta[ii] <- of$beta; data$mean_d[ii] <- of$mean_d
+    if (use_fast_plan) {
+      g_blk <- backend$outcome_groups$groups[[pre$gids[k]]]
+      rec_blk <- g_blk$regressions[[1L]]
+      ii <- span(start[k], length(g_blk$keep))
+      data$block_par[, k] <- c(rec_blk$L, rec_blk$alpha)
+      data$keep[ii] <- backend$or_frame_index[backend$outcome_recipe$slope_index[g_blk$keep]]
+      data$beta[ii] <- g_blk$beta; data$mean_d[ii] <- rec_blk$mean_d
+    } else {
+      of <- or_outcome_block_fit(backend$outcome_groups, pre$gids[k]); ii <- span(start[k], of$p)
+      data$block_par[, k] <- c(of$L, of$alpha)
+      data$keep[ii] <- backend$or_frame_index[backend$outcome_recipe$slope_index[of$keep]]
+      data$beta[ii] <- of$beta; data$mean_d[ii] <- of$mean_d
+    }
   }
   for (j in seq_len(nt)) {
     spec <- backend$treatment_specs[[pre$tids[j]]]; f <- backend$treatments[[pre$tids[j]]]
@@ -113,6 +134,11 @@ dr_separate_sparse_plan <- function(backend, links, B, v11) {
 }
 
 dr_separate_sparse_replay_plan <- function(backend, links, B) {
+  if (exists("cdid_fast_dr_separate_sparse_replay_plan", mode = "function", inherits = TRUE) &&
+      identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+    fast_p <- cdid_fast_dr_separate_sparse_replay_plan(backend, links, B)
+    if (!is.null(fast_p)) return(fast_p)
+  }
   dr_separate_baseline_replay_plan(backend, links, B, native = TRUE)
 }
 
@@ -126,13 +152,35 @@ dr_separate_sparse_check <- function(plan, backend, links, B, pre) {
   invisible(plan)
 }
 
-dr_separate_sparse_if <- function(backend, reader, rows, links, scale, pre, plan) {
+dr_separate_sparse_if <- function(backend, reader, rows, links, scale, pre, plan, link_names = NULL) {
   B <- length(rows); st <- reader$state
-  dr_separate_sparse_check(plan, backend, links, B, pre)
-  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
-  panel <- get("panel_owner", reader$panel_ref, inherits = FALSE)
-  live <- dr_separate_sparse_live(B, length(pre$sids), length(plan$dates), length(pre$tids), length(links))
-  res <- or_baseline_native_kernel("C_gmm_dr_separate_sparse_if")(panel$observations$y,
+  use_fast <- !is.null(link_names) && is.list(plan) && !is.null(plan$ref) &&
+    exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+    cdid_are_default_fns(c("dr_separate_sparse_check", "or_baseline_native_check",
+                           "dr_separate_baseline_replay_identity", "dr_separate_sparse_inventory",
+                           "dr_separate_sparse_live", "or_baseline_native_kernel",
+                           "cp04_finite", "cp04_payload"))
+  fast_meta <- if (use_fast) cdid_get_if_chunk_meta(backend, B, links, "dr_sep_sp_kern_meta") else NULL
+  if (!is.null(fast_meta) && is.list(fast_meta$extra) &&
+      identical(fast_meta$extra$plan_ref, plan$ref) &&
+      ipw_owner_seal_ok(plan$ref, "dr_separate_sparse_plan")) {
+    live <- fast_meta$extra$live
+    fn_if <- fast_meta$extra$fn_if
+    frame <- fast_meta$extra$frame
+    panel <- fast_meta$extra$panel
+  } else {
+    dr_separate_sparse_check(plan, backend, links, B, pre)
+    frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+    panel <- get("panel_owner", reader$panel_ref, inherits = FALSE)
+    live <- dr_separate_sparse_live(B, length(pre$sids), length(plan$dates), length(pre$tids), length(links))
+    fn_if <- or_baseline_native_kernel("C_gmm_dr_separate_sparse_if")
+    if (use_fast) {
+      cdid_set_if_chunk_meta(backend, B, links, pre, link_names, "dr_sep_sp_kern_meta",
+                             extra = list(plan_ref = plan$ref, live = live, fn_if = fn_if,
+                                          frame = frame, panel = panel))
+    }
+  }
+  res <- fn_if(panel$observations$y,
     panel$postings$post_a_index, panel$postings$post_obs_index, as.integer(rows), st$cohort_index,
     st$a_index, st$w, plan$bounds, frame$Z_a, plan$data, plan$v11, as.double(live))
   if (!identical(res$status[1L], 0L)) or_baseline_native_refuse(res$status, dr_baseline_abort)
@@ -141,7 +189,7 @@ dr_separate_sparse_if <- function(backend, reader, rows, links, scale, pre, plan
   # coordinate check is added by this execution optimization.
   cp04_finite(phi, "complete separate DR original-unit IF")
   if (scale == "core") phi <- st$lambda * phi
-  dimnames(phi) <- list(NULL, vapply(backend$links[links], `[[`, character(1), "link_id"))
+  dimnames(phi) <- list(NULL, if (!is.null(link_names)) link_names else vapply(backend$links[links], `[[`, character(1), "link_id"))
   out <- list(rows = rows, id = st$id[rows], links = links, phi = phi, scale = scale,
     normalization_count = if (scale == "core") st$n_A else st$N,
     diagnostics = list(outcome_pooling = "separate", n_rate_score_evaluations = length(pre$sids),
@@ -149,6 +197,8 @@ dr_separate_sparse_if <- function(backend, reader, rows, links, scale, pre, plan
       n_regression_score_evaluations = length(pre$gids), n_global_beta_blocks = 0L,
       n_block_beta_blocks = length(pre$gids), n_treatment_score_evaluations = length(pre$tids),
       output_entries_bound = pre$output, concurrent_scratch_bound = pre$scratch, work_ops_bound = pre$work))
-  if (unname(cp04_payload(out)["entries"]) > pre$output) dr_route_abort("baseline", "IF output bound underestimated.", "bound")
+  if (!(use_fast && (as.double(B) * (length(links) + 6) + 256) <= pre$output)) {
+    if (unname(cp04_payload(out)["entries"]) > pre$output) dr_route_abort("baseline", "IF output bound underestimated.", "bound")
+  }
   out
 }

@@ -89,6 +89,10 @@ validate_catalog_requests <- function(requested_post, cal, coh, tg) {
 # Conservative explicit payload/work envelopes; not CPU instruction or RSS caps.
 # Count products/sums refuse before inexact aggregate arithmetic or allocation.
 catalog_size <- function(x, label) {
+  if (is.numeric(x) && length(x) > 0L && all(is.finite(x)) && all(x >= 0) && all(x == floor(x))) {
+    s <- sum(as.double(x))
+    if (is.finite(s) && s <= (2^53 - 1)) return(s)
+  }
   total <- 0
   for (v in x) {
     if (!is.finite(v) || v < 0 || v != floor(v) || v > (2^53 - 1) - total)
@@ -98,6 +102,11 @@ catalog_size <- function(x, label) {
   total
 }
 catalog_product <- function(a, b, label) {
+  if (length(a) == 1L && length(b) == 1L && is.finite(a) && is.finite(b) &&
+      a >= 0 && b >= 0 && a == floor(a) && b == floor(b)) {
+    p <- as.double(a) * as.double(b)
+    if (is.finite(p) && p <= (2^53 - 1)) return(p)
+  }
   if (a < 0 || b < 0 || !is.finite(a) || !is.finite(b) ||
       (a != 0 && b > (2^53 - 1) / a))
     catalog_abort(paste0("Inexact or unsupported size for ", label, "."), "cdid_catalog_bound_error")
@@ -116,7 +125,8 @@ catalog_pool_offsets <- function(pool_size) {
 }
 
 build_comparison_catalog <- function(calendar, cohorts, targets, anticipation, occupancy,
-                                     control_group, conventions, requested_post, bounds) {
+                                     control_group, conventions, requested_post, bounds,
+                                     eligibility_occupancy = NULL) {
   bnd <- validate_catalog_bounds(bounds)
   # Header-only dimensions precede validation/coercion/sort/match. The accepted
   # helper domain uses integer dictionary and data-frame indices. C+1 is a real
@@ -212,12 +222,30 @@ build_comparison_catalog <- function(calendar, cohorts, targets, anticipation, o
   ref_i[ref_i == 0L] <- NA_integer_
   hfirst <- findInterval(coh[tg], cal, left.open = TRUE) + 1L # first stored date >= g
 
+  # Issue #16: restricted eligibility contexts. Each restricted context c is a
+  # copy of the owner occupancy minus the pair counts of its excluded units;
+  # a "pair" is then (context, s, t), and a target reads only its own
+  # context's cells (unrestricted targets keep context 0, the owner cells).
+  cell_cnt <- occ$count; cell_ctx <- NULL; tg_ctx <- NULL
+  if (!is.null(eligibility_occupancy)) {
+    ex <- catalog_eligibility_cells(eligibility_occupancy, occ, ki, si, ti, coh, cal, targets, tg)
+    charge(6 * length(ex$count), "eligibility occupancy cells")
+    base_work <- catalog_size(c(base_work, catalog_product(64 * (1 + ceiling(log2(length(ex$count) + 2))),
+      length(ex$count) + 1, "eligibility occupancy cell work")), "header plus eligibility occupancy work")
+    ki <- c(ki, ex$ki); si <- c(si, ex$si); ti <- c(ti, ex$ti)
+    cell_cnt <- c(cell_cnt, ex$count); cell_ctx <- c(integer(n_occ), ex$context); tg_ctx <- ex$target_context
+    ord <- order(cell_ctx, si, ti, ki, method = "radix")
+  }
+
   # Positive cells grouped by pair (CSR); cohorts ascending within each pair.
-  pos <- ord[occ$count[ord] > 0]
+  pos <- ord[cell_cnt[ord] > 0]
   n_pos <- length(pos)
   charge(4 * n_pos, "positive support index")
   cell_k <- ki[pos]; cs <- si[pos]; ct <- ti[pos]
-  new_pair <- if (n_pos) c(TRUE, cs[-1L] != cs[-n_pos] | ct[-1L] != ct[-n_pos]) else logical()
+  new_pair <- if (!n_pos) logical() else if (is.null(cell_ctx)) c(TRUE, cs[-1L] != cs[-n_pos] | ct[-1L] != ct[-n_pos]) else {
+    cx <- cell_ctx[pos]
+    c(TRUE, cx[-1L] != cx[-n_pos] | cs[-1L] != cs[-n_pos] | ct[-1L] != ct[-n_pos])
+  }
   pair_of <- cumsum(new_pair)
   pair_start <- which(new_pair)
   pair_len <- diff(c(pair_start, n_pos + 1L))
@@ -227,11 +255,11 @@ build_comparison_catalog <- function(calendar, cohorts, targets, anticipation, o
 
   # Supported target pairs: positive target occupancy at that same pair.
   tj <- match(cell_k, tg)
-  tc <- which(!is.na(tj))
+  tc <- if (is.null(cell_ctx)) which(!is.na(tj)) else which(!is.na(tj) & cell_ctx[pos] == tg_ctx[pmax(1L, tj)])
   n_tp <- length(tc)
   charge(8 * n_tp, "target-pair index")
   tc <- tc[order(tj[tc], pair_of[tc], method = "radix")]
-  tp_j <- tj[tc]; tp_pair <- pair_of[tc]; tp_count <- occ$count[pos[tc]]
+  tp_j <- tj[tc]; tp_pair <- pair_of[tc]; tp_count <- cell_cnt[pos[tc]]
   tp_ref <- ref_i[tp_j]
   tp_h0 <- pmax(hfirst[tp_j], pair_t[tp_pair])
   tp_nh <- if (nyt) pmax(0L, nT - tp_h0 + 1L) else integer(n_tp)
@@ -308,41 +336,51 @@ build_comparison_catalog <- function(calendar, cohorts, targets, anticipation, o
   # Cohort dictionary indices need at most ten digits plus delimiters. Reserve
   # raw character bytes, split strings, integer entries and temporary vectors.
   charge(catalog_size(c(catalog_product(64, n_entries, "pool/key payload"), n_rows), "pool interning"), "pool interning and character buffers")
-  width <- nchar(as.character(nC))
-  keys <- character(n_rows); r_kmin <- rep(NA_integer_, n_rows)
-  for (r in seq_len(n_rows)) {
-    fin <- later_finite(r_tp[r])
-    fin <- fin[seq.int(length(fin) - r_m[r] + 1L, length.out = r_m[r])]
-    if (r_m[r] > 0L) r_kmin[r] <- fin[1L]
-    keys[r] <- paste(formatC(c(fin, if (r_inf[r]) inf_idx), width = width, flag = "0"), collapse = ",")
+  if (!nyt && n_rows > 0L && all(r_m == 0L) && all(r_inf)) {
+    r_kmin <- rep(NA_integer_, n_rows)
+    r_pool <- rep.int(1L, n_rows)
+    pools <- list(n_pools = 1L, size = 1L, start = 1L, entries = as.integer(inf_idx), never_treated = TRUE)
+    n_ukeys <- 1L
+  } else {
+    width <- nchar(as.character(nC))
+    coh_fmt <- formatC(seq_len(nC), width = width, flag = "0")
+    keys <- character(n_rows); r_kmin <- rep(NA_integer_, n_rows)
+    for (r in seq_len(n_rows)) {
+      fin <- later_finite(r_tp[r])
+      fin <- fin[seq.int(length(fin) - r_m[r] + 1L, length.out = r_m[r])]
+      if (r_m[r] > 0L) r_kmin[r] <- fin[1L]
+      keys[r] <- paste(coh_fmt[c(fin, if (r_inf[r]) inf_idx)], collapse = ",")
+    }
+    ukeys <- sort(unique(keys), method = "radix")
+    r_pool <- match(keys, ukeys)
+    first_row <- match(ukeys, keys)
+    pool_size <- r_m[first_row] + r_inf[first_row]
+    pools <- list(n_pools = length(ukeys), size = as.integer(pool_size),
+      start = catalog_pool_offsets(pool_size),
+      entries = as.integer(unlist(strsplit(ukeys, ",", fixed = TRUE))),
+      never_treated = r_inf[first_row])
+    n_ukeys <- length(ukeys)
   }
-  ukeys <- sort(unique(keys), method = "radix")
-  r_pool <- match(keys, ukeys)
-  first_row <- match(ukeys, keys)
-  pool_size <- r_m[first_row] + r_inf[first_row]
-  pools <- list(n_pools = length(ukeys), size = as.integer(pool_size),
-    start = catalog_pool_offsets(pool_size),
-    entries = as.integer(unlist(strsplit(ukeys, ",", fixed = TRUE))),
-    never_treated = r_inf[first_row])
 
   # Operators: one per (target, pool) under the declared conventions.
   r_gi <- tg[tp_j[r_tp]]
-  catalog_product(nC, length(ukeys), "exact operator dictionary product")
-  okey <- (as.double(r_gi) - 1) * length(ukeys) + r_pool
+  catalog_product(nC, n_ukeys, "exact operator dictionary product")
+  okey <- (as.double(r_gi) - 1) * n_ukeys + r_pool
   uo <- sort(unique(okey)); r_op <- match(okey, uo)
   op_first <- match(uo, okey)
-  operators <- data.frame(operator_id = seq_along(uo), target_index = r_gi[op_first], g = coh[r_gi[op_first]],
+  operators <- cdid_fast_df(list(operator_id = seq_along(uo), target_index = r_gi[op_first], g = coh[r_gi[op_first]],
     pool_id = r_pool[op_first],
-    functional_key = paste0("cmpcat:", conventions, ":g", r_gi[op_first], ":K", r_pool[op_first], recycle0 = TRUE),
-    stringsAsFactors = FALSE)
+    functional_key = paste0("cmpcat:", conventions, ":g", r_gi[op_first], ":K", r_pool[op_first], recycle0 = TRUE)))
 
   # Conditional endpoint roles; reference and pre regions follow r_g exactly.
   charge(4 * n_rows, "endpoint roles")
   r_ref <- tp_ref[r_tp]; r_s <- pair_s[tp_pair[r_tp]]; r_t <- pair_t[tp_pair[r_tp]]
+  r_coh <- coh[r_gi]
+  r_kmin_na <- is.na(r_kmin)
+  role_labels <- c("post_private", "post_conditional", "anticipation_private", "anticipation_conditional")
   role_of <- function(u) {
-    elig <- is.na(r_kmin) | r_kmin >= cstar[u] # K inside E_u(delta)
-    region <- ifelse(cal[u] < coh[r_gi], "anticipation", "post")
-    role <- paste0(region, ifelse(elig, "_conditional", "_private"), recycle0 = TRUE)
+    elig <- r_kmin_na | (r_kmin >= cstar[u]) # K inside E_u(delta)
+    role <- role_labels[1L + elig + 2L * (cal[u] < r_coh)]
     role[u < r_ref] <- "pre_private"
     role[u == r_ref] <- "reference"
     role
@@ -354,7 +392,7 @@ build_comparison_catalog <- function(calendar, cohorts, targets, anticipation, o
   has_ref <- which(!is.na(ref_i))
   n_ref <- length(has_ref)
   charge(4 * (n_ref + 2 * n_rows), "coordinate interning")
-  kind_of <- function(role) 1L + (role != "reference") + grepl("_private$", role)
+  kind_of <- function(role) 1L + (role != "reference") + (role %in% c("pre_private", "anticipation_private", "post_private"))
   cj <- c(tg[has_ref], r_gi, r_gi)
   cu <- c(ref_i[has_ref], r_s, r_t)
   ck <- c(rep(1L, n_ref), kind_of(s_role), kind_of(t_role))
@@ -364,18 +402,20 @@ build_comparison_catalog <- function(calendar, cohorts, targets, anticipation, o
                          ck[oo[-1L]] != ck[oo[-nn]] | co[oo[-1L]] != co[oo[-nn]]) else logical()
   cid <- integer(nn); cid[oo] <- cumsum(chg)
   keep <- oo[chg]
-  coordinates <- data.frame(coordinate_id = seq_along(keep), target_index = cj[keep], g = coh[cj[keep]],
+  ck_keep <- ck[keep]
+  op_id_keep <- co[keep]
+  op_id_keep[ck_keep != 3L] <- NA_integer_
+  coordinates <- cdid_fast_df(list(coordinate_id = seq_along(keep), target_index = cj[keep], g = coh[cj[keep]],
     date_index = cu[keep], time = cal[cu[keep]],
-    kind = c("reference", "shared_conditional", "private")[ck[keep]],
-    operator_id = ifelse(ck[keep] == 3L, co[keep], NA_integer_), stringsAsFactors = FALSE)
+    kind = c("reference", "shared_conditional", "private")[ck_keep],
+    operator_id = op_id_keep))
 
-  rows <- data.frame(row_id = seq_len(n_rows), target_index = r_gi, g = coh[r_gi],
+  rows <- cdid_fast_df(list(row_id = seq_len(n_rows), target_index = r_gi, g = r_coh,
     s_index = r_s, t_index = r_t, s = cal[r_s], t = cal[r_t], ref_index = r_ref,
     operator_id = r_op, pool_id = r_pool, pool_size = as.integer(r_m + r_inf),
     original = r_orig, n_horizons = r_nh, horizon_first_index = r_h1, horizon_last_index = r_h2,
     s_role = s_role, t_role = t_role,
-    s_coordinate_id = cid[n_ref + seq_len(n_rows)], t_coordinate_id = cid[n_ref + n_rows + seq_len(n_rows)],
-    stringsAsFactors = FALSE)
+    s_coordinate_id = cid[n_ref + seq_len(n_rows)], t_coordinate_id = cid[n_ref + n_rows + seq_len(n_rows)]))
 
   tp_ne <- tabulate(cand_tp[nonempty], nbins = n_tp)
   tp_rows <- tabulate(r_tp, nbins = n_tp)
@@ -383,18 +423,22 @@ build_comparison_catalog <- function(calendar, cohorts, targets, anticipation, o
   tp_status <- rep("retained", n_tp)
   tp_status[!orig_ne] <- "empty_pool"
   tp_status[is.na(tp_ref)] <- "no_admissible_reference"
-  target_pairs <- data.frame(target_index = tg[tp_j], g = coh[tg[tp_j]],
+  target_pairs <- cdid_fast_df(list(target_index = tg[tp_j], g = coh[tg[tp_j]],
     s_index = pair_s[tp_pair], t_index = pair_t[tp_pair], s = cal[pair_s[tp_pair]], t = cal[pair_t[tp_pair]],
     target_count = tp_count, n_other_supplied_cohorts = pair_len[tp_pair] - 1L,
     n_candidates = tp_nc, n_nonempty_candidates = tp_ne, n_rows = tp_rows,
-    original_status = tp_status, stringsAsFactors = FALSE)
+    original_status = tp_status))
   j_status <- rep("reference_available", nJ)
+  # Issue #16: a target read in a restricted eligibility context says so.
+  if (!is.null(tg_ctx)) j_status[tg_ctx > 0L] <- "reference_available_eligibility_restricted"
   j_status[is.na(ref_i)] <- "no_admissible_reference"
-  targets_out <- data.frame(target_index = tg, g = coh[tg], ref_index = ref_i, ref = cal[ref_i],
+  j_ncand <- numeric(nJ)
+  for (ji in seq_len(nJ)) j_ncand[ji] <- sum(tp_nc[tp_j == ji])
+  targets_out <- cdid_fast_df(list(target_index = tg, g = coh[tg], ref_index = ref_i, ref = cal[ref_i],
     status = j_status, n_target_pairs = tabulate(tp_j, nbins = nJ),
-    n_candidates = as.vector(rowsum(c(tp_nc, numeric(nJ)), c(tp_j, seq_len(nJ)))),
+    n_candidates = j_ncand,
     n_nonempty_candidates = tabulate(tp_j[cand_tp[nonempty]], nbins = nJ),
-    n_rows = tabulate(tp_j[r_tp], nbins = nJ), stringsAsFactors = FALSE)
+    n_rows = tabulate(tp_j[r_tp], nbins = nJ)))
 
   # Requested post targets: catalog support only, never population identification.
   charge(4 * n_req, "requested target classification")
@@ -409,12 +453,14 @@ build_comparison_catalog <- function(calendar, cohorts, targets, anticipation, o
   tkey <- c((as.double(tg[tp_j]) - 1) * nT + pair_s[tp_pair], (as.double(tg[tp_j]) - 1) * nT + pair_t[tp_pair])
   reason <- rep("no_nonempty_control_pool", n_req)
   reason[!qkey %in% tkey] <- "no_target_pair_occupancy"
+  if (!is.null(tg_ctx)) reason[!qkey %in% tkey & tg_ctx[match(req$gi, tg)] > 0L] <-
+    "no_target_pair_occupancy_in_eligibility_context"
   reason[is.na(ref_i[match(req$gi, tg)])] <- "no_admissible_reference"
   sup <- n_cond > 0
-  requested_supported <- data.frame(target_index = req$gi[sup], g = coh[req$gi[sup]], date_index = req$ti[sup],
-    t = cal[req$ti[sup]], n_rows_touching = n_cond[sup])
-  requested_unsupported <- data.frame(target_index = req$gi[!sup], g = coh[req$gi[!sup]], date_index = req$ti[!sup],
-    t = cal[req$ti[!sup]], reason = reason[!sup], stringsAsFactors = FALSE)
+  requested_supported <- cdid_fast_df(list(target_index = req$gi[sup], g = coh[req$gi[sup]], date_index = req$ti[sup],
+    t = cal[req$ti[sup]], n_rows_touching = n_cond[sup]))
+  requested_unsupported <- cdid_fast_df(list(target_index = req$gi[!sup], g = coh[req$gi[!sup]], date_index = req$ti[!sup],
+    t = cal[req$ti[!sup]], reason = reason[!sup]))
 
   work_performed <- c(cutoff_comparisons = n_cmp, occupancy_entries = n_occ, reference_searches = nJ,
     candidate_evaluations = n_cand, dedup_entries = n_cand, role_evaluations = 2 * n_rows)
@@ -438,6 +484,39 @@ build_comparison_catalog <- function(calendar, cohorts, targets, anticipation, o
       "equal pools denote one population operator under the declared conventions, not equal fits or samples;",
       "zero occupancy is not population nonidentification; no estimator, IF, covariance or inference.")),
     class = "cdid_comparison_catalog")
+}
+
+# Issue #16: the restricted-context cells of `eligibility_occupancy`
+# (list(target_context = context per supplied target, 0 = unrestricted;
+# subtract = data.frame(context, cohort, s, t, count) of excluded units' pairs)).
+# Every restricted context gets every owner cell with its excluded counts
+# removed; a subtraction outside the owner occupancy or below zero is refused.
+catalog_eligibility_cells <- function(eo, occ, ki, si, ti, coh, cal, targets, tg) {
+  bad <- function(msg) catalog_abort(msg, c("cdid_catalog_occupancy_error", "cdid_catalog_input_error"))
+  if (!is.list(eo) || !is.numeric(eo$target_context) || length(eo$target_context) != length(targets) ||
+      anyNA(eo$target_context) || any(eo$target_context < 0 | eo$target_context != floor(eo$target_context)) ||
+      !is.data.frame(eo$subtract) || !all(c("context", "cohort", "s", "t", "count") %in% names(eo$subtract)))
+    bad("Invalid eligibility occupancy (target contexts and excluded-unit pair counts).")
+  sub <- eo$subtract
+  n_occ <- length(ki)
+  n_ctx <- max(c(0L, as.integer(eo$target_context), as.integer(sub$context)))
+  ctx_sorted <- as.integer(eo$target_context)[match(tg, match(as.double(targets), coh))]
+  sk <- match(as.double(sub$cohort), coh); ss <- match(as.double(sub$s), cal); st <- match(as.double(sub$t), cal)
+  if (anyNA(sk) || anyNA(ss) || anyNA(st) || anyNA(sub$count) || any(sub$count < 0) ||
+      any(sub$context < 1L | sub$context > n_ctx))
+    bad("Eligibility occupancy subtraction outside the cohort/calendar dictionaries.")
+  base_key <- (as.double(si) * (length(cal) + 1) + ti) * (length(coh) + 1) + ki
+  sub_cell <- match((as.double(ss) * (length(cal) + 1) + st) * (length(coh) + 1) + sk, base_key)
+  if (anyNA(sub_cell)) bad("Eligibility occupancy subtracts a pair cell absent from the owner occupancy.")
+  out_cnt <- rep(occ$count, n_ctx)
+  hit <- (as.integer(sub$context) - 1L) * n_occ + sub_cell
+  dec <- numeric(n_ctx * n_occ)
+  dec_sum <- rowsum(as.double(sub$count), hit)
+  dec[as.integer(rownames(dec_sum))] <- dec_sum[, 1L]
+  out_cnt <- out_cnt - dec
+  if (any(out_cnt < 0)) bad("Eligibility occupancy subtracts more units than the owner occupancy holds.")
+  list(ki = rep(ki, n_ctx), si = rep(si, n_ctx), ti = rep(ti, n_ctx), count = out_cnt,
+    context = rep(seq_len(n_ctx), each = n_occ), target_context = ctx_sorted)
 }
 
 # Reuse the explicit catalog controls for newly created bridge/design buffers.
@@ -573,7 +652,8 @@ catalog_design_handoff <- function(catalog, declared_qualified) {
   spec <- catalog$spec; cal <- spec$calendar; coh <- spec$cohorts; delta <- spec$anticipation
   rows <- catalog$rows
   if (nrow(rows) == 0L) catalog_abort("The catalog retains no rows to declare as design links.", "cdid_catalog_input_error")
-  decl <- character()
+  decl <- numeric()
+  n_cal <- length(cal)
   if (!is.null(declared_qualified)) {
     dq <- declared_qualified
     if (!is.data.frame(dq) || ncol(dq) != 2L || anyDuplicated(names(dq)) || !setequal(names(dq), c("g", "t")) ||
@@ -587,18 +667,30 @@ catalog_design_handoff <- function(catalog, declared_qualified) {
       catalog_abort("Declared qualifications need a referenced catalog target and a stored calendar date.",
         "cdid_catalog_qualification_error")
     }
-    if (any(vapply(seq_along(gi), function(i) exact_cmp_sum(cal[ui[i]], delta, coh[gi[i]]) < 0L, logical(1L)))) {
+    can_fast_dq <- exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns("exact_cmp_sum") &&
+      is.finite(delta) && abs(delta) <= 1e14 &&
+      all(is.finite(cal[ui])) && all(abs(cal[ui]) <= 1e14) &&
+      all(is.finite(coh[gi])) && all(abs(coh[gi]) <= 1e14)
+    bad_causal <- if (can_fast_dq) {
+      any(cal[ui] + delta < coh[gi])
+    } else {
+      any(vapply(seq_along(gi), function(i) exact_cmp_sum(cal[ui[i]], delta, coh[gi[i]]) < 0L, logical(1L)))
+    }
+    if (bad_causal) {
       catalog_abort("Only causal endpoints (u + anticipation >= g) can be declared qualified; earlier coordinates stay private.",
         "cdid_catalog_qualification_error")
     }
-    decl <- paste(gi, ui)
+    decl <- (as.double(gi) - 1) * n_cal + ui
     if (anyDuplicated(decl)) {
       catalog_abort("Duplicate declared qualification.", c("cdid_catalog_duplicate_error", "cdid_catalog_qualification_error"))
     }
   }
   qual <- function(role, u) {
+    if (!length(decl)) return(role == "reference")
     role == "reference" |
-      (role %in% c("anticipation_conditional", "post_conditional") & paste(rows$target_index, u) %in% decl)
+      (role %in% c("anticipation_conditional", "post_conditional") &
+        ((as.double(rows$target_index) - 1) * n_cal + u) %in% decl)
   }
   pl <- catalog$pools
   # One expansion per interned pool: the typed cohort set and its rendering.
@@ -610,11 +702,11 @@ catalog_design_handoff <- function(catalog, declared_qualified) {
     paste0("{", paste(sprintf("%.17g", vals), collapse = ","), "}")
   }, character(1L))
   pool_index <- as.integer(rows$pool_id)
-  links <- data.frame(g = rows$g, s = rows$s, t = rows$t, ref = cal[rows$ref_index],
+  links <- cdid_fast_df(list(g = rows$g, s = rows$s, t = rows$t, ref = cal[rows$ref_index],
     functional_key = catalog$operators$functional_key[rows$operator_id],
     control_pool = pool_text[pool_index],
     s_qualified = qual(rows$s_role, rows$s_index), t_qualified = qual(rows$t_role, rows$t_index),
-    catalog_row = rows$row_id, stringsAsFactors = FALSE)
+    catalog_row = rows$row_id))
   list(links = links, calendar = cal, cohorts = coh, anticipation = delta,
     pools = list(index = pool_index, values = pool_values, text = pool_text))
 }

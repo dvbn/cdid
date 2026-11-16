@@ -1,16 +1,39 @@
 # Results reference
 
-This page describes what the fitted objects contain, how to read their tables and plots, which uncertainty each output reports, and how to export results. It covers only functions and fields that exist in the current source. Additional tables that have been proposed but not implemented are listed at the end as future work.
+Use `summary()` to read a fit, `tidy()` to extract a table and `ggdid()` to plot it. This page describes the reported effects, their uncertainty and the diagnostics you can use to investigate a result.
 
 ## Result classes and functions
 
 | Function | Result in chained mode | Methods |
 | --- | --- | --- |
-| `att_gt()` | `cdid_MP`, which inherits `did`'s `MP` | `print()`, `summary()`, `tidy()`, `glance()`, `ggdid()`, and `aggte()` for aggregation |
+| `att_gt(gname = ...)` | `cdid_MP`, which inherits `did`'s `MP` | `print()`, `summary()`, `tidy()`, `glance()`, `ggdid()`, `chain_report()`, and `aggte()` for aggregation |
+| `att_gt(dname = ...)` | `cdid_static_att_gt` | `print()`, `summary()`, `tidy()`, `glance()`, `ggdid()` and `plot()`; the aggregate is stored in the result |
 | `aggte()` | `cdid_AGGTEobj`, which inherits `did`'s `AGGTEobj` | `print()`, `summary()`, `tidy()`, `glance()`, `ggdid()` (except for the simple type) |
+| `chain_report()` | `cdid_chain_report` | `print()`, `as.data.frame()` |
 | `conditional_did_pretest()` | `cdid_MP.TEST`, which inherits `did`'s `MP.TEST` | `print()`, `summary()` |
 
-In ordinary mode each function returns `did`'s own object, unchanged. For each chained class, `print()` and `summary()` give the same display. The `att_gt()` and `aggte()` displays show `did`'s summary table under a heading that names the chained estimator, without `did`'s citation line, followed by a short chained record. For `att_gt()` the record gives the available and requested cells with the reasons for unavailable ones, the units of the unit table, the correction for missing outcomes, the parallel trends assumption and `base_period`, the GMM weighting and any covariance regularization, the inference actually performed and the pretrend test or the reason it is unavailable. For `aggte()` it gives the available and intended aggregates, every restricted or unavailable target with its reason, the bins used and excluded by the overall summary, the parallel trends assumption and the inference, and, when they apply, nondefault event-time selectors, unknown cohort shares or shares taken as masses at the first stored date. The heading shows the package versions and both paper references once. Interval family codes, the numerical policy and resource profile remain in the result without being printed, as listed below. The conditional-test display reports its CvM test and status.
+In ordinary mode each function returns `did`'s own object, unchanged. For the cohort chained classes, `print()` and `summary()` give the same display. The `att_gt()` and `aggte()` displays show `did`'s summary table under a heading that names the chained estimator, without `did`'s citation line, followed by a short chained record. For `att_gt()` the record gives the available and requested cells with the reasons for unavailable ones, the units of the unit table, the correction for missing outcomes, the parallel trends assumption and `base_period`, the GMM weighting and any covariance regularization, the inference actually performed and the pretrend test or the reason it is unavailable. For `aggte()` it gives the available and intended aggregates, every restricted or unavailable target with its reason, the bins used and excluded by the overall summary, the parallel trends assumption and the inference, and, when they apply, nondefault event-time selectors, unknown cohort shares or shares taken as masses at the first stored date. The heading shows the package versions and both paper references once. Interval family codes, the numerical policy and resource profile remain in the result without being printed, as listed below. The conditional-test display reports its CvM test and status.
+
+## Static entry and exit results
+
+With `dname`, `att_gt()` returns switching-date effects rather than cohort effects. `summary(fit)` displays them, `tidy(fit)` exports the transition table, `glance(fit)` gives one summary row, and `ggdid(fit)` plots the available entry and exit estimates.
+
+| Field | Contents |
+| --- | --- |
+| `target_id`, `t`, `t_prev`, `d`, `direction` | Transition identifier, switching date, preceding stored date, prior treatment state and entry/exit direction |
+| `att`, `theta_hat` | Treatment effect on the treated-versus-untreated scale, and the raw switcher-minus-stayer contrast; the exit contrast is sign-reversed in `att` |
+| `available`, `support_status`, `support_reason` | Whether each declared transition can be estimated and why a target is unavailable |
+| `se`, `analytical_se`, `bootstrap_se` | Reported, analytical and multiplier standard errors, according to the inference requested |
+| `V_analytical` | Estimated covariance of the static cell estimates; `analytical_se` is `sqrt(diag(V_analytical))`. This differs from the cohort matrix scaling described below. |
+| `inffunc`, `unit_id`, `n` | One influence-function row per original study unit, aligned with `unit_id`, and the full study-unit count |
+| `aggregate` | Switcher-weighted estimate, standard error, intervals, availability and full-unit influence function for the declared transition family |
+| `request`, `diagnostics`, `graphs`, `inference`, `references` | Active settings, unit/role counts, whether the fit used direct adjacent comparisons or chained GMM (`gmm_executed`), pair-graph support, inference record and route-specific references |
+
+Use `fit$aggregate` for the static average. `aggte()` remains a cohort aggregation function. An unavailable declared cell also makes the declared static average unavailable; the package does not silently change its target family. See the [entry and exit guide](../methods/static-entry-exit.md#read-the-result) for an example and the sign convention.
+
+`chain_report()` describes the comparisons and identifying paths in cohort `gname` fits. Use `control = list(keep_nuisance = TRUE)` to inspect fitted model equations and coefficient tables with `nuisance_models(fit)` on supported cohort and static fits. The static models label their switcher and stayer populations. The cohort-by-date model identifies the reference levels and its covariate basis. The report indicates when a model was unnecessary, a fit was requested without capture, or coefficient standard errors are unavailable.
+
+The remaining sections describe cohort `gname` objects and their aggregation and pretrend tests.
 
 ## Group time results
 
@@ -49,6 +72,7 @@ For a worked inspection of unit table coverage, missingness, selected-pair count
 | `covariance_handling` | the GMM weighting request and the covariance regularization record |
 | `selection` | the handling of missing outcomes and model descriptions. Fit counts are nested in `selection$models` and depend on the active route. Observation weighting also records its fitting universe and active cells. |
 | `nuisance_diagnostics`, `outcome_design` | the fitted treatment, outcome, observation and imputation models, and the design columns |
+| `chain_info` | the comparisons, the paths that identify effects and the comparison weights used by `chain_report()` |
 | `numerical_certificate` | a numerical certificate when one is produced; the current numerical policy uses conventional computation without per fit error certification |
 | `request`, `public` | the honored computation flags with the admitted multiplier workers, and the resource profile with the numerical policy |
 | `basis` | optional separate contrasts, kept apart from the cells |
@@ -83,6 +107,17 @@ A cell is unavailable when the comparisons available to the estimator cannot sup
 Failures of a model fit, a covariance calculation or a numerical solve are different: the fit stops with an error that names the problem, and nothing is dropped or relaxed to obtain a result.
 
 Unavailable cells also affect other outputs. A simultaneous band covers only the available cells. The pretrend test is unavailable when any of its cells is. An aggregate that needs an unavailable cell is `NA` with the missing cells named, unless `na.rm = TRUE` requests the restricted target over the available cells, which is then marked in `restricted` and `excluded.ids`.
+
+### Reference covariate exclusions
+
+If a fit encounters a required reference covariate that is missing, inspect
+`fit$chained$reference_eligibility`. The `targets` table reports the
+reference date and eligible treated count for each cohort. Its counts of
+missing values by group describe the supplied units at that date and can
+include units outside the comparison groups. `restricted_treated_cohorts`
+lists the cohorts whose effects describe fewer treated units.
+`auxiliary_unavailable` explains any pretrend comparison that could not
+use its required covariates.
 
 ## Aggregated results
 
@@ -155,7 +190,9 @@ The reported uncertainty rests on large sample approximations: enough independen
 
 ## Point estimates only
 
-With `compute_inffunc = FALSE`, `att_gt()` returns the same point estimates as with `TRUE`, but `inffunc`, `V_analytical`, `W` and `Wpval` are `NULL`, `se` is `NA`, `c` is the pointwise normal value, the recorded `bstrap` and `cband` are `FALSE`, `fit$chained$inference$kind` is `"not_computed"` and the pretrend test status is `"not_computed"`. `aggte()` refuses such a result.
+With `compute_inffunc = FALSE`, `att_gt()` returns the same point estimates as with `TRUE`, without allocating unit-level influence functions or analytical covariance matrices. For cohort results, `inffunc`, `V_analytical`, `W` and `Wpval` are `NULL`, `se` is `NA`, and `c` is the pointwise normal value. The recorded `bstrap` and `cband` are `FALSE`; `fit$chained$inference$kind` and the pretrend test status are `"not_computed"`. `aggte()` refuses such a result.
+
+Static `dname` results record `fit$inference$compute_inffunc = FALSE` and `fit$inference$se_reported = "none_compute_inffunc_false"`. Their influence functions, covariance and standard errors are unavailable, as described in the static result fields above.
 
 ## Pretrend tests
 
@@ -190,22 +227,32 @@ A test that does not reject does not establish parallel trends. Under PT-all, ce
 - **Plots.** Save with `ggplot2::ggsave()`.
 - **Fitted objects.** `saveRDS()` keeps the complete result, including influence functions, for later inspection with the same package versions; `fit$chained$versions` records them. The panel data are not part of the result.
 
-## Planned result tables
+## Chain and combination reports
 
-The following capabilities have been proposed for a later version. They require further authoring and, in most cases, new inspection functions whose names and contents are not yet decided. No such function exists now.
+`chain_report(fit, cohort = NULL, time = NULL, include_pre = FALSE, tol = 1e-10)` inspects how each reported cell is identified and reconstructed from the retained moments in `fit$chained$chain_info`:
 
-| Proposed capability | Intended content | Current state |
-| --- | --- | --- |
-| Table of two period comparisons | cohort, start and end dates, comparison group, numbers of usable pairs, adjustment methods, comparison estimate, availability and reason; comparisons used for effects kept apart from comparisons reported before treatment | Stored structures differ across estimators; no documented accessor. |
-| Combination table for one effect | each comparison's coefficient in the reconstruction of a chosen effect and its contribution, reproducing the reported estimate | No documented accessor for the combination coefficients. |
-| Aggregation weights table | effect identifiers, weights, included and excluded cells and the resulting target | Partly available in `agg$chained$cell`, `agg$chained$overall$weights`, `agg$chained$cohort_shares` and `agg$chained$weights_theta`. |
-| Consistent model diagnostics | observation probabilities and coefficients, treatment and outcome fits, overlap summaries | Detailed nested records exist in `fit$chained$nuisance_diagnostics`. |
+- `cr$summary` (or `as.data.frame(cr, what = "summary")`) returns one row per selected cell with `target_id`, `g`, `time`, `event_time`, `ref`, `role`, `available`, `status`, `requires_chaining` (whether no single-pair comparison spans from the baseline date directly to `time` in the unreduced catalog), `n_witness_links`, `n_active_gmm_links`, `estimate`, `se`, `chain_path`, and `support_reason`.
+- `as.data.frame(cr, what = "witness")` returns a short path of comparisons that identifies the selected effect (`s`, `t`, `link_role`, `control_pool`, `sign`, `link_estimate`, `contribution`) bridging the reference period to the target date.
+- `as.data.frame(cr, what = "gmm_weights")` (or `print(cr, show_gmm_weights = TRUE)`) returns all retained comparison moments with `|gmm_weight| > tol` and their linear `contribution = gmm_weight * link_estimate`, which sum to the reported estimate.
 
-These tables will need to keep three kinds of weights apart. Observation weights adjust for missing outcomes. Combination coefficients reconstruct an effect from comparisons; they can be negative and are not population shares. Aggregation weights combine effects into summaries.
+## Inspect fitted models
+
+Set `control = list(keep_nuisance = TRUE)` in the estimation call to keep the fitted equations and coefficient tables. Use `nuisance_models(fit)` to see which models are available. Select a component and a fitted block to see the equation, its sample and its coefficient estimates with standard errors.
+
+| Component | What it models |
+| --- | --- |
+| `"treatment"` | Which units enter the treatment group in a comparison |
+| `"outcome"` | The untreated change used as the counterfactual |
+| `"selection"` | Whether the outcomes needed for a change are observed |
+| `"imputation"` | The actual outcome change within the relevant group |
+
+For a doubly robust treatment fit with augmented missing-outcome adjustment, all four models can be active. The [hands-on notebook](../../notebooks/cdid_practical_guide.qmd) shows a coefficient table for each in its section on the four fitted models. Use `?nuisance_models` for options and supported fits.
+
+Keep three kinds of weights apart. Observation weights adjust for missing outcomes. Combination coefficients (`gmm_weight` in `chain_report()`) reconstruct an effect from comparisons; they can be negative and are not population shares. Aggregation weights combine effects into summaries.
 
 ---
 
-**Reading path, step 19 of 20** · Previous: [Options](options.md) · Next: [Diagnose errors and unavailable results](../help/troubleshooting.md)
+**Reading path, step 19 of 22** · Previous: [Options](options.md) · Next: [Diagnose errors and unavailable results](../help/troubleshooting.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -232,6 +279,8 @@ These tables will need to keep three kinds of weights apart. Observation weights
 | 18 | [Options](options.md) |
 | 19 | **Results** (this page) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](../examples/short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

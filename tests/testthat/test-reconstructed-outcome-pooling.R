@@ -92,6 +92,21 @@ rcp_fit <- function(a, method = "dr", pooling = "separate", mode = "separate") {
     reference = a$reference, outcome_pooling = mode)
 }
 
+testthat::test_that("across-cohort imputation replay follows requested row and link order", {
+  a <- rcp_case()
+  fit <- rcp_fit(a, method = "dr", pooling = "across_cohorts", mode = "pooled")
+  evaluate <- rcp_ns("evaluate_imputation_if_chunk")
+  canonical <- evaluate(fit, 1:11, 1:3, scale = "frame")
+  reordered <- evaluate(fit, 11:1, 3:1, scale = "frame")
+  expected <- canonical$phi[11:1, 3:1, drop = FALSE]
+  testthat::expect_identical(reordered$rows, 11:1)
+  testthat::expect_identical(reordered$id, canonical$id[11:1])
+  testthat::expect_identical(reordered$links, 3:1)
+  testthat::expect_identical(attributes(reordered$phi), attributes(expected))
+  testthat::expect_identical(reordered$phi == 0, expected == 0)
+  testthat::expect_lte(max(abs(reordered$phi - expected)), 1e-12)
+})
+
 # Dense grouped WLS using only raw rows, semantic catalog IDs and frozen bases.
 # The original empirical frequencies perturb every nuisance stage, not w or X.
 rcp_reference <- function(a, fit, freq = rep(1, nrow(a$Y))) {

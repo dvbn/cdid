@@ -106,6 +106,9 @@ cp04_budget <- function(ctrl, retained, scratch, work, output, label) {
 }
 
 validate_cp04_reader <- function(reader) {
+  if (cdid_sel_check_validated(reader, "cdid_cp04_frame_reader", "cp04_reader")) {
+    return(invisible(reader))
+  }
   if (!inherits(reader, "cdid_cp04_frame_reader") ||
       !ipw_owner_seal_ok(reader, "cp04_reader"))
     cp04_abort("Expected the immutable CP04 full-F reader.", "integrity")
@@ -114,6 +117,11 @@ validate_cp04_reader <- function(reader) {
   validate_ipw_frame_owner(frame)
   if (!identical(reader$panel_ref, frame$panel_ref))
     cp04_abort("CP04 reader panel reference disagrees with its frame owner.", "integrity")
+  cdid_sel_record_validated(
+    reader, "cp04_reader", NULL, frame,
+    get("panel_owner", reader$panel_ref, inherits = FALSE),
+    reader$frame_ref
+  )
   invisible(reader)
 }
 
@@ -292,7 +300,13 @@ cp04_reader_assemble <- function(hdr, frame_owner, id, Z, g_num, weights, U, rho
   cp04_budget(ctrl, c(borrowed, actual), scratch, 0, actual, "retained full-F reader")
   obj$accounting$owned_entries <- actual
   obj$accounting$character_bytes <- unname(payload["char_bytes"])
-  ipw_owner_seal(obj, "cp04_reader")
+  sealed <- cdid_fast_seal(obj, "cp04_reader")
+  cdid_sel_record_validated(
+    sealed, "cp04_reader", NULL, frame_owner,
+    get("panel_owner", frame_owner$panel_ref, inherits = FALSE),
+    frame_owner$ref
+  )
+  sealed
 }
 
 # Uses the owner's sparse calendar postings. Sorted binary searches per chunk
@@ -374,6 +388,17 @@ cp04_logit <- function(X, y, w, glm_control, N, identity) {
     fail("Only binary pair/treatment logit responses are supported.", "unsupported")
   cp04_finite(X, "logit design"); cp04_finite(w, "logit fitting weights", TRUE)
   if (ipw_logit_exact_alias(X)) fail("Logit has deficient model rank.", "rank")
+  if (exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
+      cdid_are_default_fns(c("ipw_glm_fit_internal", "ipw_logit_values", "ipw_logit_exact_alias", "ipw_logit_coordinate_separation")) && is.list(glm_control)) {
+    fk_logit <- cdid_fast_kernel("C_cdid_cp04_logit_fast")
+    if (!is.null(fk_logit)) {
+      gc_ctrl <- do.call(stats::glm.control, glm_control)
+      if (!isTRUE(gc_ctrl$trace)) {
+        fast_fit <- fk_logit(X, y, as.double(w), gc_ctrl$epsilon, gc_ctrl$maxit, as.double(N))
+        if (!is.null(fast_fit)) return(fast_fit)
+      }
+    }
+  }
   gf <- ipw_glm_fit_internal(X, y, w, glm_control)
   f <- gf$fit
   diag <- list(converged = f$converged, boundary = f$boundary, rank = f$rank,
@@ -410,10 +435,17 @@ cp04_logit <- function(X, y, w, glm_control, N, identity) {
 }
 
 # `reference` (D60): the cell's recipe selection design, W_g and a_k^{g,U}.
+# Issue #16: a restricted recipe fits on U E_g of the cohort (its excluded
+# units are absent, never unobserved); the native kernel reads all of U and
+# is bypassed for that recipe only.
 cp04_selection_fit <- function(reader, spec, glm_control, ctrl, reference = NULL) {
+  restricted <- chained_reference_recipe_restricted(reference, spec$reference)
+  fast <- if (restricted) NULL else cdid_fast_sel_cp04_fit(reader, spec, glm_control, reference)
+  if (!is.null(fast)) return(fast)
   st <- reader$state; k <- spec$cohort
   rows <- st$cohort_order[seq.int(st$cohort_start[k], st$cohort_end[k])]
   rows <- rows[st$U[rows]]
+  if (restricted) rows <- rows[chained_reference_eligible(reference, spec$reference, rows)]
   X <- if (is.null(reference)) st$Z[rows, , drop = FALSE] else chained_reference_s(reference, spec$reference, rows)
   y <- numeric(length(rows))
   for (start in seq.int(1L, length(rows), by = ctrl$max_chunk_rows)) {
@@ -442,6 +474,11 @@ cp04_predict_selection <- function(reader, rows, spec, selection, reference = NU
 cp04_treatment_fit <- function(reader, spec, selection_specs, selections, glm_control, ctrl) {
   st <- reader$state
   frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+  fast <- cdid_fast_sel_trt_fit(
+    1L, reader, spec, selections,
+    glm_control = glm_control, cols_info = list(Z_a = frame$Z_a)
+  )
+  if (!is.null(fast)) return(fast)
   p <- frame$n_covariates; d <- ncol(st$Z); m <- length(spec$cohorts)
   # One bounded observed-risk fit buffer. No outcome/model arrays survive return.
   n <- spec$n_observers
@@ -500,12 +537,21 @@ cp04_treatment_fit <- function(reader, spec, selection_specs, selections, glm_co
 }
 
 validate_cp04_backend <- function(backend) {
+  if (cdid_sel_check_validated(backend, "cdid_cp04_corollary1", "cp04_backend")) {
+    return(invisible(backend))
+  }
   if (!inherits(backend, "cdid_cp04_corollary1") || !ipw_owner_seal_ok(backend, "cp04_backend"))
     cp04_abort("Expected the immutable private CP04 backend.", "integrity")
   reader <- if (is.environment(backend$reader_ref) && exists("cp04_reader", backend$reader_ref, inherits = FALSE))
     get("cp04_reader", backend$reader_ref, inherits = FALSE) else NULL
   validate_cp04_reader(reader)
   if (!is.null(backend$reference_ref)) chained_backend_reference(backend)
+  cdid_sel_record_validated(
+    backend, "cp04_backend", reader,
+    get("frame_owner", reader$frame_ref, inherits = FALSE),
+    get("panel_owner", reader$panel_ref, inherits = FALSE),
+    reader$frame_ref
+  )
   invisible(backend)
 }
 
@@ -542,10 +588,13 @@ fit_cp04_corollary1 <- function(reader, link_views, control, glm_control,
   cp04_budget(ctrl, c(base, header_bound), header_bound, 64 * L * L,
     header_bound, "model metadata")
   ss <- ts <- links <- list()
+  ss_env <- new.env(hash = TRUE, parent = emptyenv())
+  ts_env <- new.env(hash = TRUE, parent = emptyenv())
   max_fit_n <- 0L
+  lv_ok <- cdid_fast_validate_link_views(link_views, frame)
   for (ell in seq_along(link_views)) {
     v <- link_views[[ell]]
-    validate_ipw_link_view(v, frame_owner = frame)
+    if (!lv_ok) validate_ipw_link_view(v, frame_owner = frame)
     source_key <- v$functional_key
     if (!gmm_scalar_character(source_key) || !startsWith(source_key, "cmpcat:"))
       cp04_abort("CP04 requires the supplied comparison-catalog functional key.", "unsupported")
@@ -565,19 +614,37 @@ fit_cp04_corollary1 <- function(reader, link_views, control, glm_control,
       cp04_abort("Unsupported full-F cohort or pair support.", "support")
     si <- integer(length(cohorts))
     pair <- v$pair
+    pair_tag <- paste(pair$s, pair$t, sep = "\r")
     for (k in seq_along(cohorts)) {
-      spec <- list(pair = pair, cohort = cohorts[k])
-      same <- which(vapply(ss, identical, logical(1), spec))
-      if (length(same)) si[k] <- same[1L] else {
-        ss[[length(ss) + 1L]] <- spec; si[k] <- length(ss)
+      ck <- cohorts[k]
+      spec <- list(pair = pair, cohort = ck)
+      sk <- paste(pair_tag, ck, sep = "\r")
+      cand <- get0(sk, envir = ss_env, inherits = FALSE)
+      hit_s <- 0L
+      if (!is.null(cand)) {
+        for (ci_idx in cand) if (identical(ss[[ci_idx]], spec)) { hit_s <- ci_idx; break }
       }
-      max_fit_n <- max(max_fit_n, st$cohort_end[cohorts[k]] - st$cohort_start[cohorts[k]] + 1)
+      if (hit_s > 0L) si[k] <- hit_s else {
+        new_s <- length(ss) + 1L
+        ss[[new_s]] <- spec; si[k] <- new_s
+        assign(sk, c(cand, new_s), envir = ss_env)
+      }
+      max_fit_n <- max(max_fit_n, st$cohort_end[ck] - st$cohort_start[ck] + 1)
     }
     # K order is normalized by actual values; operator labels are provenance.
     spec <- list(pair = pair, cohorts = cohorts, selection_ids = si,
       n_observers = as.integer(v$support$n_observed_risk_units))
-    same <- which(vapply(ts, identical, logical(1), spec))
-    if (length(same)) ti <- same[1L] else { ts[[length(ts) + 1L]] <- spec; ti <- length(ts) }
+    tk <- paste(c(pair_tag, cohorts, si, spec$n_observers), collapse = "\r")
+    cand_t <- get0(tk, envir = ts_env, inherits = FALSE)
+    ti <- 0L
+    if (!is.null(cand_t)) {
+      for (ci_idx in cand_t) if (identical(ts[[ci_idx]], spec)) { ti <- ci_idx; break }
+    }
+    if (ti == 0L) {
+      ti <- length(ts) + 1L
+      ts[[ti]] <- spec
+      assign(tk, c(cand_t, ti), envir = ts_env)
+    }
     max_fit_n <- max(max_fit_n, spec$n_observers)
     # Bind the corrected law in the existing conventions position, preserving
     # source g-index/pool identity and original/horizon operator provenance.
@@ -614,8 +681,10 @@ fit_cp04_corollary1 <- function(reader, link_views, control, glm_control,
   work <- sel_work + trt_work + 64 * (L * L + unname(metadata_payload["char_bytes"]))
   retained_bound <- base + metadata + model_bound + 2048
   cp04_budget(ctrl, retained_bound, scratch, c(work, external_work_ops), metadata + model_bound + 2048, "CP04 fits")
-  selections <- lapply(ss, function(s) cp04_selection_fit(reader, s, gc, ctrl))
-  treatments <- lapply(ts, function(s) cp04_treatment_fit(reader, s, ss, selections, gc, ctrl))
+  selections <- cdid_fast_sel_cp04_fit_batch(reader, ss, gc)
+  if (is.null(selections)) selections <- lapply(ss, function(s) cp04_selection_fit(reader, s, gc, ctrl))
+  treatments <- cdid_fast_sel_trt_fit_batch_cp04(reader, ts, selections, gc)
+  if (is.null(treatments)) treatments <- lapply(ts, function(s) cp04_treatment_fit(reader, s, ss, selections, gc, ctrl))
   state <- list(selection_specs = ss, selections = selections, treatment_specs = ts,
     treatments = treatments, links = links, glm_control = gc,
     law = paste0("CP04:", st$universe, ":weighted-cohort-pair-logit:a_U/(rho*p_U):eta=Q(G)"),
@@ -633,7 +702,13 @@ fit_cp04_corollary1 <- function(reader, link_views, control, glm_control,
   if (actual > metadata + model_bound + 2048) cp04_abort("Retained model bound underestimated.", "bound")
   obj$accounting$owned_entries <- actual
   obj$accounting$character_bytes <- unname(payload["char_bytes"])
-  ipw_owner_seal(obj, "cp04_backend")
+  sealed <- cdid_fast_seal(obj, "cp04_backend")
+  cdid_sel_record_validated(
+    sealed, "cp04_backend", reader, frame,
+    get("panel_owner", reader$panel_ref, inherits = FALSE),
+    reader$frame_ref
+  )
+  sealed
 }
 
 # Shared preflight arithmetic for one requested row/link batch. Replay invokes
@@ -671,32 +746,64 @@ cp04_if_budget <- function(backend, B, links) {
 # Explicit row and link batches; output is never forced to N x L. Diagnostic
 # coordinates permit independent finite-refit checks of the triangular stack.
 evaluate_cp04_if_chunk <- function(backend, rows, links, scale = "frame", details = FALSE) {
+  fast_res <- cdid_fast_eval_cp04_cor1_if_chunk(backend, rows, links, scale, details)
+  if (!is.null(fast_res)) return(fast_res)
   validate_cp04_backend(backend)
   if (isTRUE(backend$uses_selection_models))
     return(evaluate_cp04_selection_if_chunk(backend, rows, links, scale = scale, details = details))
   reader <- get("cp04_reader", backend$reader_ref, inherits = FALSE)
   st <- reader$state; ctrl <- backend$control
-  if (!is.numeric(rows) || is.object(rows) || !is.null(dim(rows)) || !length(rows) || anyNA(rows) || any(rows != floor(rows)) ||
-      any(rows < 1 | rows > st$N) || anyDuplicated(rows) || length(rows) > ctrl$max_chunk_rows ||
-      !is.numeric(links) || is.object(links) || !is.null(dim(links)) || !length(links) || anyNA(links) || any(links != floor(links)) ||
-      any(links < 1 | links > length(backend$links)) || anyDuplicated(links) ||
+  if (!cdid_sel_valid_idx(rows, st$N) || length(rows) > ctrl$max_chunk_rows ||
+      !cdid_sel_valid_idx(links, length(backend$links)) ||
       !identical(details, isTRUE(details)) || !is.character(scale) || length(scale) != 1L || is.na(scale) ||
       !scale %in% c("frame", "core")) cp04_abort("Invalid explicit IF row/link batch, scale or details flag.")
-  pre <- cp04_if_budget(backend, length(rows), links)
+  B <- length(rows)
+  meta <- if (!details && cdid_are_default_fns(c("cp04_if_budget", "cp04_budget")))
+    cdid_sel_get_if_meta(backend, B, links, "cp04_if_meta") else NULL
+  if (is.null(meta)) {
+    pre <- cp04_if_budget(backend, B, links)
+    link_names <- vapply(backend$links[links], `[[`, character(1), "link_id")
+    if (!details && cdid_are_default_fns(c("cp04_if_budget", "cp04_budget"))) {
+      cdid_sel_set_if_meta(backend, B, links, pre, link_names, "cp04_if_meta")
+    }
+  } else {
+    pre <- meta$pre
+    link_names <- meta$link_names
+  }
   tids <- pre$tids; sids <- pre$sids
-  B <- length(rows); d <- ncol(st$Z)
+  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE)
+  if (!details && is.null(backend$reference_ref) && is.null(backend$layout) && is.null(backend$pair_outcomes)) {
+    fast_if <- cdid_fast_sel_if_chunk(1L, backend, reader, frame, NULL, rows, links, scale, pre, link_names)
+    if (!is.null(fast_if)) {
+      out <- list(
+        rows = rows, id = st$id[rows], links = links, phi = fast_if$phi,
+        scale = scale, normalization_count = if (scale == "core") st$n_A else st$N,
+        diagnostics = list(
+          n_selection_score_evaluations = length(sids),
+          n_treatment_score_evaluations = length(tids),
+          output_entries_bound = pre$output,
+          concurrent_scratch_bound = pre$scratch,
+          work_ops_bound = pre$work
+        )
+      )
+      if (unname(cp04_payload(out)["entries"]) > pre$output)
+        cp04_abort("IF output bound underestimated.", "bound")
+      return(out)
+    }
+  }
+  d <- ncol(st$Z)
   # The original32-fold row scratch leaves24-fold for all existing
   # rows/solves/results; only the other8-fold can fund shared position reads.
   pair_op <- NULL
   if (!details && is.null(backend$reference_ref) && is.null(backend$layout) && is.null(backend$pair_outcomes)) {
-    frame_p <- get("frame_owner", reader$frame_ref, inherits = FALSE)$n_covariates
+    frame_p <- frame$n_covariates
     widths <- length(sids) * (d + 2) + sum(vapply(backend$treatment_specs[tids],
       function(s) 2 * frame_p + 10 + length(s$cohorts) * (d + 1), numeric(1))) +
       3 * length(st$cohorts) + length(links) + 16
     pair_op <- cp04_pair_read_operation(reader, rows, 8 * B * (widths + frame_p + d + 4))
   }
   on.exit(if (!is.null(pair_op)) pair_op$abort(), add = TRUE)
-  frame <- get("frame_owner", reader$frame_ref, inherits = FALSE); p <- frame$n_covariates
+  p <- frame$n_covariates
   models <- if (!details && !is.null(pair_op)) cp04_legacy_ipw_native(backend, reader, frame, rows, tids, sids,
     pair_op, pre$scratch - 8 * B * (widths + p + d + 4)) else NULL
   if (is.null(models)) {

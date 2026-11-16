@@ -409,7 +409,8 @@ test_that("corrected-selection DR on the supplied F7 fixture uses beta-only non-
   for (det in c(FALSE, TRUE)) for (rows in split(seq_len(N7), ceiling(seq_len(N7) / 13L))) {
     a <- e7$evaluate_dr_corollary1_if_chunk(fit7, rows, links7, scale = "frame", details = det)
     rec <- d90_take(e7)$core
-    expect_identical(a, api$evaluate_dr_corollary1_if_chunk(fit7, rows, links7, scale = "frame", details = det))
+    # Only the influence-function values can differ by roundoff.
+    expect_true(roundoff_identical(a, api$evaluate_dr_corollary1_if_chunk(fit7, rows, links7, scale = "frame", details = det), "$/phi"))
     expect_identical(length(rec), 1L)
     expect_true(rec[[1L]]$supplied)
     expect_identical(rec[[1L]]$beta_only, !det)

@@ -277,23 +277,32 @@ augmented_public_diagnostics <- function(res, control, public_object = NULL) {
   st <- reader$state
   sb <- b$selection_backend
   icpt <- isTRUE(b$outcome_recipe$intercept)
-  num <- function(x, f) vapply(x, function(r) as.double(r[[f]]), numeric(1))
-  int <- function(x, f) vapply(x, function(r) as.integer(r[[f]]), integer(1))
-  cells <- data.frame(cell_id = int(b$cells, "cell_id"),
-    name = vapply(b$cells, `[[`, character(1), "name"), cohort = num(b$cells, "cohort"),
-    s = vapply(b$cells, function(r) as.double(r$pair$s), numeric(1)),
-    t = vapply(b$cells, function(r) as.double(r$pair$t), numeric(1)),
-    duration_steps = int(b$cells, "L"), group_id = int(b$cells, "group_id"),
-    selection_pair_cohort = int(b$cells, "q_id"),
-    n_observed_pairs = int(b$cells, "n_pair"), mass = num(b$cells, "mass"),
-    local_intercept = if (icpt) num(b$cells, "alpha") else NA_real_,
-    repeat_rate = num(b$cells, "a_k"),
-    roster_mass = num(b$cells, "M_one"),
-    probability_weighted_mass = num(b$cells, "MW_one"),
-    mass_discrepancy = num(b$cells, "MD_one"),
-    imputation_total = num(b$cells, "Y_one"),
-    augmented_total = num(b$cells, "Yaug_one"),
-    stringsAsFactors = FALSE)
+  num <- function(x, f) as.double(vapply(x, `[[`, numeric(1), f))
+  int <- function(x, f) as.integer(vapply(x, `[[`, integer(1), f))
+  n_c <- length(b$cells)
+  cells <- structure(
+    list(
+      cell_id = int(b$cells, "cell_id"),
+      name = vapply(b$cells, `[[`, character(1), "name"),
+      cohort = num(b$cells, "cohort"),
+      s = vapply(b$cells, function(r) as.double(r$pair$s), numeric(1)),
+      t = vapply(b$cells, function(r) as.double(r$pair$t), numeric(1)),
+      duration_steps = int(b$cells, "L"),
+      group_id = int(b$cells, "group_id"),
+      selection_pair_cohort = int(b$cells, "q_id"),
+      n_observed_pairs = int(b$cells, "n_pair"),
+      mass = num(b$cells, "mass"),
+      local_intercept = if (icpt) num(b$cells, "alpha") else rep.int(NA_real_, n_c),
+      repeat_rate = num(b$cells, "a_k"),
+      roster_mass = num(b$cells, "M_one"),
+      probability_weighted_mass = num(b$cells, "MW_one"),
+      mass_discrepancy = num(b$cells, "MD_one"),
+      imputation_total = num(b$cells, "Y_one"),
+      augmented_total = num(b$cells, "Yaug_one")
+    ),
+    class = "data.frame",
+    row.names = .set_row_names(n_c)
+  )
   groups <- lapply(b$groups, function(g) list(group_id = g$group_id, name = g$name, pooling = g$pooling,
     cell_ids = g$cell_ids, cohorts = st$cohorts[g$cohorts], rank = g$p, kept_columns = g$kept_columns,
     slopes = g$beta, aliased_columns = g$basis$aliased_columns,
@@ -312,12 +321,19 @@ augmented_public_diagnostics <- function(res, control, public_object = NULL) {
     shared_slopes = so$beta, has_local_intercepts = isTRUE(so$intercept),
     local_block_intercepts = if (isTRUE(so$intercept)) stats::setNames(as.double(so$alpha), block_names) else numeric(0),
     response = "reconstructed augmented response Z",
-    blocks = data.frame(block_id = int(so$blocks, "block_id"), name = block_names,
-      s = vapply(so$blocks, function(r) as.double(r$pair$s), numeric(1)),
-      t = vapply(so$blocks, function(r) as.double(r$pair$t), numeric(1)),
-      duration_steps = int(so$blocks, "L"),
-      control_cohorts = vapply(so$blocks, function(r) paste(r$control_cohort_labels, collapse = ","), character(1)),
-      synthetic_mass = num(so$blocks, "mass"), stringsAsFactors = FALSE),
+    blocks = structure(
+      list(
+        block_id = int(so$blocks, "block_id"),
+        name = block_names,
+        s = vapply(so$blocks, function(r) as.double(r$pair$s), numeric(1)),
+        t = vapply(so$blocks, function(r) as.double(r$pair$t), numeric(1)),
+        duration_steps = int(so$blocks, "L"),
+        control_cohorts = vapply(so$blocks, function(r) paste(r$control_cohort_labels, collapse = ","), character(1)),
+        synthetic_mass = num(so$blocks, "mass")
+      ),
+      class = "data.frame",
+      row.names = .set_row_names(length(so$blocks))
+    ),
     aliased_columns = so$basis$aliased_columns, rss = so$rss, objective = so$objective)
   if (reconstruction_separate(so)) counterfactual_or <- list(outcome_pooling = "separate",
     response = "reconstructed control outcome changes", blocks = outcome_public_blocks(b),
@@ -340,18 +356,31 @@ augmented_public_diagnostics <- function(res, control, public_object = NULL) {
     local_intercepts = if (is.null(counterfactual_or)) NULL else counterfactual_or$local_block_intercepts,
     treatment = lapply(treatment, `[[`, "coefficients"))
   link_ids <- vapply(b$links, `[[`, character(1), "link_id")
-  fitted_catalog <- data.frame(index = seq_along(b$links), link_id = link_ids,
-    role = ifelse(startsWith(link_ids, "cp04:auxiliary:"), "auxiliary", "catalog"),
-    cohort = num(b$links, "target_cohort"),
-    controls = vapply(b$links, function(l) paste(l$control_cohort_labels, collapse = ","), character(1)),
-    s = vapply(b$links, function(l) as.double(l$pair$s), numeric(1)),
-    t = vapply(b$links, function(l) as.double(l$pair$t), numeric(1)),
-    duration_steps = int(b$links, "L"), target_cell = int(b$links, "target_cell_id"),
-    or_block = int(b$links, "or_block_id"), treatment_model = int(b$links, "trt_id"),
-    mu = num(b$links, "mu"), T = num(b$links, "T_gl"), C = num(b$links, "C_ol"),
-    Bg = num(b$links, "B_gl"), Bo = num(b$links, "B_ol"),
-    d_plus = num(b$links, "d_plus"), d_minus = num(b$links, "d_minus"),
-    stringsAsFactors = FALSE)
+  n_l <- length(b$links)
+  fitted_catalog <- structure(
+    list(
+      index = seq_len(n_l),
+      link_id = link_ids,
+      role = ifelse(startsWith(link_ids, "cp04:auxiliary:"), "auxiliary", "catalog"),
+      cohort = num(b$links, "target_cohort"),
+      controls = vapply(b$links, function(l) paste(l$control_cohort_labels, collapse = ","), character(1)),
+      s = vapply(b$links, function(l) as.double(l$pair$s), numeric(1)),
+      t = vapply(b$links, function(l) as.double(l$pair$t), numeric(1)),
+      duration_steps = int(b$links, "L"),
+      target_cell = int(b$links, "target_cell_id"),
+      or_block = int(b$links, "or_block_id"),
+      treatment_model = int(b$links, "trt_id"),
+      mu = num(b$links, "mu"),
+      T = num(b$links, "T_gl"),
+      C = num(b$links, "C_ol"),
+      Bg = num(b$links, "B_gl"),
+      Bo = num(b$links, "B_ol"),
+      d_plus = num(b$links, "d_plus"),
+      d_minus = num(b$links, "d_minus")
+    ),
+    class = "data.frame",
+    row.names = .set_row_names(n_l)
+  )
   support <- list(n_full_frame_units = st$N, n_pair_eligible_A_units = st$n_A,
     n_frame_only_units = res$frame_owner$n_frame_only_units,
     design_source = b$design_source, design_columns = b$design_columns, design_rows = st$N,

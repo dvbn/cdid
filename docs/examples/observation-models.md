@@ -1,6 +1,6 @@
 # Choose an observation model for missing outcomes
 
-Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain the historical pooled specification; the current default uses separate comparison regressions.
+Results below were produced on October 29, 2026 with `cdid` 1.1.0.0, `did` 2.5.1 and `DRDID` 1.3.0 under R 4.5.2, using the displayed seeds where applicable. These are individual examples; they do not establish repeated-sample coverage. OR/DR calls shown here explicitly retain pooled slopes; the current default uses separate comparison regressions.
 
 When outcomes are missing at some dates, chained DiD uses the changes of units observed at both dates of each pair. You decide how those observed changes stand in for the study population: with no observation equation, with a logit for each date, or with a logit for each pair of dates, and with more or fewer shared slopes. This example makes that choice on one small simulated panel in which the right answer is known by construction. [Handling missing outcomes](../methods/missing-outcomes.md) defines the assumptions and models.
 
@@ -180,11 +180,6 @@ data.frame(
 # The simple aggregate, the average of those four effects:
 1.375 + 0.5 * mean(units$x[units$g == 3])
 
-str(fit_date$chained$selection)
-str(fit_pair$chained$selection)
-nuisance <- fit_date$chained$nuisance_diagnostics
-nuisance$fitted_catalog$link_id <- NULL  # opaque row identifiers, not needed here
-str(nuisance, max.level = 2)
 ```
 
 <details>
@@ -197,276 +192,6 @@ date date 1.623850 0.03817623
 pair pair 1.628628 0.03800096
 [1] 1.251773 1.501773 1.751773 2.001773
 [1] 1.626773
-List of 23
- $ method                : chr "corollary1"
- $ canonical_assumption  : chr "conditional_mtar"
- $ requested_selection   : chr "conditional_mtar"
- $ selection_model       : chr "independent_period_logit"
- $ selection_pooling     : chr "separate"
- $ link                  : chr "logit"
- $ fitting_universe      : chr "F"
- $ population            : chr "supplied representative frame"
- $ formula               :Class 'formula'  language ~x
-  .. ..- attr(*, ".Environment")=<environment: 0xca0505b60> 
- $ transport             : chr "rho=1"
- $ justification         : NULL
- $ active_cells          :'data.frame':	12 obs. of  5 variables:
-  ..$ cell_id : int [1:12] 1 2 3 4 5 6 7 8 9 10 ...
-  ..$ kind    : chr [1:12] "date" "date" "date" "date" ...
-  ..$ cohort  : num [1:12] 3 3 3 3 3 ...
-  ..$ label   : chr [1:12] "k1_t1" "k1_t2" "k1_t3" "k1_t4" ...
-  ..$ block_id: int [1:12] 1 2 3 4 5 6 7 8 9 10 ...
- $ n_active_cells        : int 12
- $ n_selection_blocks    : int 12
- $ n_selection_parameters: int 24
- $ empirical_repeat_rates: Named num [1:2] 0.915 0.932
-  ..- attr(*, "names")= chr [1:2] "3" "Inf"
- $ assumptions           : chr "Each active pair/cohort requires population conditional mean trend-MAR on F, positivity, used-pair conditional "| __truncated__
- $ if_scale              : chr "phi_F on ALL N roster rows; core psi=(n_A/N)*phi_F with 1/n_A covariance normalization"
- $ unsupported           : chr [1:4] "known pair probabilities (including design p=1)" "custom IPW callbacks without an explicit log_weight_gradient" "estimated or unnormalized transport" "probit"
- $ models                :List of 10
-  ..$ n_selection_fits      : int 12
-  ..$ n_selection_cells     : int 12
-  ..$ n_selection_blocks    : int 12
-  ..$ n_selection_parameters: int 24
-  ..$ n_regression_fits     : int 1
-  ..$ n_regression_blocks   : int 15
-  ..$ n_local_intercepts    : int 15
-  ..$ n_shared_slopes       : int 1
-  ..$ n_supports            : int 30
-  ..$ n_treatment_fits      : int 15
- $ outcome_model         : chr "shared one-period outcome-change control-mean regression"
- $ duration_convention   : chr "stored-calendar transition count L_e = i_t - i_s"
- $ treatment_model       : chr "risk-set treatment propensity logit"
-List of 23
- $ method                : chr "corollary1"
- $ canonical_assumption  : chr "conditional_mtar"
- $ requested_selection   : chr "conditional_mtar"
- $ selection_model       : chr "pair_logit"
- $ selection_pooling     : chr "separate"
- $ link                  : chr "logit"
- $ fitting_universe      : chr "F"
- $ population            : chr "supplied representative frame"
- $ formula               :Class 'formula'  language ~x
-  .. ..- attr(*, ".Environment")=<environment: 0xca0505b60> 
- $ transport             : chr "rho=1"
- $ justification         : NULL
- $ active_cells          :'data.frame':	30 obs. of  5 variables:
-  ..$ cell_id : int [1:30] 1 2 3 4 5 6 7 8 9 10 ...
-  ..$ kind    : chr [1:30] "pair" "pair" "pair" "pair" ...
-  ..$ cohort  : num [1:30] 3 3 3 3 3 3 3 3 3 3 ...
-  ..$ label   : chr [1:30] "k1_s1_t2" "k1_s1_t3" "k1_s1_t4" "k1_s1_t5" ...
-  ..$ block_id: int [1:30] 1 2 3 4 5 6 7 8 9 10 ...
- $ n_active_cells        : int 30
- $ n_selection_blocks    : int 30
- $ n_selection_parameters: int 60
- $ empirical_repeat_rates: Named num [1:2] 0.915 0.932
-  ..- attr(*, "names")= chr [1:2] "3" "Inf"
- $ assumptions           : chr "Each actual pair/cohort requires population mean trend-MAR, positivity, and correct logit conditional on all X "| __truncated__
- $ if_scale              : chr "phi_F on ALL N roster rows; core psi=(n_A/N)*phi_F with 1/n_A covariance normalization"
- $ unsupported           : chr [1:4] "known pair probabilities (including design p=1)" "custom IPW callbacks without an explicit log_weight_gradient" "estimated or unnormalized transport" "probit"
- $ models                :List of 10
-  ..$ n_selection_fits      : int 30
-  ..$ n_selection_cells     : int 30
-  ..$ n_selection_blocks    : int 30
-  ..$ n_selection_parameters: int 60
-  ..$ n_regression_fits     : int 1
-  ..$ n_regression_blocks   : int 15
-  ..$ n_local_intercepts    : int 15
-  ..$ n_shared_slopes       : int 1
-  ..$ n_supports            : int 30
-  ..$ n_treatment_fits      : int 15
- $ outcome_model         : chr "shared one-period outcome-change control-mean regression"
- $ duration_convention   : chr "stored-calendar transition count L_e = i_t - i_s"
- $ treatment_model       : chr "risk-set treatment propensity logit"
-List of 23
- $ status                     : chr "available"
- $ method                     : chr "dr"
- $ outcome_model              : chr "shared one-period outcome-change control-mean regression"
- $ treatment_model            : chr "risk-set treatment propensity logit"
- $ fit_structure              : chr "single_joint_or_fit_with_block_local_intercepts_plus_deduplicated_treatment_logits"
- $ duration_convention        : chr "stored-calendar transition count L_e = i_t - i_s"
- $ selection                  : chr "corollary1"
- $ selection_model            : chr "independent_period_logit"
- $ selection_pooling          : chr "separate"
- $ selection_route            :List of 23
-  ..$ method                : chr "corollary1"
-  ..$ canonical_assumption  : chr "conditional_mtar"
-  ..$ requested_selection   : chr "conditional_mtar"
-  ..$ selection_model       : chr "independent_period_logit"
-  ..$ selection_pooling     : chr "separate"
-  ..$ link                  : chr "logit"
-  ..$ fitting_universe      : chr "F"
-  ..$ population            : chr "supplied representative frame"
-  ..$ formula               :Class 'formula'  language ~x
-  .. .. ..- attr(*, ".Environment")=<environment: 0xca0505b60> 
-  ..$ transport             : chr "rho=1"
-  ..$ justification         : NULL
-  ..$ active_cells          :'data.frame':	12 obs. of  5 variables:
-  ..$ n_active_cells        : int 12
-  ..$ n_selection_blocks    : int 12
-  ..$ n_selection_parameters: int 24
-  ..$ empirical_repeat_rates: Named num [1:2] 0.915 0.932
-  .. ..- attr(*, "names")= chr [1:2] "3" "Inf"
-  ..$ assumptions           : chr "Each active pair/cohort requires population conditional mean trend-MAR on F, positivity, used-pair conditional "| __truncated__
-  ..$ if_scale              : chr "phi_F on ALL N roster rows; core psi=(n_A/N)*phi_F with 1/n_A covariance normalization"
-  ..$ unsupported           : chr [1:4] "known pair probabilities (including design p=1)" "custom IPW callbacks without an explicit log_weight_gradient" "estimated or unnormalized transport" "probit"
-  ..$ models                :List of 10
-  ..$ outcome_model         : chr "shared one-period outcome-change control-mean regression"
-  ..$ duration_convention   : chr "stored-calendar transition count L_e = i_t - i_s"
-  ..$ treatment_model       : chr "risk-set treatment propensity logit"
- $ outcome_recipe             :List of 9
-  ..$ columns        : chr [1:2] "(Intercept)" "x"
-  ..$ intercept      : logi TRUE
-  ..$ intercept_index: int 1
-  ..$ slope_index    : int 2
-  ..$ slope_columns  : chr "x"
-  ..$ p              : int 1
-  ..$ duration       : chr "L_e = t_calendar_index - s_calendar_index on the stored modeled calendar"
-  ..$ design         : chr "d_e = L_e * z(X) with fixed-unit z"
-  ..$ key            : chr "fixed-X-summed|intercept:TRUE|z:x"
-  ..- attr(*, "class")= chr "cdid_or_pooled_recipe"
- $ treatment_recipe           :List of 3
-  ..$ columns: chr [1:2] "(Intercept)" "x"
-  ..$ index  : int [1:2] 1 2
-  ..$ p      : int 2
-  ..- attr(*, "class")= chr "cdid_dr_treatment_recipe"
- $ fitted_catalog             :'data.frame':	16 obs. of  13 variables:
-  ..$ index           : int [1:16] 1 2 3 4 5 6 7 8 9 10 ...
-  ..$ role            : chr [1:16] "catalog" "catalog" "catalog" "catalog" ...
-  ..$ cohort          : num [1:16] 3 3 3 3 3 3 3 3 3 3 ...
-  ..$ s               : num [1:16] 1 1 1 1 1 2 2 2 2 3 ...
-  ..$ t               : num [1:16] 2 3 4 5 6 3 4 5 6 4 ...
-  ..$ duration_steps  : num [1:16] 1 2 3 4 5 1 2 3 4 1 ...
-  ..$ regression_block: int [1:16] 1 2 3 4 5 6 7 8 9 10 ...
-  ..$ treatment_model : int [1:16] 1 2 3 4 5 6 7 8 9 10 ...
-  ..$ support_id      : int [1:16] 1 3 5 7 9 11 13 15 17 19 ...
-  ..$ mu              : num [1:16] -0.0405 1.1732 1.4856 1.6907 1.9449 ...
-  ..$ mu_dr           : num [1:16] -0.0405 1.1732 1.4856 1.6907 1.9449 ...
-  ..$ mu_or           : num [1:16] -0.0428 1.173 1.4873 1.6911 1.9431 ...
-  ..$ mu_ipw          : num [1:16] -0.0405 1.1732 1.4856 1.6907 1.9449 ...
- $ coefficients               :List of 4
-  ..$ shared_slopes       : Named num 0.293
-  .. ..- attr(*, "names")= chr "x"
-  ..$ local_intercepts    : Named num [1:15] 0.0892 0.158 0.2212 0.3956 0.5131 ...
-  .. ..- attr(*, "names")= chr [1:15] "pair:1-2|pool:Inf|fixed-X-summed|intercept:TRUE|z:x|weights:w*a_U/(rho_U*p_U)|U:F|model:independent_period_logi"| __truncated__ "pair:1-3|pool:Inf|fixed-X-summed|intercept:TRUE|z:x|weights:w*a_U/(rho_U*p_U)|U:F|model:independent_period_logi"| __truncated__ "pair:1-4|pool:Inf|fixed-X-summed|intercept:TRUE|z:x|weights:w*a_U/(rho_U*p_U)|U:F|model:independent_period_logi"| __truncated__ "pair:1-5|pool:Inf|fixed-X-summed|intercept:TRUE|z:x|weights:w*a_U/(rho_U*p_U)|U:F|model:independent_period_logi"| __truncated__ ...
-  ..$ has_local_intercepts: logi TRUE
-  ..$ treatment           :List of 15
- $ basis                      :List of 2
-  ..$ common_design :List of 22
-  ..$ pooled_control:List of 16
- $ shared                     :List of 11
-  ..$ p                  : int 1
-  ..$ keep               : int 1
-  ..$ beta               : num 0.293
-  ..$ coefficients       : Named num 0.293
-  .. ..- attr(*, "names")= chr "x"
-  ..$ fit                :List of 14
-  .. ..- attr(*, "class")= chr "cdid_or_pooled_wls_fit"
-  ..$ summary            :List of 6
-  .. ..- attr(*, "class")= chr "cdid_or_pooled_wls_summary"
-  ..$ basis              :List of 16
-  ..$ control_support_ids: int [1:15] 2 4 6 8 10 12 14 16 18 20 ...
-  ..$ rss                : num 6842
-  ..$ objective          : num 3.42
-  ..$ verification_scan  : logi FALSE
- $ records                    :List of 3
-  ..$ selection :List of 12
-  ..$ regression:List of 15
-  ..$ treatment :List of 15
- $ supports                   :List of 30
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
-  ..$ :List of 11
- $ links                      :List of 16
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
-  ..$ :List of 35
- $ accounting                 :List of 32
-  ..$ owned_entries             : num 95637
-  ..$ borrowed_entries          : num 1402306
-  ..$ retained_external_entries : num 1255418
-  ..$ external_work_ops         : num 27242240
-  ..$ retained_bound            : num 2376421
-  ..$ fit_scratch_bound         : num 3334327
-  ..$ work_ops_bound            : num 2.12e+10
-  ..$ support_cohort_row_visits : num 30000
-  ..$ automatic_chunk_rows      : logi TRUE
-  ..$ n_cohort_summaries        : int 30
-  ..$ n_supports                : int 30
-  ..$ n_rate_fits               : int 2
-  ..$ rates_from_reader_shares  : logi TRUE
-  ..$ n_selection_fits          : int 12
-  ..$ n_selection_cells         : int 12
-  ..$ n_selection_blocks        : int 12
-  ..$ n_selection_parameters    : int 24
-  ..$ n_upstream_coordinates    : int 26
-  ..$ n_regression_fits         : int 1
-  ..$ n_regression_blocks       : int 15
-  ..$ n_local_intercepts        : int 15
-  ..$ n_shared_slopes           : int 1
-  ..$ n_slope_columns           : int 1
-  ..$ n_aliased_slopes          : int 0
-  ..$ n_support_scans           : int 30
-  ..$ n_treatment_fits          : int 15
-  ..$ n_treatment_columns       : int 2
-  ..$ full_F_masks_per_model    : int 0
-  ..$ full_F_by_link_IF_retained: logi FALSE
-  ..$ inverse_matrices_retained : logi FALSE
-  ..$ dense_dummy_regression    : logi FALSE
-  ..$ peak_rss_measured         : logi FALSE
- $ frame_counts               :List of 2
-  ..$ n_full_frame_units     : int 2000
-  ..$ n_pair_eligible_A_units: int 1847
- $ auxiliary_descriptor_status:'data.frame':	1 obs. of  7 variables:
-  ..$ index : int 1
-  ..$ g     : num 3
-  ..$ s     : num 1
-  ..$ t     : num 2
-  ..$ K     : chr "{Inf}"
-  ..$ status: chr "supported"
-  ..$ reason: chr NA
- $ interpretation             : chr "Treatment-DR extension of the shared one-period outcome-change control-mean regression and residualized Hajek I"| __truncated__
 ```
 
 </details>
@@ -485,7 +210,7 @@ Each active logit needs a finite interior fit of full rank. A date or pair cell 
 
 ---
 
-**Reading path, step 11 of 20** · Previous: [Sampling information for the observation model](../methods/sampling-information.md) · Next: [Impute actual changes](change-imputation.md)
+**Reading path, step 11 of 22** · Previous: [Sampling information for the observation model](../methods/sampling-information.md) · Next: [Impute actual changes](change-imputation.md)
 
 <details>
 <summary>All steps of the reading path</summary>
@@ -512,6 +237,8 @@ Each active logit needs a finite interior fit of full rank. A date or pair cell 
 | 18 | [Options](../reference/options.md) |
 | 19 | [Results](../reference/results.md) |
 | 20 | [Diagnose errors and unavailable results](../help/troubleshooting.md) |
+| 21 | [Cross-pair chaining and control parallel trends](../methods/cross-pair-chaining.md) |
+| 22 | [Short pre-treatment windows](short-pretreatment-windows.md) |
 
 [Guide home](../README.md) · [Package overview](../../README.md)
 

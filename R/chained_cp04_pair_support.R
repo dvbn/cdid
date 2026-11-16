@@ -45,9 +45,28 @@ cp04_pair_support_context <- function(ctx, frame, n_views, retained, control, ma
 # its owner cohort index replaces the requested-cohort binary lookup/filter.
 cp04_pair_support_scan <- function(frame, pair, step) {
   C <- length(frame$a_cohorts); n_a <- frame$n_a_units
+  ds <- pair$s_calendar_index; dt <- pair$t_calendar_index
+  fk <- if (exists("cdid_fast_kernel", mode = "function", inherits = TRUE) &&
+            identical(environment(sys.function()), environment(cdid_fast_kernel))) {
+    cdid_fast_kernel("C_cdid_pair_support_scan")
+  } else {
+    NULL
+  }
+  if (!is.null(fk)) {
+    post <- frame$postings
+    has_pair <- !is.na(ds) && !is.na(dt) && post$date_count[ds] > 0L && post$date_count[dt] > 0L
+    bounds4 <- if (has_pair) as.integer(c(post$date_start[ds], post$date_end[ds], post$date_start[dt], post$date_end[dt])) else NULL
+    cb <- cdid_interrupt_callback(ipw_owner_check_interrupt)
+    fast_res <- fk(post$post_a_index, bounds4, frame$a_cohort_index, frame$w_a, NULL, as.integer(c(C, n_a)), step, cb, environment())
+    if (!is.null(fast_res)) {
+      return(cdid_fast_seal(list(frame_ref = frame$ref, panel_ref = frame$panel_ref, pair = pair, step = step,
+        pair_count = fast_res$pair_count, pair_mass = fast_res$pair_mass,
+        n_observed = fast_res$n_observed, chunks = fast_res$chunks, ops = fast_res$ops, ref = NULL),
+        "cp04_pair_support"))
+    }
+  }
   pair_count <- integer(C); pair_mass <- numeric(C)
   n_observed <- 0L; chunks <- 0; ops <- 0
-  ds <- pair$s_calendar_index; dt <- pair$t_calendar_index
   if (!is.na(ds) && !is.na(dt) && frame$postings$date_count[ds] > 0L && frame$postings$date_count[dt] > 0L) {
     first <- 1L
     while (first <= n_a) {
@@ -85,12 +104,21 @@ cp04_pair_support_scan <- function(frame, pair, step) {
 # descriptor. An absent owner cohort remains zero under require_support=FALSE.
 cp04_pair_support_subset <- function(raw, frame, cohorts, require_support) {
   m <- cohorts$m_cohorts
-  pair_count <- integer(m); pair_mass <- numeric(m)
-  present <- which(!is.na(cohorts$a_cohort_map))
-  pair_count[present] <- raw$pair_count[cohorts$a_cohort_map[present]]
-  pair_mass[present] <- raw$pair_mass[cohorts$a_cohort_map[present]]
+  cmap <- cohorts$a_cohort_map
+  if (!anyNA(cmap)) {
+    pair_count <- raw$pair_count[cmap]
+    pair_mass <- raw$pair_mass[cmap]
+  } else {
+    pair_count <- integer(m); pair_mass <- numeric(m)
+    present <- which(!is.na(cmap))
+    pair_count[present] <- raw$pair_count[cmap[present]]
+    pair_mass[present] <- raw$pair_mass[cmap[present]]
+  }
   n_obs_pair_all <- raw$n_observed; ops <- raw$ops
   n_obs_risk <- sum(pair_count)
+  ga_count <- cohorts$group_a_count
+  ga_mass <- cohorts$group_a_mass
+  n_risk <- sum(ga_count)
   if (isTRUE(require_support)) {
     if (n_obs_pair_all < 1L || n_obs_risk < 1L) {
       cdid_ipw_owner_abort(
@@ -104,22 +132,23 @@ cp04_pair_support_subset <- function(raw, frame, cohorts, require_support) {
         c("cdid_ipw_owner_pair_support_error", "cdid_ipw_pair_support_error", "cdid_ipw_support_error")
       )
     }
-  }
-  rates <- ifelse(cohorts$group_a_mass > 0, pair_mass / cohorts$group_a_mass, NA_real_)
-  if (isTRUE(require_support)) {
-    rates[pair_count == cohorts$group_a_count] <- 1
+    rates <- pair_mass / ga_mass
+    rates[ga_mass <= 0] <- NA_real_
+    rates[pair_count == ga_count] <- 1
     ops <- ops + 4 * m
-  }
-  if (isTRUE(require_support) && any(!is.finite(rates) | rates <= 0 | rates > 1)) {
-    cdid_ipw_owner_abort(
-      "Invalid marginal pair observation rates `r_j`.",
-      c("cdid_ipw_owner_pair_support_error", "cdid_ipw_rate_error")
-    )
+    if (any(!is.finite(rates) | rates <= 0 | rates > 1)) {
+      cdid_ipw_owner_abort(
+        "Invalid marginal pair observation rates `r_j`.",
+        c("cdid_ipw_owner_pair_support_error", "cdid_ipw_rate_error")
+      )
+    }
+  } else {
+    rates <- ifelse(ga_mass > 0, pair_mass / ga_mass, NA_real_)
   }
   names(pair_count) <- names(pair_mass) <- names(rates) <- cohorts$cohort_labels
-  list(n_observed_pair_all = n_obs_pair_all, n_risk_a_units = sum(cohorts$group_a_count),
-    n_outside_risk_a_units = frame$n_a_units - sum(cohorts$group_a_count),
-    n_observed_risk_units = n_obs_risk, n_nonobserved_risk_units = sum(cohorts$group_a_count) - n_obs_risk,
+  list(n_observed_pair_all = n_obs_pair_all, n_risk_a_units = n_risk,
+    n_outside_risk_a_units = frame$n_a_units - n_risk,
+    n_observed_risk_units = n_obs_risk, n_nonobserved_risk_units = n_risk - n_obs_risk,
     by_cohort_pair_count = pair_count, by_cohort_pair_mass = pair_mass, rates = rates,
     chunks = raw$chunks, ops = ops)
 }

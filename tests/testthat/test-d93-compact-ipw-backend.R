@@ -459,12 +459,16 @@ test_that("D93 compact raw-IPW backend matches independent scalar oracle and sca
       expect_equal(unname(pl_new$partials$G_beta), unname(ora$G_beta), tolerance = 1e-12)
       expect_equal(unname(pl_new$partials$G_r), ora$G_r, tolerance = 1e-12)
       expect_equal(unname(pl_new$loadings$loading_beta), ora$loading_beta, tolerance = 1e-12)
-      expect_equal(unname(pl_new$loadings$loading_rate), ora$loading_rate, tolerance = 1e-12)
+      # The rate loading combines contributions that can nearly cancel.
+      # Keep the 1e-12 relative bound and allow a few eps of absolute roundoff.
+      expect_true(roundoff_identical(unname(pl_new$loadings$loading_rate), ora$loading_rate, "$",
+        abs_tolerance = 8 * .Machine$double.eps))
 
       expect_equal(as.double(ch$components$treated[, m]), ora$components$treated, tolerance = 1e-12)
       expect_equal(as.double(ch$components$control[, m]), ora$components$control, tolerance = 1e-12)
       expect_equal(as.double(ch$components$beta_score[, m]), ora$components$beta_score, tolerance = 1e-12)
-      expect_equal(as.double(ch$components$rate[, m]), ora$components$rate, tolerance = 1e-12)
+      expect_true(roundoff_identical(as.double(ch$components$rate[, m]), ora$components$rate, "$",
+        abs_tolerance = 8 * .Machine$double.eps))
       expect_equal(as.double(ch$phi[, m]), ora$phi, tolerance = 1e-12)
       expect_equal(as.double(ch$phi[, m]), as.double(if_ref$phi), tolerance = 1e-12)
     }

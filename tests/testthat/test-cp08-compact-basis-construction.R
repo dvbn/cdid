@@ -124,7 +124,7 @@ cb_strip_env <- function(x) {
   }
   x
 }
-cb_same <- function(a, b, info) {
+cb_same <- function(a, b, info, leaves = NULL) {
   # Only the GMM provenance's duplicate certificate representation differs:
   # descriptors versus views, and optional list names on reference groups.
   # Actual kinds and class/ref dimensions are checked before normalization;
@@ -152,8 +152,13 @@ cb_same <- function(a, b, info) {
       }
     }
   }
-  expect_true(identical(cb_strip_env(a), cb_strip_env(b), num.eq = FALSE), info = info)
+  # Only the measured rate-loading comparisons pass a leaf list.
+  expect_true(if (is.null(leaves)) identical(cb_strip_env(a), cb_strip_env(b), num.eq = FALSE)
+              else roundoff_identical(cb_strip_env(a), cb_strip_env(b), leaves, num.eq = FALSE), info = info)
 }
+# Rate-loading computations can differ in their final floating-point bits.
+cb_rate_roundoff <- c("$/loadings/loading_rate", "$/loadings/rate_coef_s0")
+cb_point_roundoff <- c("$/point_links/1/loadings/loading_rate", "$/point_links/1/loadings/rate_coef_s0")
 cb_err <- function(expr) tryCatch({ expr; NULL }, error = identity)
 cb_expect_class <- function(e, cls, info = NULL) {
   expect_true(inherits(e, "error"), info = info)
@@ -179,7 +184,7 @@ test_that("compact canonical basis equals the general early route and the post-f
     expect_identical(ref_g$reduction_summary$reduction_stage, "outcome_free_before_point_fits", info = info)
     expect_identical(ref_p$reduction_summary$reduction_stage, "after_point_fits", info = info)
     expect_identical(names(res), names(ref_g), info = info)
-    for (f in cb_fields) cb_same(res[[f]], ref_g[[f]], paste(info, f))
+    for (f in cb_fields) cb_same(res[[f]], ref_g[[f]], paste(info, f), cb_point_roundoff)
 
     # The same certificate: kept indices, E, classes, design map, bounds.
     cert <- res$structural_certificate
@@ -219,7 +224,7 @@ test_that("compact canonical basis equals the general early route and the post-f
     expect_identical(names(res$point_links_all), names(ref_g$point_links_all), info = info)
     for (m in cert$retained_index) {
       expect_true(inherits(res$point_links_all[[m]], "cdid_ipw_point_link_view"), info = info)
-      cb_same(res$point_links_all[[m]], ref_g$point_links_all[[m]], paste(info, "point", m))
+      cb_same(res$point_links_all[[m]], ref_g$point_links_all[[m]], paste(info, "point", m), cb_rate_roundoff)
     }
     for (m in cert$dropped_index) {
       rec <- res$point_links_all[[m]]
