@@ -187,9 +187,25 @@ testthat::test_that("stored observer predictions give the same treatment derivat
         c("$/1/cross", "$/2/cross")))
       testthat::expect_identical(reused$links, repeated$links)
       fn <- spc_ns("evaluate_dr_corollary1_if_chunk")
-      for (details in c(FALSE, TRUE)) for (rows in list(1:5, 25:28))
-        testthat::expect_true(roundoff_identical(fn(reused, rows, 2:1, details = details),
-          fn(repeated, rows, 2:1, details = details), score_leaves))
+      for (details in c(FALSE, TRUE)) for (rows in list(1:5, 25:28)) {
+        stored <- fn(reused, rows, 2:1, details = details)
+        replayed <- fn(repeated, rows, 2:1, details = details)
+        cancel_rows <- which(rows %in% c(27L, 28L))
+        if (details && model == "pair_logit" && length(cancel_rows)) {
+          # In this fixture the two dm normalizer residuals subtract nonzero
+          # terms. Their zeros can depend on rounding in the contraction.
+          x <- stored$details$models[[2L]]$normalizers_A
+          y <- replayed$details$models[[2L]]$normalizers_A
+          testthat::expect_identical(attributes(x), attributes(y))
+          testthat::expect_true(is.double(x) && is.double(y) && !is.object(x) && !is.object(y))
+          stored_residual <- x[cancel_rows, "dm"]
+          replayed_residual <- y[cancel_rows, "dm"]
+          testthat::expect_true(all(is.finite(stored_residual) & is.finite(replayed_residual) &
+                                      abs(stored_residual - replayed_residual) <= 1e-12))
+          replayed$details$models[[2L]]$normalizers_A[cancel_rows, "dm"] <- stored_residual
+        }
+        testthat::expect_true(roundoff_identical(stored, replayed, score_leaves))
+      }
     }
   }
 })
