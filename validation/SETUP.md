@@ -2,7 +2,7 @@
 
 ## Usual installation
 
-Install `cdid` 1.3.0.1 from the root of this development checkout:
+Install the version in this checkout from its root directory:
 
 ```r
 # install.packages("remotes")
@@ -44,7 +44,7 @@ Start a fresh R session and put the setup library first:
 
 ```r
 .libPaths(c(normalizePath("validation/.lib"), .libPaths()))  # from the repository root
-packageVersion("cdid")    # 1.3.0.1
+packageVersion("cdid")    # Version in the checkout's DESCRIPTION
 ?cdid::att_gt
 ```
 

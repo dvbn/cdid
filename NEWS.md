@@ -1,3 +1,7 @@
+# cdid 1.3.0.2
+
+* Make the optional validation installer use the package version declared by the selected source checkout.
+
 # cdid 1.3.0.1
 
 * Clarify the package description on CRAN.
