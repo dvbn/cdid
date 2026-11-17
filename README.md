@@ -2,9 +2,9 @@
 
 `cdid` brings widely used difference-in-differences estimators into a common framework for complete and incomplete panels. It reproduces documented specifications of established methods and extends them with chained comparisons, observation weighting, change imputation and doubly robust corrections for selective missingness, by leveraging the chained difference-in-differences (chained DiD).
 
-[CRAN package page](https://cran.r-project.org/package=cdid) · [Release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md) · [User guide](https://github.com/dvbn/cdid/blob/main/docs/README.md) · [Author website](https://www.davidbenatia.com/research/)
+[CRAN package page](https://cran.r-project.org/package=cdid) · [Release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md) · [User guide](https://github.com/dvbn/cdid/blob/main/docs/README.md) · [Online documentation](https://www.davidbenatia.com/tools/cdid/) · [Stata package](https://github.com/dvbn/cdid-stata)
 
-This guide describes `cdid` **1.3.0.1**. Articles label the version used for recorded output. Check your installed version with `packageVersion("cdid")` and consult the [release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md).
+R `cdid` **1.3.0.1** is available from GitHub and has been submitted to CRAN. CRAN currently distributes **1.2.0.1**. Articles label the version used for recorded output. Check your installed version with `packageVersion("cdid")` and consult the [release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md).
 
 ## Installation
 
@@ -15,7 +15,7 @@ install.packages("cdid")
 library(cdid)
 ```
 
-Install 1.3.0.1 from GitHub when the CRAN release is older or when you want to follow the `main` branch:
+To use the features in this guide, install 1.3.0.1 from GitHub.
 
 ```r
 # Run once if remotes is not installed:
@@ -28,7 +28,7 @@ The CRAN package includes a short vignette covering an incomplete panel, estimat
 
 ### Requirements and build tools
 
-`cdid` requires **R 4.1.0 or later** and the CRAN packages **`did` 2.5.1 or later** and **`DRDID` 1.4.0 or later**. It refuses to load with earlier versions of `did` or `DRDID`. If an error reports an outdated dependency, run `install.packages(c("did", "DRDID"))` and restart R. You do not need GitHub versions of `did` or `DRDID`. Modified forks can have different interfaces even when their version numbers exceed the minimum.
+`cdid` requires **R 4.1.0 or later** and the CRAN packages **`did` 2.5.1 or later**, **`DRDID` 1.4.0 or later**, and **`rlang` 1.1.0 or later**. If an error reports an outdated dependency, run `install.packages(c("did", "DRDID", "rlang"))` and restart R. You do not need GitHub versions of `did` or `DRDID`. Modified forks can have different interfaces even when their version numbers exceed the minimum.
 
 Installing from source compiles the package's C code, so the usual tools for building R packages from source must be available:
 
