@@ -1,3 +1,7 @@
+# cdid 1.3.0.4
+
+* Fix memory alignment for extended-precision calculations in chained estimates and observation models on platforms that require it.
+
 # cdid 1.3.0.3
 
 * Fix binary switching fits that use an intercept-only observation model with covariate-adjusted outcome regression or doubly robust estimation.
