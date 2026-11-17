@@ -1,3 +1,7 @@
+# cdid (development version)
+
+* Fix binary switching fits that use an intercept-only observation model with covariate-adjusted outcome regression or doubly robust estimation.
+
 # cdid 1.3.0.1
 
 * Clarify the package description on CRAN.

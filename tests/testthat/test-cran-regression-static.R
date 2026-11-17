@@ -349,6 +349,14 @@ test_that("static dname route matches independent reference across IPW/reg/DR an
       outcome_pooling = "separate", switchers = "entry", switch_times = c(2, 3, 4)
     ),
     list(
+      label = "weighting_pair_intercept_dr",
+      est_method = "dr", selection = "conditional_mtar", selection_est_method = "ipw",
+      route = "weighting", xformla = ~ x1, selection_xformla = ~ 1,
+      selection_model = "pair_logit", selection_pooling = "separate",
+      imputation_pooling = "separate", imputation_scale = "per_period",
+      outcome_pooling = "separate", switchers = "both", switch_times = 3
+    ),
+    list(
       label = "imputation_per_period_reg",
       est_method = "reg", selection = "conditional_mtar", selection_est_method = "imputation",
       route = "imputation", xformla = ~ x1 + x2, selection_xformla = NULL,
@@ -390,6 +398,14 @@ test_that("static dname route matches independent reference across IPW/reg/DR an
       selection_model = "independent_period_logit", selection_pooling = "within_group",
       imputation_pooling = "pooled", imputation_scale = "per_period",
       outcome_pooling = "separate", switchers = "both", switch_times = c(2, 3)
+    ),
+    list(
+      label = "augmented_date_intercept_dr",
+      est_method = "dr", selection = "conditional_mtar", selection_est_method = "dr",
+      route = "augmented", xformla = ~ x1, selection_xformla = ~ 1,
+      selection_model = "independent_period_logit", selection_pooling = "within_group",
+      imputation_pooling = "separate", imputation_scale = "per_period",
+      outcome_pooling = "pooled", switchers = "both", switch_times = 3
     )
   )
 
