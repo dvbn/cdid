@@ -6,7 +6,7 @@ The guide describes R `cdid` 1.3.0.1. Numerical output on the article pages come
 
 ## Installation
 
-Version 1.3.0.1 has been submitted to CRAN and is available through the [GitHub installation instructions](https://github.com/dvbn/cdid#installation). Install the current CRAN release with `install.packages("cdid")`. Use `packageVersion("cdid")` to check your version. For the Stata release, see the [Stata user guide](https://www.davidbenatia.com/tools/cdid/stata/).
+The current [CRAN source release](https://cran.r-project.org/package=cdid) is 1.3.0.1. Run `install.packages("cdid")` and use `packageVersion("cdid")` to check your version. If your platform still installs an older binary, follow the [source installation instructions](https://github.com/dvbn/cdid#installation). For the Stata release, see the [Stata user guide](https://www.davidbenatia.com/tools/cdid/stata/).
 
 ## Get started
 

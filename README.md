@@ -4,7 +4,7 @@
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md) · [User guide](https://github.com/dvbn/cdid/blob/main/docs/README.md) · [Online documentation](https://www.davidbenatia.com/tools/cdid/) · [Stata package](https://github.com/dvbn/cdid-stata)
 
-R `cdid` **1.3.0.1** is available from GitHub and has been submitted to CRAN. CRAN currently distributes **1.2.0.1**. Articles label the version used for recorded output. Check your installed version with `packageVersion("cdid")` and consult the [release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md).
+R `cdid` **1.3.0.1** is the current [CRAN source release](https://cran.r-project.org/package=cdid) and is also available from GitHub. Articles label the version used for recorded output. Check your installed version with `packageVersion("cdid")` and consult the [release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md).
 
 ## Installation
 
@@ -15,7 +15,7 @@ install.packages("cdid")
 library(cdid)
 ```
 
-To use the features in this guide, install 1.3.0.1 from GitHub.
+To follow the development branch, install directly from GitHub.
 
 ```r
 # Run once if remotes is not installed:
