@@ -2,11 +2,11 @@
 
 Work through a first chained difference-in-differences fit, then prepare your panel, choose comparisons and adjustments, and interpret the results. The [package overview on GitHub](https://github.com/dvbn/cdid) has a runnable first example and the source installation requirements.
 
-The guide describes R `cdid` 1.3.0.1. Numerical output on the article pages comes from recorded runs, and each page states the package versions it used. Analytical population values are labeled separately. The [release notes](../NEWS.md) list what each version added.
+The guide describes R `cdid` 1.3.0.2 on GitHub. Numerical output on the article pages comes from recorded runs, and each page states the package versions it used. Analytical population values are labeled separately. The [release notes](../NEWS.md) list what each version added.
 
 ## Installation
 
-The current [CRAN source release](https://cran.r-project.org/package=cdid) is 1.3.0.1. Run `install.packages("cdid")` and use `packageVersion("cdid")` to check your version. If your platform still installs an older binary, follow the [source installation instructions](https://github.com/dvbn/cdid#installation). For the Stata release, see the [Stata user guide](https://www.davidbenatia.com/tools/cdid/stata/).
+The [CRAN package page](https://cran.r-project.org/package=cdid) lists the current CRAN release. Run `install.packages("cdid")` and use `packageVersion("cdid")` to check your version. If your platform still installs an older binary, follow the [source installation instructions](https://github.com/dvbn/cdid#installation). For the Stata release, see the [Stata user guide](https://www.davidbenatia.com/tools/cdid/stata/).
 
 ## Get started
 
