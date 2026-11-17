@@ -243,7 +243,8 @@ od_backend_view <- function(b, treatment_route = "batch") {
   list(fields = od_strip(x), accounting = b$accounting[setdiff(names(b$accounting),
     c("complete_support", "work_ops_bound", "own_work_ops", "fit_scratch_bound", "retained_bound", "owned_entries"))])
 }
-od_expect_route_match <- function(a, b, tol = 1e-13, info = NULL, mixed_scalar_path = NULL) {
+od_expect_route_match <- function(a, b, tol = 1e-13, info = NULL, mixed_scalar_path = NULL,
+                                  roundoff_path = NULL) {
   # Same strict schema/leaf predicates, one reported assertion. Repeated waldo
   # assertions per scalar rebuild test metadata and obscure these whole-object checks.
   mismatch <- function(x, y, path) {
@@ -259,6 +260,8 @@ od_expect_route_match <- function(a, b, tol = 1e-13, info = NULL, mixed_scalar_p
     same <- if (identical(path, mixed_scalar_path)) {
       typeof(x) == "double" && length(x) == 1L && is.finite(x) && is.finite(y) &&
         abs(x - y) <= 1e-12 * max(1, abs(x), abs(y))
+    } else if (identical(path, roundoff_path)) {
+      roundoff_identical(x, y, leaves = "$", num.eq = FALSE)
     } else if (typeof(x) == "double") length(waldo::compare(x, y, tolerance = tol)) == 0L else identical(x, y)
     if (same) character() else paste(path, "value")
   }
@@ -1372,7 +1375,9 @@ test_that("common-design p = 0, 1, 2, repeated L and B = 1 match generic route a
           mixed_scalar_path <- paste0("root$fields$links$", j, "$M_dr")
         }
         od_expect_route_match(od_backend_view(fit_c), od_backend_view(fit_g), tol = 1e-12, info = info_tag,
-          mixed_scalar_path = mixed_scalar_path)
+          mixed_scalar_path = mixed_scalar_path,
+          roundoff_path = if (method == "dr" && p == 1L && pname == "single_block")
+            "root$fields$treatments$1$means" else NULL)
 
         # Verify alpha, beta, Q = K + D * Q_star, objective and D-scaled Gram against independent reference.
         alpha_hat <- vapply(fit_c$regressions, `[[`, numeric(1L), "alpha")

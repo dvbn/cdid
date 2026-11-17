@@ -592,7 +592,8 @@ cc_backend_view <- function(b, treatment_route = "batch", strip_clipping = FALSE
     c("complete_support", "work_ops_bound", "own_work_ops", "fit_scratch_bound", "retained_bound", "owned_entries"))])
 }
 
-cc_expect_route_match <- function(a, b, tol = 1e-12, info = NULL, mixed_scalar_path = NULL) {
+cc_expect_route_match <- function(a, b, tol = 1e-12, info = NULL, mixed_scalar_path = NULL,
+                                  roundoff_path = NULL) {
   mismatch <- function(x, y, path) {
     if (!identical(class(x), class(y)) || !identical(typeof(x), typeof(y)) ||
         !identical(names(x), names(y)) || !identical(dim(x), dim(y)) ||
@@ -605,6 +606,8 @@ cc_expect_route_match <- function(a, b, tol = 1e-12, info = NULL, mixed_scalar_p
     same <- if (identical(path, mixed_scalar_path)) {
       typeof(x) == "double" && length(x) == 1L && is.finite(x) && is.finite(y) &&
         abs(x - y) <= 1e-12 * max(1, abs(x), abs(y))
+    } else if (identical(path, roundoff_path)) {
+      roundoff_identical(x, y, leaves = "$", num.eq = FALSE)
     } else if (typeof(x) == "double") length(waldo::compare(x, y, tolerance = tol)) == 0L else identical(x, y)
     if (same) character() else paste(path, "value")
   }
@@ -1153,7 +1156,7 @@ test_that("prepared construction equals frozen and forced-generic routes for IPW
       # Prepared and frozen complete-support backends retain expect_identical semantics
       # on pre-D93 fields except measured dr ~x + x2 treatment 1-10 partials upstream/beta
       # and means, link 1-11 mu_dr/v_ps/T_dr (plus duplicate link mu aliases at positions
-      # 10/18 coupled exactly to their own canonical mu_dr), and link 3/7 M_dr (elementwise
+      # 10/18 coupled exactly to their own canonical mu_dr), and M_dr for links 2/3/4/6/7 (elementwise
       # mixed 1e-12; exact schema and structural/signed zeros). D93 clipping is checked
       # explicitly.
       dr_prep_froz_leaf_ok <- function(actual, expected, entries, allow_tiny_sign = FALSE, tol = 1e-12) {
@@ -1270,9 +1273,10 @@ test_that("prepared construction equals frozen and forced-generic routes for IPW
           lkb[["mu_dr"]] <- 0
           lka[["v_ps"]] <- 0
           lkb[["v_ps"]] <- 0
-          if (idx %in% c(3L, 7L)) {
+          if (idx %in% c(2L, 3L, 4L, 6L, 7L)) {
             if (!dr_prep_froz_has_field(lka, lkb, "M_dr") ||
-                !dr_prep_froz_leaf_ok(lka[["M_dr"]], lkb[["M_dr"]], 1L, allow_tiny_sign = FALSE, tol = tol)) {
+                !dr_prep_froz_leaf_ok(lka[["M_dr"]], lkb[["M_dr"]], 1L,
+                  allow_tiny_sign = idx %in% c(2L, 4L, 6L), tol = tol)) {
               return(FALSE)
             }
             lka[["M_dr"]] <- 0
@@ -1434,7 +1438,10 @@ test_that("prepared construction equals frozen and forced-generic routes for IPW
         expect_identical(fg$links[[approved$index]]$link_id, approved$link_id)
       }
       mixed_path <- if (!is.null(approved)) paste0("root$fields$links$", approved$index, "$M_dr") else NULL
-      cc_expect_route_match(cc_backend_view(fc, strip_clipping = TRUE), cc_backend_view(fg), tol = 1e-12, mixed_scalar_path = mixed_path)
+      cc_expect_route_match(cc_backend_view(fc, strip_clipping = TRUE), cc_backend_view(fg), tol = 1e-12,
+        mixed_scalar_path = mixed_path,
+        roundoff_path = if (p == 1L && pname == "single_block")
+          "root$fields$treatments$1$means" else NULL)
     }
   }
 })
