@@ -57,14 +57,22 @@ static int cr_matrix(SEXP x,int n,int p) {
 static int cr_functions(SEXP f) {
   if(!cr_list(f))return 0; SEXP owner=cr_field(f,".owner"),names=Rf_getAttrib(f,R_NamesSymbol);
   if(TYPEOF(owner)!=ENVSXP)return 0;
+  SEXP cache=R_NilValue;
+#if R_VERSION < R_Version(4, 6, 0)
+  cache=PROTECT(cdid_legacy_binding_cache(owner));
+#endif
+  int matches=1;
   for(R_xlen_t i=0;i<XLENGTH(f);++i) {
     const char *name=CHAR(STRING_ELT(names,i));if(!strcmp(name,".owner")||!strcmp(name,".live"))continue;
     SEXP sym=Rf_install(name);int bound=0;
-    SEXP actual=cdid_frame_value(owner,sym,&bound);
-    if(!bound)actual=cdid_frame_value(R_BaseEnv,sym,&bound);
-    if(actual!=VECTOR_ELT(f,i))return 0;
+    SEXP actual=cdid_frame_value_cached(owner,sym,&bound,cache);
+    if(!bound)actual=cdid_frame_value_cached(R_BaseEnv,sym,&bound,cache);
+    if(actual!=VECTOR_ELT(f,i)){matches=0;break;}
   }
-  return 1;
+#if R_VERSION < R_Version(4, 6, 0)
+  UNPROTECT(1);
+#endif
+  return matches;
 }
 
 /* Forced values only: a private/unforced/active binding never runs a callback

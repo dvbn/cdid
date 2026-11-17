@@ -1,3 +1,9 @@
+# cdid 1.3.0.1
+
+* Clarify the package description on CRAN.
+* Check same-seed bootstrap results to numerical precision and require identical final random number states.
+* Use rlang to inspect promise bindings on R versions before 4.6 without evaluating delayed bindings.
+
 # cdid 1.3.0.0
 
 ## Computation

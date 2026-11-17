@@ -69,6 +69,7 @@ jobs:
           - {os: ubuntu-latest, r: release}
           - {os: ubuntu-latest, r: devel}
           - {os: windows-latest, r: release}
+          - {os: windows-latest, r: devel}
           - {os: macos-latest, r: release}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

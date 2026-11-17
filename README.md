@@ -4,7 +4,7 @@
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md) · [User guide](https://github.com/dvbn/cdid/blob/main/docs/README.md) · [Author website](https://www.davidbenatia.com/research/)
 
-This guide describes `cdid` **1.3.0.0**. Articles label the version used for recorded output. Check your installed version with `packageVersion("cdid")` and consult the [release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md).
+This guide describes `cdid` **1.3.0.1**. Articles label the version used for recorded output. Check your installed version with `packageVersion("cdid")` and consult the [release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md).
 
 ## Installation
 
@@ -15,7 +15,7 @@ install.packages("cdid")
 library(cdid)
 ```
 
-Install 1.3.0.0 from GitHub when the CRAN release is older or when you want to follow the `main` branch:
+Install 1.3.0.1 from GitHub when the CRAN release is older or when you want to follow the `main` branch:
 
 ```r
 # Run once if remotes is not installed:

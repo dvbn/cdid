@@ -33,7 +33,15 @@ testthat::test_that("coarse helper admission reads forced bindings without callb
   testthat::expect_null(issue(owner))
   testthat::expect_identical(counter$calls, 0L)
   testthat::expect_identical(get("identity", owner, inherits = FALSE), expected)
-  check_value(owner) # The same promise is now forced and remains admissible.
+  # The same promise is now forced and remains admissible even with a
+  # workspace binding that shadows the base namespace lookup.
+  locked_owner <- new.env(parent = baseenv())
+  lockEnvironment(locked_owner, bindings = TRUE)
+  rlang::with_bindings({
+    check_value(owner)
+    check_value(locked_owner)
+  }, .env = globalenv(),
+    getNamespace = function(...) stop("native lookup must not use the workspace"))
   testthat::expect_identical(counter$calls, 1L)
 
   rm("identity", envir = owner)

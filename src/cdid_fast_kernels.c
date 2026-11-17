@@ -5976,14 +5976,15 @@ SEXP C_cdid_incomplete_dr_trt_fit(
                      Batch DR Cholesky Solve & Diagnostic Summaries
    =========================================================================== */
 
-static R_INLINE SEXP cdid_env_get_checked(SEXP env, SEXP sym, int *bound_out, int *locked_out) {
+static R_INLINE SEXP cdid_env_get_checked_cached(SEXP env, SEXP sym, int *bound_out,
+                                                int *locked_out, SEXP cache) {
   if (TYPEOF(env) != ENVSXP) {
     *bound_out = 0;
     *locked_out = 0;
     return R_UnboundValue;
   }
   int bound = 0;
-  SEXP val = cdid_frame_value(env, sym, &bound);
+  SEXP val = cdid_frame_value_cached(env, sym, &bound, cache);
   *bound_out = bound;
   if (!bound || val == R_UnboundValue) {
     *locked_out = 0;
@@ -5991,6 +5992,42 @@ static R_INLINE SEXP cdid_env_get_checked(SEXP env, SEXP sym, int *bound_out, in
   }
   *locked_out = (R_BindingIsLocked(sym, env) != 0);
   return val;
+}
+
+static R_INLINE SEXP cdid_env_get_checked(SEXP env, SEXP sym, int *bound_out, int *locked_out) {
+  return cdid_env_get_checked_cached(env, sym, bound_out, locked_out, NULL);
+}
+
+static SEXP cdid_default_fns_match(SEXP names, SEXP owner, SEXP snapshot, SEXP cache) {
+  SEXP trace_class = PRINTNAME(Rf_install("functionWithTrace"));
+  for (R_xlen_t i = 0; i < XLENGTH(names); ++i) {
+    SEXP s = STRING_ELT(names, i);
+    if (s == NA_STRING) return Rf_ScalarLogical(0);
+    SEXP sym = Rf_installChar(s);
+    int bound = 0, locked = 0;
+    SEXP live = cdid_env_get_checked_cached(owner, sym, &bound, &locked, cache);
+    if (!bound || live == R_UnboundValue || TYPEOF(live) == PROMSXP) return R_NilValue;
+    if (!Rf_isFunction(live)) return Rf_ScalarLogical(0);
+    if (Rf_isObject(live)) {
+      SEXP cls = Rf_getAttrib(live, R_ClassSymbol);
+      if (TYPEOF(cls) == STRSXP) {
+        for (R_xlen_t j = 0; j < XLENGTH(cls); ++j) {
+          if (STRING_ELT(cls, j) == trace_class) return Rf_ScalarLogical(0);
+        }
+      }
+    }
+#if R_VERSION < R_Version(4, 6, 0)
+    PROTECT(live);
+#endif
+    SEXP expected = cdid_env_get_checked(snapshot, sym, &bound, &locked);
+    int matches = bound && expected != R_UnboundValue && TYPEOF(expected) != PROMSXP &&
+                  live == expected;
+#if R_VERSION < R_Version(4, 6, 0)
+    UNPROTECT(1);
+#endif
+    if (!matches) return R_NilValue;
+  }
+  return Rf_ScalarLogical(1);
 }
 
 static R_INLINE int cdid_c_seal_ok(SEXP obj, SEXP tag_sym) {
@@ -6730,35 +6767,16 @@ SEXP C_cdid_verify_fast(SEXP mode_sexp, SEXP a1, SEXP a2, SEXP a3, SEXP a4) {
   }
 
   if (mode == 6) {
-    /* Fast check that all function names in STRSXP `a1` resolve to the exact snapshot SEXPs
-       in `owner_env = a2` and `snap_env = a3`, and are plain functions (not functionWithTrace). */
-    if (TYPEOF(a1) != STRSXP || TYPEOF(a2) != ENVSXP || TYPEOF(a3) != ENVSXP) {
+    if (TYPEOF(a1) != STRSXP || TYPEOF(a2) != ENVSXP || TYPEOF(a3) != ENVSXP)
       return R_NilValue;
-    }
-    R_xlen_t n = XLENGTH(a1);
-    SEXP cls_trace = Rf_mkChar("functionWithTrace");
-    for (R_xlen_t i = 0; i < n; ++i) {
-      SEXP s = STRING_ELT(a1, i);
-      if (s == NA_STRING) return Rf_ScalarLogical(0);
-      SEXP sym = Rf_installChar(s);
-      int b1 = 0, l1 = 0, b2 = 0, l2 = 0;
-      SEXP f1 = cdid_env_get_checked(a2, sym, &b1, &l1);
-      if (!b1 || f1 == R_UnboundValue || TYPEOF(f1) == PROMSXP) return R_NilValue;
-      if (!Rf_isFunction(f1)) return Rf_ScalarLogical(0);
-      if (Rf_isObject(f1)) {
-        SEXP cls = Rf_getAttrib(f1, R_ClassSymbol);
-        if (TYPEOF(cls) == STRSXP) {
-          R_xlen_t nc = XLENGTH(cls);
-          for (R_xlen_t k = 0; k < nc; ++k) {
-            if (STRING_ELT(cls, k) == cls_trace) return Rf_ScalarLogical(0);
-          }
-        }
-      }
-      SEXP f2 = cdid_env_get_checked(a3, sym, &b2, &l2);
-      if (!b2 || f2 == R_UnboundValue || TYPEOF(f2) == PROMSXP) return R_NilValue;
-      if (f1 != f2) return R_NilValue;
-    }
-    return Rf_ScalarLogical(1);
+#if R_VERSION < R_Version(4, 6, 0)
+    SEXP cache = PROTECT(cdid_legacy_binding_cache(a2));
+    SEXP matches = cdid_default_fns_match(a1, a2, a3, cache);
+    UNPROTECT(1);
+    return matches;
+#else
+    return cdid_default_fns_match(a1, a2, a3, R_NilValue);
+#endif
   }
 
   if (mode == 7) {
