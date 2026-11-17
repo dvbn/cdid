@@ -11,7 +11,7 @@ remotes::install_local(".")
 
 `cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Source installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
 
-Version 1.2.0.1 is available on [CRAN](https://cran.r-project.org/package=cdid) with `install.packages("cdid")`.
+The current [CRAN source release](https://cran.r-project.org/package=cdid) is 1.3.0.1. To install from CRAN, run `install.packages("cdid")` and check with `packageVersion("cdid")`. If your platform installs an older binary, follow the [source installation instructions](../README.md#installation).
 
 ## Optional: pinned validation setup
 
