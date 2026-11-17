@@ -30,10 +30,12 @@ main <- function() {
   if (!dir.exists(project) ||
       !all(file.exists(file.path(project, c("DESCRIPTION", "validation/setup.R")))))
     stop("--project must be the cdid checkout root containing validation/setup.R.")
-  identity <- read.dcf(file.path(project, "DESCRIPTION"), fields = c("Package", "Version"))[1L, ]
-  if (!identical(unname(identity[["Package"]]), "cdid") ||
-      !identical(unname(identity[["Version"]]), "1.3.0.0"))
-    stop("--project must select a cdid 1.3.0.0 source checkout.")
+  fields <- c("Package", "Version", "Depends", "Imports", "LinkingTo")
+  description <- function(path) as.list(read.dcf(path, fields = fields)[1L, ])
+  cdid <- description(file.path(project, "DESCRIPTION"))
+  if (!identical(cdid$Package, "cdid") ||
+      !isTRUE(grepl("^[0-9]+([.-][0-9]+)+$", cdid$Version)))
+    stop("--project must select a cdid source checkout with a valid DESCRIPTION version.")
   receipt_dir <- file.path(project, "validation", "setup-receipts")
   if (!dir.exists(receipt_dir) && !dir.create(receipt_dir))
     stop("Cannot create project-local receipt directory.")
@@ -73,12 +75,7 @@ main <- function() {
       stop("Repository must be an HTTPS CRAN repository URL without credentials/query/fragment.")
     receipt$library <- lib; receipt$repository <- repo
     .libPaths(c(if (dir.exists(lib)) lib, .libPaths()))
-    fields <- c("Package", "Version", "Depends", "Imports", "LinkingTo")
-    description <- function(path) as.list(read.dcf(path, fields = fields)[1L, ])
-    cdid <- description(file.path(project, "DESCRIPTION"))
-    pins <- c(DRDID = "1.4.0", did = "2.5.1", cdid = "1.3.0.0")
-    if (!identical(cdid$Package, "cdid") || !identical(cdid$Version, pins[["cdid"]]))
-      stop("Expected selected cdid source version 1.3.0.0.")
+    pins <- c(DRDID = "1.4.0", did = "2.5.1", cdid = cdid$Version)
     if (!all(file.exists(file.path(project, c("NAMESPACE", "R", "src")))))
       stop("A complete cdid source checkout, including compiled src, is required.")
     native_files <- list.files(file.path(project, "src"), recursive = TRUE, all.files = TRUE)

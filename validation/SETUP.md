@@ -2,7 +2,7 @@
 
 ## Usual installation
 
-Install `cdid` 1.3.0.1 from the root of this development checkout:
+Install the version in this checkout from its root directory:
 
 ```r
 # install.packages("remotes")
@@ -11,11 +11,11 @@ remotes::install_local(".")
 
 `cdid` requires R 4.1.0 or later, `did` 2.5.1 or later and `DRDID` 1.4.0 or later, and refuses to load with earlier versions of `did` or `DRDID`; if older versions are installed, update them first, for example with `install.packages(c("did", "DRDID"))`. It has been tested with `did` 2.5.1 and `DRDID` 1.4.0 under R 4.5.2. Later versions are accepted, but it is not guaranteed that everything works with them or that results are identical. Source installation compiles C/C++ code, so the compilers described under [Prerequisites](#prerequisites) are needed.
 
-The current [CRAN source release](https://cran.r-project.org/package=cdid) is 1.3.0.1. To install from CRAN, run `install.packages("cdid")` and check with `packageVersion("cdid")`. If your platform installs an older binary, follow the [source installation instructions](../README.md#installation).
+The [CRAN package page](https://cran.r-project.org/package=cdid) lists the current CRAN release. To install from CRAN, run `install.packages("cdid")` and check with `packageVersion("cdid")`. If your platform installs an older binary, follow the [source installation instructions](../README.md#installation).
 
 ## Optional: pinned validation setup
 
-The setup script `validation/setup.R` installs `cdid` together with exactly the tested versions, `did` 2.5.1 and `DRDID` 1.4.0, into a dedicated library and checks the result. Use it to check this revision against its tested baseline; historical guide outputs record their original dependency versions. It is not required to install or load `cdid`.
+The setup script `validation/setup.R` installs `cdid` together with exactly the tested versions, `did` 2.5.1 and `DRDID` 1.4.0, into a dedicated library and checks the result. It reads the expected `cdid` version from the checkout's `DESCRIPTION`. Use it to check this revision against its tested baseline. Historical guide outputs record their original dependency versions. Standard installation uses the instructions above.
 
 The repository includes the CRAN source archives of these two versions in `validation/vendor/`. Standard installation resolves `did` and `DRDID` from your libraries or the current CRAN repository, which may provide later versions. The setup script installs the archived versions, the other dependencies and `cdid` itself into the dedicated library.
 
@@ -44,7 +44,7 @@ Start a fresh R session and put the setup library first:
 
 ```r
 .libPaths(c(normalizePath("validation/.lib"), .libPaths()))  # from the repository root
-packageVersion("cdid")    # 1.3.0.1
+packageVersion("cdid")    # Version in the checkout's DESCRIPTION
 ?cdid::att_gt
 ```
 
