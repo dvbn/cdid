@@ -1,3 +1,7 @@
+# cdid 1.3.0.3
+
+* Fix binary switching fits that use an intercept-only observation model with covariate-adjusted outcome regression or doubly robust estimation.
+
 # cdid 1.3.0.2
 
 * Make the optional validation installer use the package version declared by the selected source checkout.

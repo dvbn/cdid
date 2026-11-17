@@ -151,6 +151,8 @@ uncertainty of their upstream adjustment. Capture is off by default.
 
 For observation probabilities, `pair_logit` models the joint event directly. `independent_period_logit` multiplies the two date probabilities and needs the additional conditional-independence assumption. Pooling slopes is a separate modeling choice. `selection_pooling` and `imputation_pooling` accept `"separate"`, `"within_group"` or `"pooled"`; `outcome_pooling` controls the stayer outcome regressions. The [options reference](../reference/options.md) and details below give the precise meanings.
 
+Use `selection_xformla = ~ 1` for an intercept-only observation model while retaining covariates in `xformla` for treatment adjustment.
+
 ## How chaining handles the gaps
 
 For each transition, `cdid` fixes the switcher and stayer populations before examining observed outcomes. Within each population it uses all date pairs with observed changes. Different units can connect different dates: a unit need not have outcomes at both dates of the final transition if other valid comparisons connect those dates.

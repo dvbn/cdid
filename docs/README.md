@@ -2,7 +2,7 @@
 
 Work through a first chained difference-in-differences fit, then prepare your panel, choose comparisons and adjustments, and interpret the results. The [package overview on GitHub](https://github.com/dvbn/cdid) has a runnable first example and the source installation requirements.
 
-The guide describes R `cdid` 1.3.0.2 on GitHub. Numerical output on the article pages comes from recorded runs, and each page states the package versions it used. Analytical population values are labeled separately. The [release notes](../NEWS.md) list what each version added.
+The guide describes R `cdid` 1.3.0.3 on GitHub. Numerical output on the article pages comes from recorded runs, and each page states the package versions it used. Analytical population values are labeled separately. The [release notes](../NEWS.md) list what each version added.
 
 ## Installation
 

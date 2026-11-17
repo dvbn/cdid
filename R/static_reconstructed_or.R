@@ -1124,6 +1124,8 @@ static_reconstructed_or_contract_loadings <- function(loadings, coef_if, rows, n
 
 static_reconstructed_or_scale_add_loadings <- function(acc, loadings, weight) {
   if (!length(loadings) || weight == 0) return(acc)
+  # A named edge weight must not replace the name of a scalar parameter loading.
+  weight <- unname(weight)
   for (k in names(loadings)) {
     val <- weight * loadings[[k]]
     if (is.null(acc[[k]])) {
