@@ -15,7 +15,7 @@ The current [CRAN source release](https://cran.r-project.org/package=cdid) is 1.
 
 ## Optional: pinned validation setup
 
-The setup script `validation/setup.R` installs `cdid` together with exactly the tested versions, `did` 2.5.1 and `DRDID` 1.4.0, into a dedicated library and checks the result. Use it to check this revision against its tested baseline; historical guide outputs record their original dependency versions. It is not required to install or load `cdid`.
+The setup script `validation/setup.R` installs `cdid` together with exactly the tested versions, `did` 2.5.1 and `DRDID` 1.4.0, into a dedicated library and checks the result. It reads the expected `cdid` version from the checkout's `DESCRIPTION`. Use it to check this revision against its tested baseline. Historical guide outputs record their original dependency versions. Standard installation uses the instructions above.
 
 The repository includes the CRAN source archives of these two versions in `validation/vendor/`. Standard installation resolves `did` and `DRDID` from your libraries or the current CRAN repository, which may provide later versions. The setup script installs the archived versions, the other dependencies and `cdid` itself into the dedicated library.
 
