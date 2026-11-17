@@ -19,6 +19,8 @@ importFrom(did, glance)
 importFrom(did, tidy)
 # Load the version-constrained namespace also used by did's ordinary estimators.
 importFrom(DRDID, drdid)
+# Used by the native binding compatibility path on R before 4.6.
+importFrom(rlang, env_binding_are_lazy)
 importFrom(stats, setNames)
 useDynLib(cdid, .registration = TRUE)
 # Private chained result subclasses (R/chained_did_results.R). Registered only

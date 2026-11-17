@@ -92,32 +92,51 @@ static inline SEXP cdid_parent_env(SEXP x) {
 #endif
 }
 
+#if R_VERSION < R_Version(4, 6, 0)
+SEXP cdid_legacy_binding_cache(SEXP env);
+SEXP cdid_legacy_promise_value(SEXP env, SEXP key, SEXP promise, SEXP cache);
+
+static inline int cdid_frame_has_binding(SEXP env, SEXP key) {
+#if R_VERSION >= R_Version(4, 2, 0)
+  return R_existsVarInFrame(env, key);
+#else
+  /* Listing names in R 4.1 does not read their values. */
+  SEXP names = PROTECT(R_lsInternal3(env, TRUE, FALSE));
+  int found = 0;
+  for (R_xlen_t i = 0; i < XLENGTH(names); ++i) {
+    if (!strcmp(CHAR(STRING_ELT(names, i)), CHAR(PRINTNAME(key)))) {
+      found = 1;
+      break;
+    }
+  }
+  UNPROTECT(1);
+  return found;
+#endif
+}
+#endif
+
 /* Distinguish an absent binding from a present but unavailable value: only
    absence permits base-frame fallback. Never evaluate active/delayed bindings. */
-static inline SEXP cdid_frame_value(SEXP env, SEXP key, int *bound) {
+static inline SEXP cdid_frame_value_cached(SEXP env, SEXP key, int *bound, SEXP cache) {
 #if R_VERSION >= R_Version(4, 6, 0)
+  (void) cache;
   R_BindingType_t type = R_GetBindingType(key, env);
   *bound = type != R_BindingTypeUnbound;
   if (type != R_BindingTypeValue && type != R_BindingTypeForced) return R_UnboundValue;
   return R_getVarEx(key, env, FALSE, R_UnboundValue);
 #else
-  /* Existence must precede R_BindingIsActive (which errors for an absent
-     binding) and the legacy lookup (which itself invokes active bindings).
-     R 4.1 lacks R_existsVarInFrame; listing names does not read their values. */
-#if R_VERSION >= R_Version(4, 2, 0)
-  *bound = R_existsVarInFrame(env, key);
-#else
-  SEXP names = PROTECT(R_lsInternal3(env, TRUE, FALSE));
-  *bound = 0;
-  for (R_xlen_t i = 0; i < XLENGTH(names); ++i)
-    if (!strcmp(CHAR(STRING_ELT(names, i)), CHAR(PRINTNAME(key)))) { *bound = 1; break; }
-  UNPROTECT(1);
-#endif
+  /* R_BindingIsActive requires existence, and legacy lookup can invoke
+     an active binding. */
+  *bound = cdid_frame_has_binding(env, key);
   if (!*bound || R_BindingIsActive(key, env)) return R_UnboundValue;
   SEXP x = Rf_findVarInFrame(env, key);
   if (x == R_MissingArg) return R_UnboundValue;
-  return TYPEOF(x) == PROMSXP ? PRVALUE(x) : x;
+  return TYPEOF(x) == PROMSXP ? cdid_legacy_promise_value(env, key, x, cache) : x;
 #endif
+}
+
+static inline SEXP cdid_frame_value(SEXP env, SEXP key, int *bound) {
+  return cdid_frame_value_cached(env, key, bound, NULL);
 }
 
 #endif

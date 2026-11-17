@@ -1014,10 +1014,13 @@ test_that("multiplier bootstrap, cband, RNG discipline, pretrend Wald test, cond
   ))
   set.seed(901L)
   mp_boot1 <- do.call(cdid::att_gt, boot_args)
+  boot_seed_after <- .Random.seed
   set.seed(901L)
   mp_boot2 <- do.call(cdid::att_gt, boot_args)
-  expect_identical(mp_boot1$se, mp_boot2$se)
-  expect_identical(mp_boot1$c, mp_boot2$c)
+  expect_identical(.Random.seed, boot_seed_after)
+  # Different BLAS kernels can round identical bootstrap reductions differently.
+  expect_true(roundoff_identical(mp_boot1$se, mp_boot2$se, leaves = "$", num.eq = FALSE))
+  expect_true(roundoff_identical(mp_boot1$c, mp_boot2$c, leaves = "$", num.eq = FALSE))
   expect_gte(mp_boot1$c, stats::qnorm(0.975))
 
   set.seed(902L)
@@ -1093,6 +1096,7 @@ test_that("multiplier bootstrap, cband, RNG discipline, pretrend Wald test, cond
     xformla = ~x + z, data = d_fB, control_group = "notyettreated",
     weightsname = "w", est_method = "dr", biters = 19L
   )
+  cpt_seed_after <- .Random.seed
   set.seed(77L)
   pub_cpt2 <- cdid::conditional_did_pretest(
     yname = "y", tname = "time", idname = "id", gname = "G",
@@ -1100,8 +1104,10 @@ test_that("multiplier bootstrap, cband, RNG discipline, pretrend Wald test, cond
     weightsname = "w", est_method = "dr", biters = 19L
   )
   expect_identical(pub_cpt1$chained$status, "available")
+  expect_identical(.Random.seed, cpt_seed_after)
   expect_identical(pub_cpt1$CvM, pub_cpt2$CvM)
-  expect_identical(pub_cpt1$CvMb, pub_cpt2$CvMb)
+  expect_identical(pub_cpt1$CvMpval, pub_cpt2$CvMpval)
+  expect_true(roundoff_identical(pub_cpt1$CvMb, pub_cpt2$CvMb, leaves = "$", num.eq = FALSE))
 
   # Preserve the accepted ordinary conditional-pretest delegation witness
   # (test-chained-conditional-pretest.R:345-359), including lazy chained args.

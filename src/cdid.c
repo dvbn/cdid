@@ -18,6 +18,67 @@
 #include <stdint.h>
 #include <string.h>
 
+#if R_VERSION < R_Version(4, 6, 0)
+#define CDID_LEGACY_PROMISE_CACHE_SIZE 512
+
+SEXP cdid_legacy_binding_cache(SEXP env) {
+  if (env != R_BaseEnv && !R_EnvironmentIsLocked(env)) return R_NilValue;
+  static SEXP cache_key = NULL;
+  if (cache_key == NULL) cache_key = Rf_install(".cdid_legacy_forced_promises");
+  SEXP package = PROTECT(Rf_mkString("cdid"));
+  SEXP lookup = PROTECT(Rf_lang2(Rf_install("getNamespace"), package));
+  SEXP ns = PROTECT(Rf_eval(lookup, R_BaseEnv));
+  SEXP cache = R_NilValue;
+  if ((env == ns || env == R_BaseEnv) && cdid_frame_has_binding(ns, cache_key) &&
+      !R_BindingIsActive(cache_key, ns))
+    cache = Rf_findVarInFrame(ns, cache_key);
+  UNPROTECT(3);
+  return TYPEOF(cache) == VECSXP && !ALTREP(cache) &&
+         XLENGTH(cache) == CDID_LEGACY_PROMISE_CACHE_SIZE
+           ? cache : R_NilValue;
+}
+
+static SEXP cdid_legacy_binding_predicate(void) {
+  SEXP lookup = PROTECT(Rf_lang3(Rf_install("::"), Rf_install("rlang"),
+                                Rf_install("env_binding_are_lazy")));
+  SEXP predicate = Rf_eval(lookup, R_BaseEnv);
+  UNPROTECT(1);
+  return predicate;
+}
+
+SEXP cdid_legacy_promise_value(SEXP env, SEXP key, SEXP promise, SEXP cache) {
+  /* R retains the value of a forced promise. Cache by the live promise
+     object, so replacing a binding can never reuse a prior decision. */
+  PROTECT(promise);
+  if (cache == NULL) cache = cdid_legacy_binding_cache(env);
+  PROTECT(cache);
+  uintptr_t address = (uintptr_t) promise;
+  size_t slot = ((address >> 4) ^ (address >> 12)) % CDID_LEGACY_PROMISE_CACHE_SIZE;
+  if (cache != R_NilValue && VECTOR_ELT(cache, slot) == promise) {
+    SEXP value = Rf_eval(promise, env);
+    UNPROTECT(2);
+    return value;
+  }
+
+  SEXP predicate = PROTECT(cdid_legacy_binding_predicate());
+  SEXP name = PROTECT(Rf_ScalarString(PRINTNAME(key)));
+  SEXP call = PROTECT(Rf_lang3(predicate, env, name));
+  SEXP lazy = PROTECT(Rf_eval(call, R_BaseEnv));
+  SEXP value = R_UnboundValue;
+  /* The documented predicate distinguishes a forced promise from one whose
+     code would still run. Evaluate only that same, already forced object. */
+  if (TYPEOF(lazy) == LGLSXP && XLENGTH(lazy) == 1 && LOGICAL(lazy)[0] == FALSE &&
+      cdid_frame_has_binding(env, key) && !R_BindingIsActive(key, env) &&
+      Rf_findVarInFrame(env, key) == promise) {
+    value = Rf_eval(promise, env);
+    if (cache != R_NilValue && Rf_isFunction(value))
+      SET_VECTOR_ELT(cache, slot, promise);
+  }
+  UNPROTECT(6);
+  return value;
+}
+#endif
+
 #if defined(__FAST_MATH__) || \
     (defined(__FINITE_MATH_ONLY__) && (__FINITE_MATH_ONLY__ > 0)) || \
     (defined(__ASSOC_MATH__) && (__ASSOC_MATH__ > 0)) || \
@@ -5971,3 +6032,4 @@ void R_init_cdid(DllInfo *dll) {
   R_useDynamicSymbols(dll, FALSE);
   R_forceSymbols(dll, TRUE);
 }
+
