@@ -17,10 +17,6 @@ verify_strict_cdid_namespace <- function(pkg = "cdid", env_override = NULL) {
   if (!isNamespace(ns) || !identical(unname(getNamespaceName(ns)), "cdid")) {
     stop("Target environment is not the `cdid` package namespace.", call. = FALSE)
   }
-  expected_version <- "1.3.0.1"
-  if (!identical(unname(getNamespaceVersion(ns)), expected_version)) {
-    stop(sprintf("`cdid` namespace version must be %s.", expected_version), call. = FALSE)
-  }
   if (!environmentIsLocked(ns) || !environmentIsLocked(parent.env(ns))) {
     stop("`cdid` namespace and its imports environment must be locked.",
          call. = FALSE)
@@ -32,6 +28,19 @@ verify_strict_cdid_namespace <- function(pkg = "cdid", env_override = NULL) {
       !file.exists(file.path(pkg_path, "NAMESPACE"))) {
     stop("`cdid` namespace path must contain valid package metadata (DESCRIPTION and NAMESPACE).",
          call. = FALSE)
+  }
+  src_candidates <- c("R/mc_validation.R", file.path("..", "..", "R", "mc_validation.R"))
+  src_hit <- src_candidates[file.exists(src_candidates)]
+  description <- if (length(src_hit)) {
+    file.path(dirname(dirname(src_hit[[1L]])), "DESCRIPTION")
+  } else {
+    file.path(pkg_path, "DESCRIPTION")
+  }
+  metadata <- read.dcf(description, fields = c("Package", "Version"))
+  expected_version <- unname(metadata[1L, "Version"])
+  if (!identical(unname(metadata[1L, "Package"]), "cdid") ||
+      !identical(unname(getNamespaceVersion(ns)), expected_version)) {
+    stop(sprintf("`cdid` namespace version must be %s.", expected_version), call. = FALSE)
   }
 
   expected_exports <- c("aggte", "att_gt", "chain_report",
@@ -119,8 +128,6 @@ verify_strict_cdid_namespace <- function(pkg = "cdid", env_override = NULL) {
   }
 
   # Verify scoped body AST against R/mc_validation.R when source tree is readable
-  src_candidates <- c("R/mc_validation.R", file.path("..", "..", "R", "mc_validation.R"))
-  src_hit <- src_candidates[file.exists(src_candidates)]
   if (length(src_hit) > 0L) {
     parsed_env <- new.env(parent = baseenv())
     sys.source(src_hit[[1L]], envir = parsed_env, keep.source = FALSE)
