@@ -517,7 +517,11 @@ test_that("static dname route supports clustered and multiplier inference, suppo
     bstrap = FALSE, cband = FALSE
   )
   expect_equal(res_cl$att, res_uncl$att, tolerance = 1e-14)
-  expect_equal(res_cl$inffunc, res_uncl$inffunc, tolerance = 1e-14)
+  expect_identical(res_cl$unit_id, res_uncl$unit_id)
+  # Keep exact row structure and zeros when BLAS reductions differ by roundoff.
+  expect_true(roundoff_identical(
+    res_cl$inffunc, res_uncl$inffunc, leaves = "$", num.eq = FALSE
+  ))
   expect_equal(res_cl$aggregate$estimate, res_uncl$aggregate$estimate, tolerance = 1e-14)
 
   # Match clustered analytical covariance against independent cluster reference
