@@ -45,13 +45,34 @@ stream_test_log <- function(seed = 1L, n_a = 23L, n_cal = 5L, L = 9L) {
 
 test_that("replayed loadings equal the dense accumulation entry for entry", {
   x <- stream_test_log()
-  expect_identical(loading_log_dense(x$log), x$U)
+  expect_blas_agreement(loading_log_dense(x$log), x$U, paste0("$/", seq_along(x$U)))
   cp <- seq_len(x$log$L)
   for (b in c(1L, 4L, 10L)) for (tau in seq_len(x$log$n_cal)) {
     starts <- seq.int(1L, x$log$n_a, by = b)
     blk <- do.call(rbind, lapply(starts, function(r0)
       loading_log_replay(x$log, tau, r0, min(x$log$n_a, r0 + b - 1L), cp, length(cp))))
-    expect_identical(blk, x$U[[tau]])
+    expect_blas_agreement(blk, x$U[[tau]])
+  }
+})
+
+test_that("replay preserves the signed dates and the last write to a duplicated row", {
+  log <- level_loading_log(2L, 3L, 2L)
+  left <- rbind(c(1, 2), c(-1, 1), c(2, -1))
+  right <- rbind(c(1, 0.5), c(0.25, -1))
+  loading_log_lowrank(log, c(1L, 3L, 1L), 1L, 2L, 1:2, left, right,
+    src = c(2L, 1L, 3L), pre = c(0.5, 1, 2))
+  loading_log_pair_vec(log, 1:2, 1L, 2L, 2L, c(0.5, -0.25))
+
+  # All products and sums are exactly representable, including the row
+  # written twice. Its final low-rank contribution is (3.5, 4).
+  expected <- list(matrix(c(3.5, 0, 1.5, 4.5, -0.25, -1.5), 3L),
+                   matrix(c(-3.5, 0, -1.5, -4.5, 0.25, 1.5), 3L))
+  expect_identical(loading_log_dense(log), expected)
+  for (date in 1:2) {
+    for (row in 1:3) {
+      expect_identical(loading_log_replay(log, date, row, row, 1:2, 2L),
+                       expected[[date]][row, , drop = FALSE])
+    }
   }
 })
 
@@ -63,7 +84,7 @@ test_that("blocked within Gram equals the dense Gram for several block sizes", {
   sc_list <- list(`3` = runif(x$log$n_a), `4` = runif(x$log$n_a), `5` = runif(x$log$n_a))
   for (sc in list(NULL, runif(x$log$n_a), sc_list)) {
     ref <- within_cov_from_level_loadings(U_cols, g[cols], sc)
-    expect_identical(within_cov_stream(x$log, cols, g[cols], sc, x$log$n_a), ref)
+    expect_blas_agreement(within_cov_stream(x$log, cols, g[cols], sc, x$log$n_a), ref)
     for (b in c(1L, 3L, 8L)) {
       V_b <- within_cov_stream(x$log, cols, g[cols], sc, b)
       expect_true(isSymmetric(V_b, tol = 0))

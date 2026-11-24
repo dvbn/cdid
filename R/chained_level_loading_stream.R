@@ -7,7 +7,8 @@
 # already formed, with the same scalar operations: a vector, `outer(a, b)`, or
 # `left %*% right`, each with an optional source-row selection and row
 # multiplier. Replaying the records of one date on one block of A rows, in
-# program order, reproduces every entry of the dense accumulation exactly.
+# program order, gives the same mathematical loadings as dense accumulation.
+# BLAS may round a low-rank product differently when the row block changes.
 
 # `limit` bounds the retained log entries; a record that would exceed it is
 # refused with the established workspace error before it is retained.

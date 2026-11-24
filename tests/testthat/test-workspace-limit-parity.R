@@ -27,7 +27,7 @@ test_that("workspace limit changes multiplier batches but not estimates or the f
   expect_identical(a$fit$chained$inference$rng$batch_rows, 22L)
   expect_identical(b$fit$chained$inference$rng$batch_rows, 44L)
   expect_identical(a$fit$att, b$fit$att)
-  expect_identical(as.matrix(a$fit$inffunc), as.matrix(b$fit$inffunc))
+  expect_blas_agreement(as.matrix(a$fit$inffunc), as.matrix(b$fit$inffunc))
   expect_false(identical(a$fit$se, b$fit$se))
   expect_identical(a$rng, b$rng)
 })
