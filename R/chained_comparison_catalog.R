@@ -12,6 +12,23 @@ catalog_abort <- function(message, class) {
   cdid_abort(message, c(class, "cdid_catalog_error"))
 }
 
+# The same condition as `catalog_abort()`, with typed diagnostics (when they
+# could be built) for the restatement of resource refusals.
+catalog_abort_recorded <- function(message, class, diagnostics = NULL) {
+  if (!is.list(diagnostics)) catalog_abort(message, class)
+  stop(structure(class = c(class, "cdid_catalog_error", "cdid_error", "error", "condition"),
+    list(message = message, call = NULL, diagnostics = diagnostics)))
+}
+
+# Typed counts of the adapter envelope check: the work (`max_work`, from the
+# work limit) when it fails, otherwise the scratch (`max_scratch`, from the
+# workspace limit).
+catalog_bound_diagnostics <- function(env, b) {
+  if (env$work > b$max_work) list(label = "catalog adapter output, string and graph work", requested = env$work,
+    bound = b$max_work, limit_kind = "work") else list(label = "catalog adapter output, string and graph scratch",
+    requested = env$scratch, bound = b$max_scratch, limit_kind = "workspace")
+}
+
 catalog_bound_names <- c("max_candidates", "max_rows", "max_pool_entries", "max_scratch", "max_work")
 
 # Caller caps are explicit private controls; there are no defaults.
@@ -623,7 +640,8 @@ catalog_adapter_preflight <- function(catalog, declared_qualified, target_post_t
   b <- validate_catalog_bounds(catalog$resources$bounds)
   env <- catalog_design_envelope(d, design = design)
   if (env$scratch > b$max_scratch || env$work > b$max_work)
-    catalog_abort("Catalog adapter output/string/graph work exceeds its explicit stored controls before allocation.", "cdid_catalog_bound_error")
+    catalog_abort_recorded("Catalog adapter output/string/graph work exceeds its explicit stored controls before allocation.", "cdid_catalog_bound_error",
+      diagnostics = tryCatch(catalog_bound_diagnostics(env, b), error = function(e) NULL))
   invisible(list(scratch = env$scratch, work = env$work, dimensions = d, envelope = env))
 }
 

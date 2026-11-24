@@ -73,7 +73,7 @@ The installer has been exercised on macOS arm64 with R 4.5.2, before the version
 
 ### Running package checks and the full test suite
 
-Ordinary `R CMD check` runs the bounded cohort and static switching tests in `tests/testthat/test-cran-regression.R` and `tests/testthat/test-cran-regression-static.R`. The separate full check runs all 191 packaged test files, including the cross-pair and missing-reference tests. The DLL lifecycle tests run in a fresh R process so that unloading a library does not affect objects created by earlier fits.
+Ordinary `R CMD check` runs the bounded cohort and static switching tests in `tests/testthat/test-cran-regression.R` and `tests/testthat/test-cran-regression-static.R`. The separate full check runs all 200 packaged test files for this revision, including the cross-pair, missing-reference and workspace-limit tests. The DLL lifecycle tests run in a fresh R process so that unloading a library does not affect objects created by earlier fits.
 
 To run the complete unfiltered test suite against an installed `cdid` library (such as `check/cdid.Rcheck` after `R CMD check` or `validation/.lib` after `validation/setup.R --install`):
 

@@ -1,3 +1,9 @@
+# cdid 1.4.0.0
+
+* Use `gmm_weighting = "within"` by default for built-in chained cohort IPW, OR and DR. The weights use the covariance of within-unit changes implied by uncorrelated level shocks. This follows the matched fixed-effects weighting and avoids estimating a large covariance matrix of comparison scores. Set `gmm_weighting = "optimal"` (or `"two_step"`) to reproduce the previous default. Estimates and standard errors can differ when multiple comparisons identify an effect.
+* Switching fits, custom estimators, and IPW or DR fits using the cohort fixed-effects preset default to `"optimal"`. The regression branch of the preset uses within-unit least squares. See `?att_gt` and the practical guide for examples of choosing and inspecting weights.
+* Reuse unit-level influence functions when a fit with dated covariates, separate outcome regressions, and augmented missing-outcome adjustment can keep them in memory. The workspace calculation accounts for the batches processed and the diagnostics returned.
+
 # cdid 1.3.0.4
 
 * Fix memory alignment for extended-precision calculations in chained estimates and observation models on platforms that require it.

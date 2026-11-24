@@ -320,6 +320,19 @@ testthat::test_that("augmented local bases handle no intercept, intercept-only, 
   testthat::expect_equal(unname(together$phi), actual[, c(3L, 1L), drop = FALSE], tolerance = 1e-10)
   core <- rap_ns("evaluate_augmented_if_chunk")(fit, wanted, c(3L, 1L), scale = "core")
   testthat::expect_equal(core$phi, (sum(a$A) / N) * together$phi, tolerance = 1e-10)
+  # A chunk that crosses several reference-date layouts keeps the full row
+  # map and folded output, while one selection/OR core is live at a time.
+  env <- rap_ns("reconstruction_if_envelope")
+  B <- fit$control$max_chunk_rows
+  stopifnot(max(fit$layout$by_orig$count) > 1L)
+  affine <- env(fit, B, 1:3, FALSE, augmented = TRUE, plan_rows = TRUE)
+  actual_peak <- env(fit, B, 1:3, FALSE, augmented = TRUE)
+  testthat::expect_identical(actual_peak$output, affine$output)
+  testthat::expect_lt(actual_peak$scratch, affine$scratch)
+  testthat::expect_gte(actual_peak$work, affine$work)
+  folded <- rap_ns("evaluate_augmented_if_chunk")(fit, seq_len(B), 1:3)
+  testthat::expect_equal(folded$phi[wanted[1:2], , drop = FALSE],
+    rap_ns("evaluate_augmented_if_chunk")(fit, wanted[1:2], 1:3)$phi, tolerance = 1e-12)
 })
 
 # V35 stores the scalar adjoint result compactly. V39 reuses only successful

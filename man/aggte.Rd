@@ -47,7 +47,12 @@ aggte(
   \code{bstrap = FALSE, cband = TRUE} gives analytic standard errors with a
   multiplier band for group, dynamic and calendar bins, together with did's
   warning. Simple aggregation has no band. A cluster override that cannot be
-  honoured is refused rather than silently changed.}
+  honored is refused rather than silently changed. For chained results the
+  multiplier signs are drawn in batches of the fit's processing chunk size,
+  so reproducing the draws requires the same package version, seed and RNG
+  kind, the same data in the same row order, and the same
+  \code{control$numeric_workspace_bytes} (and \code{control$chunk_rows}, if
+  set) in the fit.}
 }
 \details{
 For chained results, aggregation reuses the influence functions and cohort

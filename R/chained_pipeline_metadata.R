@@ -1211,10 +1211,10 @@ preflight_owner_comparison_catalog <- function(
       O = 0, B = cat_early$byte_conventions, Bf = 0)
     env_ad <- catalog_design_envelope(lower, design = !is.null(target_post_times))
     if (env_ad$scratch > cat_bnd$max_scratch || env_ad$work > cat_bnd$max_work) {
-      catalog_abort(
-        "Catalog adapter output/string/graph work exceeds its explicit stored controls before allocation.",
-        "cdid_catalog_bound_error"
-      )
+      cat_msg <- "Catalog adapter output/string/graph work exceeds its explicit stored controls before allocation."
+      cat_diag <- tryCatch(catalog_bound_diagnostics(env_ad, cat_bnd), error = function(e) NULL)
+      if (exists("catalog_abort_recorded", mode = "function")) catalog_abort_recorded(cat_msg, "cdid_catalog_bound_error", cat_diag) else
+        catalog_abort(cat_msg, "cdid_catalog_bound_error")
     }
   }
 

@@ -35,6 +35,12 @@ ipn_build_dll <- function(c_text, name) {
   extra_c <- character(0L)
   if (!is.null(orig_src)) {
     sdir <- dirname(orig_src)
+    # The full native bundle calls BLAS and LAPACK even though the interval
+    # product itself does not. Link the test DLL with the package's settings.
+    makevars <- file.path(sdir, c("Makevars", "Makevars.win"))
+    if (!all(file.exists(makevars)) || !all(file.copy(makevars, dir))) {
+      stop("Missing native build settings for the CP02 interval test DLL.", call. = FALSE)
+    }
     hdrs <- list.files(sdir, pattern = "\\.h$", full.names = TRUE)
     if (length(hdrs)) file.copy(hdrs, dir)
     sibs <- setdiff(list.files(sdir, pattern = "\\.c$", full.names = TRUE), orig_src)

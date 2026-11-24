@@ -45,7 +45,7 @@ att_gt(
   selection_justification = NULL,
   selection_est_method = "ipw",
   imputation_pooling = "separate",
-  gmm_weighting = c("optimal", "identity", "within"),
+  gmm_weighting = "within",
   gmm_covariance = "tikhonov",
   pt_assumption = c("post", "all", "ctrl"),
   pt_start = NULL,
@@ -83,9 +83,17 @@ att_gt(
   or the cohort's reference date, respectively. The default is suitable
   for constant weights.}
 \item{alp}{Significance level for confidence intervals and bands.}
-\item{bstrap}{Whether to use the multiplier bootstrap for inference.}
+\item{bstrap}{Whether to use the multiplier bootstrap for inference. In chained
+  mode the multiplier signs are drawn in batches of the processing chunk size,
+  which is derived from \code{control$numeric_workspace_bytes} unless
+  \code{control$chunk_rows} is set. Reproducing bootstrap standard errors and
+  bands requires the same package version, seed and RNG kind, data in the
+  same row order and \code{numeric_workspace_bytes} (and \code{chunk_rows},
+  if set); a changed chunk size can also change point estimates in the last
+  digits.}
 \item{cband}{Whether to report simultaneous confidence bands when \code{bstrap = TRUE}.}
-\item{biters}{Number of bootstrap draws.}
+\item{biters}{Number of bootstrap draws. See \code{bstrap} for what the draws
+  depend on in chained mode.}
 \item{clustervars}{Names of cluster variables. Chained mode accepts at most
   one cluster variable in addition to the unit identifier. Clustering affects
   inference.}
@@ -154,8 +162,14 @@ att_gt(
 \item{gmm_weighting}{How comparisons are combined. \code{"optimal"} (also
   \code{"two_step"}) estimates weights using the covariance of the comparisons.
   \code{"identity"} uses equal weights. \code{"within"} uses the covariance of
-  within-unit changes implied by uncorrelated level shocks and requires a
-  built-in cohort method.}
+  within-unit changes implied by uncorrelated level shocks. It is the default
+  for built-in chained cohort estimators and uses the structure of the
+  within-unit comparisons to determine the weights. Use \code{"optimal"} to
+  use the previous default for these estimators. Standard errors use the
+  complete unit influence functions. Switching fits, custom estimators,
+  and treatment weighting or doubly robust estimation with the cohort
+  fixed-effects preset default to \code{"optimal"}. The regression branch of
+  the preset uses within-unit least squares.}
 \item{gmm_covariance}{Use \code{"tikhonov"} to regularize singular or nearly
   singular comparison covariance matrices when needed.}
 \item{pt_assumption}{Parallel trends assumption for cohorts. \code{"post"}
@@ -172,10 +186,31 @@ att_gt(
   \code{list(keep_nuisance = TRUE)} to retain fitted model coefficients and
   standard errors, or \code{list(preset = "cohort_time_fe")} for the linear
   cohort-by-date fixed-effects specification described below. Other options
-  include \code{numeric_workspace_bytes} (default one GiB for numerical
-  arrays), \code{workers} (default one), \code{chunk_rows},
-  \code{counted_work_limit} (default \code{Inf}), \code{condition_trigger}
-  (default \code{1e-10}) and \code{ridge_relative} (default \code{1e-4}).}
+  include \code{numeric_workspace_bytes} (default one GiB), \code{workers}
+  (default one), \code{chunk_rows}, \code{counted_work_limit} (default
+  \code{Inf}), \code{condition_trigger} (default \code{1e-10}) and
+  \code{ridge_relative} (default \code{1e-4}).
+  \code{numeric_workspace_bytes} is the workspace limit: a fixed cap on the
+  numeric arrays that \code{cdid} plans to allocate during a fit, applied
+  automatically. It is not a limit on the memory of the R process. A fit that
+  needs more is refused with a resource error that keeps the diagnostic of
+  the failing check and states what that check counted; it states no
+  sufficient value and ends with \dQuote{Increase the workspace limit.} A refusal normally comes before
+  estimation; on outcome-regression and doubly robust fits under
+  \code{gmm_weighting = "within"}, or with static covariates under
+  \code{"optimal"}, close to the limit the copy of the results is checked
+  only after estimation.
+  \code{chunk_rows} is the number of units processed at once; unless set, it
+  is the smallest of the number of units, 256, and the workspace limit divided
+  by 16 KiB times the largest possible number of comparisons plus the number
+  of covariate columns plus one, and at least one (on cohort fits without the
+  cohort-by-date preset). On fits with many stored dates and cohorts,
+  changing either value can change multiplier bootstrap draws and last-digit
+  rounding; to replicate results, keep them fixed. Cohort fits record the
+  values used in \code{fit$chained$public$profile$numeric_workspace_bytes} and
+  \code{fit$chained$public$chunk_rows}; switching-model (\code{dname}) fits in
+  \code{fit$request$control$profile$numeric_workspace_bytes} and
+  \code{fit$request$control$chunk_rows}.}
 \item{outcome_pooling}{Use \code{"separate"} for comparison-specific outcome
   slopes or \code{"pooled"} for shared slopes with local intercepts when
   the formula includes an intercept. For cohort models, pooled slopes scale

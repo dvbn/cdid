@@ -506,8 +506,12 @@ test_that("dated augmented phase-local stores match forced streaming at 1e-12 ac
   # Full pipeline parity with distinct covariance (B_cov = 9) and GMM (B_gmm = 7) partitions.
   ns_split <- d92_distinct_partition_ns(B_cov = 9L, B_gmm = 7L, base_ns = api)
   ns_stream <- d92_stream_ns(base_ns = ns_split)
-  res_ret <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_split)
-  res_str <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_stream)
+  expect_warning(
+    res_ret <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_split), class = "cdid_workspace_speed_warning"
+  )
+  expect_warning(
+    res_str <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_stream), class = "cdid_workspace_speed_warning"
+  )
   d92_equal(res_ret, res_str)
 
   rm_rec <- res_ret$resource_accounting$point_producer$retained_moment_if
@@ -682,9 +686,15 @@ test_that("covariance and GMM phase-local stores enforce exact one-entry, one-wo
   ns_gmm_only <- d92_phase_filter_ns("gmm", base_ns = ns_split)
   ns_stream <- d92_stream_ns(base_ns = ns_split)
 
-  res_cov_only <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_cov_only)
-  res_gmm_only <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_gmm_only)
-  res_stream <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_stream)
+  expect_warning(
+    res_cov_only <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_cov_only), class = "cdid_workspace_speed_warning"
+  )
+  expect_warning(
+    res_gmm_only <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_gmm_only), class = "cdid_workspace_speed_warning"
+  )
+  expect_warning(
+    res_stream <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_stream), class = "cdid_workspace_speed_warning"
+  )
 
   d92_equal(res_cov_only, res_stream)
   d92_equal(res_gmm_only, res_stream)
@@ -816,7 +826,9 @@ test_that("covariance store is released before GMM consumers and GMM store is re
     api$cp04_public_diagnostics(...)
   }
 
-  res <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_trace)
+  expect_warning(
+    res <- d92_run_dated_augmented(fx$d, chunk = NULL, ns = ns_trace), class = "cdid_workspace_speed_warning"
+  )
   expect_identical(gmm_entry_states$cov_state, "released")
   expect_false(gmm_entry_states$cov_has_phi)
   expect_identical(gmm_entry_states$gmm_state, "reserved")
@@ -842,7 +854,10 @@ test_that("covariance store is released before GMM consumers and GMM store is re
     }
     fail_at <- if (failed_phase == "covariance") "cp04_stream_covariance" else "solve_chained_gmm_core"
     assign(fail_at, function(...) stop("phase consumer failure"), ns_error)
-    expect_error(d92_run_dated_augmented(fx$d, ns = ns_error), "phase consumer failure")
+    expect_warning(
+      expect_error(d92_run_dated_augmented(fx$d, ns = ns_error), "phase consumer failure"),
+      class = "cdid_workspace_speed_warning"
+    )
     expect_true(is.environment(error_stores[[failed_phase]]))
     for (out in error_stores) {
       expect_identical(out$state, "released")

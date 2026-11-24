@@ -394,8 +394,7 @@ reference_ipw_public_fit <- function(reader, views, ctrl, retained, work, refere
 reference_ipw_public_diagnostics <- function(res, control) {
   b <- res$nuisance_registry$cp04
   bound <- 4 * b$accounting$owned_entries + 4096
-  cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
-    res$resource_accounting$initial_envelope_entries)), bound),
+  cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, NULL), bound),
     4 * bound, 8 * bound, bound, "reference IPW public diagnostic copy")
   reader <- get("cp04_reader", b$reader_ref, inherits = FALSE)
   st_cohorts <- reader$state$cohorts

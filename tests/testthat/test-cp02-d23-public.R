@@ -278,7 +278,7 @@ test_that("D23 installed public rotating80 pipeline preserves independent point 
   skip_if_not_installed("cdid"); skip_if_not_installed("did")
   z <- source(d23_file("fixtures","rotating80_fixture.R"))$value; d <- z$panel
   d$g[is.infinite(d$g)] <- 0; d$y <- d$y_exactfit
-  mp <- att_gt("y","t","id","g",~x,d,est_method="ipw",bstrap=FALSE,cband=FALSE)
+  mp <- att_gt("y","t","id","g",~x,d,est_method="ipw",gmm_weighting="optimal",bstrap=FALSE,cband=FALSE)
   post <- which(mp$chained$target_meta$role=="post")
   expect_equal(unname(mp$att[post]),c(1,1,1),tolerance=1e-12)
   # Independent reference targets order (pre, post3, post4, post5).

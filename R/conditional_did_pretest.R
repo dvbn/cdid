@@ -69,7 +69,7 @@ conditional_did_pretest <- function(yname,
   # Chained mode (O14, D66): the chained conditional pretrend CvM test on the
   # accepted union-catalog fit of the requested built-in route; est_method
   # defaults to "ipw" as in did, independently of att_gt()'s "dr" default.
-  chained_conditional_did_pretest(
+  resource_guard(chained_conditional_did_pretest(
     yname = yname, tname = tname, idname = idname, gname = gname, xformla = xformla, data = data,
     panel = panel, allow_unbalanced_panel = allow_unbalanced_panel, control_group = control_group,
     weightsname = weightsname, alp = alp, bstrap = bstrap, cband = cband, biters = biters,
@@ -78,5 +78,5 @@ conditional_did_pretest <- function(yname,
     selection = selection, selection_model = selection_model, selection_pooling = selection_pooling,
     selection_xformla = selection_xformla, selection_universe = selection_universe, selection_rho = selection_rho,
     selection_justification = selection_justification, selection_est_method = selection_est_method,
-    imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, control = control, call = sys.call())
+    imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, control = control, call = sys.call()), control)
 }

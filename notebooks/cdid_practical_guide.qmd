@@ -37,13 +37,7 @@ The [function map](#function-map) at the end lists the functions and main contro
 
 This Quarto notebook is an interactive, editable tutorial for estimating group-time average treatment effects and event-study aggregations with `cdid` (implementing Bellégo, Benatia and Dortet-Bernadet 2025 and extending Callaway and Sant'Anna 2021). It also covers the static switching model (`dname`) and the cohort-by-date fixed-effects preset added in version 1.3.0.0. Every estimation call uses the public `cdid` interface directly so you can copy, modify, and run individual chunks in your own workflow. See [Get started](https://github.com/dvbn/cdid/blob/main/docs/get-started.md) and the [User Guide home](https://github.com/dvbn/cdid/blob/main/docs/README.md) for companion documentation.
 
-The notebook requires `cdid` 1.3.0.0 or later. The setup chunk stops if an
-older version is loaded. Until 1.3.0.0 is on CRAN, install it from GitHub with
-`remotes::install_github("dvbn/cdid")`, or from this checkout with
-`remotes::install_local(".")` run from the repository root. The optional
-[pinned validation setup](https://github.com/dvbn/cdid/blob/main/validation/SETUP.md) installs exact dependency
-versions. Restart R after installing. Run setup and the DGP first, then work
-downward. Sections 17 and 18 draw their own data and depend only on the setup
+Use a `cdid` build with `gmm_weighting = "within"` as the built-in chained cohort default. Run `install.packages("cdid")` when that version is on CRAN or install the current GitHub version with `remotes::install_github("dvbn/cdid")`. To run this notebook against a development checkout, run `remotes::install_local(".")` from its root. Restart R after installing. Run setup and the data generator first, then work downward. [Optional pinned validation setup](https://github.com/dvbn/cdid/blob/main/validation/SETUP.md) Sections 17 and 18 draw their own data and depend only on the setup
 chunk.
 
 - **Fresh session after reinstall:** If you reinstall `cdid`, `did`, or `DRDID`, restart R before rendering or running chunks interactively so that namespace bindings and compiled symbols are loaded cleanly.
@@ -58,9 +52,9 @@ val_lib <- file.path(proj_root, "validation", ".lib")
 if (dir.exists(val_lib)) .libPaths(c(normalizePath(val_lib, winslash = "/"), .libPaths()))
 
 library(cdid); library(did); library(DRDID); library(knitr); library(ggplot2)
-if (utils::packageVersion("cdid") < "1.3.0.0" ||
+if (!identical(formals(cdid::att_gt)$gmm_weighting, "within") ||
     !"missing_reference" %in% names(formals(cdid::att_gt))) {
-  stop("Install the cdid development build from this checkout and restart R. Check validation/.lib if it is present.")
+  stop("Install a cdid version with within weighting as the cohort default, then restart R. Check validation/.lib if it is present.")
 }
 
 pkg_info <- data.frame(
@@ -1088,7 +1082,37 @@ the fit to stop and list missing inputs. [Prepare your panel](https://github.com
 
 ## 14. GMM Weighting, Diagnostics and Point-Only Fits {#guide-14}
 
-`gmm_weighting = "optimal"` (also named `"two_step"`) requests feasible two-step GMM; the core used this default. `"identity"` explicitly requests the unweighted full-catalog criterion. Under optimal weighting, automatic Tikhonov regularization can stabilize a singular or poorly conditioned comparison covariance after exact structural reductions. It cannot supply missing ATT identification. Read the actual record rather than assuming regularization occurred.
+Built-in chained cohort fits default to `gmm_weighting = "within"`. The weights account for shared dates under a working model with uncorrelated level shocks. This gives the weighting in the matched fixed-effects regressions and avoids estimating a large covariance matrix from the same observations used to fit the effects. Set `gmm_weighting = "optimal"` (also `"two_step"`) for the earlier default. It estimates the covariance of comparison scores from the data. Switching fits, custom estimators, and propensity-weighted or doubly robust fits of the cohort fixed-effects preset default to `"optimal"`. [Why within is the cohort default](https://github.com/dvbn/cdid/blob/main/docs/methods/gmm.md#why-within-is-the-cohort-default)
+
+Compare the two weighting choices on the incomplete panel from Section 5. Keep the outcomes, controls, observation model and treatment adjustment fixed. Both fits report analytical standard errors based on the study-unit influence functions.
+
+```{r}
+#| label: compare-within-and-two-step
+fit_miss_two_step <- cdid::att_gt(
+  yname = "y", tname = "time", idname = "id", gname = "g",
+  xformla = ~ x + z, selection_xformla = ~ x, data = missing_panel, frame = units,
+  control_group = "nevertreated", est_method = "dr",
+  selection = "conditional_mtar", selection_est_method = "ipw",
+  selection_model = "independent_period_logit", selection_pooling = "separate",
+  selection_universe = "F", pt_assumption = "post", base_period = "varying",
+  bstrap = FALSE, cband = FALSE, gmm_weighting = "optimal"
+)
+weight_summary <- function(fit) {
+  avg <- cdid::aggte(fit, type = "simple")
+  data.frame(
+    weighting = fit$chained$covariance_handling$weighting_canonical,
+    estimate = avg$overall.att,
+    std_error = avg$overall.se
+  )
+}
+knitr::kable(
+  rbind(weight_summary(fit_miss_date), weight_summary(fit_miss_two_step)),
+  digits = 5, col.names = c("Weighting", "Average effect", "Standard error"),
+  caption = "Two ways to combine the same comparisons in the incomplete panel"
+)
+```
+
+A single draw shows the impact on this fit. To compare precision across draws, change the seed in Section 2 and refit both choices on each draw. Choose `gmm_weighting = "identity"` for an unweighted fit. The fitted diagnostics below report the active weights and whether Tikhonov regularization was used.
 
 ```{r}
 #| label: gmm-and-resources
@@ -1102,9 +1126,9 @@ fit_identity <- cdid::att_gt(
   gmm_weighting = "identity", gmm_covariance = "tikhonov",
   control = list(numeric_workspace_bytes = workspace_bytes, counted_work_limit = work_cap)
 )
-list(optimal = fit_bal$chained$covariance_handling[c("weighting_requested", "weighting_canonical",
+list(within = fit_bal$chained$covariance_handling[c("weighting_requested", "weighting_canonical",
        "handler_invoked", "handler_used", "trigger_reason", "lambda")],
-     optimal_conditioning = fit_bal$chained$covariance_handling$conditioning[c("rho", "d_min", "d_max")],
+     within_conditioning = fit_bal$chained$covariance_handling$conditioning[c("rho", "d_min", "d_max")],
      identity = fit_identity$chained$covariance_handling[c("weighting_requested", "weighting_canonical",
        "handler_invoked", "handler_used", "trigger_reason", "lambda")])
 fit_identity$chained$public[c("counted_work_limit", "work_cap")]

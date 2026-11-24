@@ -749,7 +749,9 @@ test_that("cp04_stream_plan and cp04_retained_if_reserve decline at adjacent ent
   expect_identical(length(plan_shrink$blocks), 4L)
 
   # The exact issued B is the admission target, even if an automatic planner
-  # would suggest another partition. The explicit preflight is still real.
+  # would suggest another partition: the automatic planner is not consulted
+  # (a fixed row count is admitted by the producer budget and the
+  # simultaneous-entries checks of the full-block plan, not by the planner).
   clone_planner <- function() {
     e <- new.env(parent = api)
     for (nm in c("cp04_stream_plan", "cp04_stream_plan_full_block", "cp04_retained_if_validate_backend")) {
@@ -766,7 +768,7 @@ test_that("cp04_stream_plan and cp04_retained_if_reserve decline at adjacent ent
   }
   expect_identical(length(e_fixed$cp04_stream_plan(fit, links, 0)$blocks), 1L)
   expect_identical(auto_calls, 0L)
-  expect_identical(explicit_calls, 1L)
+  expect_identical(explicit_calls, 0L)
 
   # 3f. Retained store (`cp04_retained_if_reserve`) adjacent entry/work caps and
   # charged covariance/GMM planner probes when L = 30 > B = 9.
@@ -1044,6 +1046,13 @@ test_that("fitted baseline OR full-width planning retains real cap fallbacks, NY
   expect_equal(unname(a$mean_phi), unname(colMeans(Hd)), tolerance = 1e-12)
   expect_identical(e_new$n$replays, 2L)
   expect_identical(e_leg$n$replays, 14L)
+
+  e_means <- plan_counting_ns(legacy_plan = TRUE, force_stream = TRUE)
+  means_only <- e_means$cp04_stream_covariance(fit, ordered, empirical = FALSE)
+  expect_null(means_only$covariance)
+  for (nm in setdiff(names(b), "covariance"))
+    expect_identical(means_only[[nm]], b[[nm]], info = nm)
+  expect_identical(e_means$n$replays, length(legacy$blocks))
 
   clone_planner <- function() {
     e <- new.env(parent = api)
