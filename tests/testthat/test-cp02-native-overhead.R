@@ -864,8 +864,14 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     cp08_unit_core_added_bindings <- c("gmm_if_unit_batch", "gmm_if_unit_batch_eligible",
       "gmm_require_unit_batch_symbol")
     cp10_within_core_added_bindings <- "gmm_uses_cov_whitening"
+    # Streamed weighting covariance: the solve's existing pre-allocation checks
+    # are factored into one helper, which the solve still runs first, and a
+    # caller-side entry runs the same checks before the covariance is formed.
+    streamed_weighting_core_added_bindings <- c("gmm_core_preallocation_checks",
+      "gmm_core_workspace_preflight")
     expect_identical(setdiff(cand_core_names, orig_core_names),
-      sort(c("gmm_native_dll_cache", cp08_unit_core_added_bindings, cp10_within_core_added_bindings)))
+      sort(c("gmm_native_dll_cache", cp08_unit_core_added_bindings, cp10_within_core_added_bindings,
+        streamed_weighting_core_added_bindings)))
     expect_identical(setdiff(orig_core_names, cand_core_names), character(0L))
     # D28 adds these reviewed controls and changes these six core bodies
     # (the solve alias shares one body). The original native-cache delta and
@@ -882,6 +888,9 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
       chained_gmm_core = list(project_influence = TRUE),
       preflight_gmm_allocations = list(project_influence = TRUE),
       solve_chained_gmm_core = list(project_influence = TRUE)))
+    # For typed refusal records, the failure branch of this count helper
+    # also records the governing control of its bound; formals are unchanged.
+    r4_typed_core_changed_bodies <- "gmm_safe_product"
     d28_changed_bodies <- c("chained_gmm_core", "gmm_accuracy_control", "preflight_gmm_allocations",
       "solve_chained_gmm_core", "validate_gmm_accuracy_control", "validate_gmm_reduction_spec")
     # CP03: multiple anchors, zero-loading rows and intrinsic validation;
@@ -905,7 +914,8 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
         body(utils::removeSource(get(nm, e_orig_core)))), logical(1))]
     expect_identical(actual_changed_formals, names(formal_additions))
     expect_identical(actual_changed_bodies,
-      sort(c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies, cp10_changed_bodies)))
+      sort(c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies, cp10_changed_bodies,
+        r4_typed_core_changed_bodies)))
     # Historical D28-only core SHA256 (before the accepted CP03 gauge delta):
     # 5f1fd263e702fecfe8ccc04e9005d83a3e67ce265bc5be418df7fe38e0e23b7e
     # Historical CP08 cache-stage whole-core pin (not the current source):
@@ -920,8 +930,12 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # PERF and within-covariance whitening source pin before point-only projection:
     # c7c4a8c7e0d90e3388a835e99a7839264f0d845815ce81b98162ab8d38fe0522
     # The reviewed projection change touches only previously listed bodies.
+    # Point-only projection source pin before the streamed weighting covariance:
+    # d8d66f29c9caef90837c2504600a588394a65307f6e6e33da4f9aed31699a40d
+    # The streamed weighting covariance changes only the already listed
+    # solve_chained_gmm_core body and adds the two bindings above.
     expect_identical(digest::digest(file = file.path(pkg_root, "R", "chained_gmm_core.R"), algo = "sha256"),
-      "d8d66f29c9caef90837c2504600a588394a65307f6e6e33da4f9aed31699a40d")
+      "cbeb2369032064a819c33de6febb0cc4ffcc83ba64eccae4ef36e7d22969776d")
     for (nm in orig_core_names) {
       vo <- get(nm, envir = e_orig_core, inherits = FALSE)
       vc <- get(nm, envir = e_cand_core, inherits = FALSE)
@@ -936,7 +950,8 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
         expect_identical(formals(vc)[names(additions)], additions,
           info = paste0("core_added_defaults_", ks, "_", nm))
       }
-      if (!(nm %in% c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies, cp10_changed_bodies))) {
+      if (!(nm %in% c("gmm_require_native_dll", registered_call_changed_bodies, d28_changed_bodies, cp03_changed_bodies, cp08_changed_bodies, cp10_changed_bodies,
+                      r4_typed_core_changed_bodies))) {
         expect_identical(body(vc), body(vo), info = paste0("core_body_", ks, "_", nm))
       }
     }
@@ -1014,6 +1029,9 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
       query_ipw_view_chunk = list(validated = NULL),
       read_ipw_view_chunk = list(validated = NULL),
       verify_ipw_view_mask_compatibility = list(construction_context = NULL))
+    # For typed refusal records, the failure branches of the two count
+    # helpers also record the governing control of their bound; formals are unchanged.
+    r4_typed_owner_changed_bodies <- c("ipw_owner_safe_product", "ipw_owner_safe_sum")
     owner_formal_additions <- c(cp04_owner_formal_additions, cp08_owner_formal_additions)
     # Panel constructor/header/assembler extraction changes these three alias
     # bodies only. Frame aliases, view constructors, mask verifier and link
@@ -1038,7 +1056,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
         body(utils::removeSource(get(nm, e_orig_own)))), logical(1))]
     expect_identical(actual_changed_bodies,
       sort(c(modified_owner_fns, cp04_owner_changed_bodies, p1_owner_changed_bodies,
-        cp08_owner_changed_bodies, cp08_full_support_owner_changed_bodies)))
+        cp08_owner_changed_bodies, cp08_full_support_owner_changed_bodies, r4_typed_owner_changed_bodies)))
     # Historical owner pin includes the CP08 reviewed optimization delta and
     # stage-5 link support records:
     # 5b0419b32155244b7aa37a3197a007fac58f7b7e71cbf0448905b550c787ea01
@@ -1055,7 +1073,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
     # byte-identical; test-cp04-pair-support-cache.R checks uncached parity.
     # This exact candidate pin requires independent acceptance before integration.
     expect_identical(digest::digest(file = file.path(pkg_root, "R", "chained_ipw_owner.R"), algo = "sha256"),
-      "1f194f21da7c9afd731790efa1ce770d017426c371dd2be7ebf606c4bfaba05d")
+      "9c68108565c113ee65c273b10ef8d91cc872c8bffbc3e133e6e9e0c0a2db903c")
     for (nm in orig_own_names) {
       vo <- get(nm, envir = e_orig_own, inherits = FALSE)
       vc <- get(nm, envir = e_cand_own, inherits = FALSE)
@@ -1091,7 +1109,7 @@ test_that("6. Structural delta and bit-identical equivalence against bundled ori
           expect_identical(length(idx_delta), 1L, info = paste0("own_body_rate_idx_", ks, "_", nm))
           expect_identical(b_cand[[idx_delta]], delta_expr, info = paste0("own_body_delta_", ks, "_", nm))
           expect_identical(b_cand[-idx_delta], b_orig, info = paste0("own_body_rest_", ks, "_", nm))
-        } else if (!(nm %in% c(modified_owner_fns, cp04_owner_changed_bodies, cp08_owner_changed_bodies))) {
+        } else if (!(nm %in% c(modified_owner_fns, cp04_owner_changed_bodies, cp08_owner_changed_bodies, r4_typed_owner_changed_bodies))) {
           expect_identical(body(vc), body(vo), info = paste0("own_body_", ks, "_", nm))
         }
       } else {

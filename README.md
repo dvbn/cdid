@@ -4,7 +4,7 @@
 
 [CRAN package page](https://cran.r-project.org/package=cdid) · [Release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md) · [User guide](https://github.com/dvbn/cdid/blob/main/docs/README.md) · [Online documentation](https://www.davidbenatia.com/tools/cdid/) · [Stata package](https://github.com/dvbn/cdid-stata)
 
-GitHub main contains R `cdid` **1.3.0.4**. The [CRAN package page](https://cran.r-project.org/package=cdid) lists the current CRAN release. Articles label the version used for recorded output. Check your installed version with `packageVersion("cdid")` and consult the [release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md).
+This source contains R `cdid` **1.4.0.0**. The [CRAN package page](https://cran.r-project.org/package=cdid) lists the current CRAN release. Articles label the version used for recorded output. Check your installed version with `packageVersion("cdid")` and consult the [release notes](https://github.com/dvbn/cdid/blob/main/NEWS.md).
 
 ## Installation
 
@@ -56,7 +56,7 @@ event_study <- cdid::aggte(fit, type = "dynamic", bstrap = FALSE, cband = FALSE)
 cdid::ggdid(event_study)
 ```
 
-`summary(fit)` shows the ATT(g,t) table under a heading that names the chained estimator, then a short record: the available cells and the reasons for unavailable ones, the unit table, the handling of missing outcomes, the parallel trends assumption, the GMM weighting and the inference performed. `aggte()` summarizes the stored cells without refitting, here by time since adoption. `cdid::tidy(fit)` and `cdid::glance(fit)` give the same information as data frames. The defaults are those of `did`: doubly robust treatment adjustment, never-treated controls and no anticipation. `bstrap = FALSE` requests analytical standard errors for fast interactive use.
+`summary(fit)` shows the ATT(g,t) table under a heading that names the chained estimator, then a short record: the available cells and the reasons for unavailable ones, the unit table, the handling of missing outcomes, the parallel trends assumption, the GMM weighting and the inference performed. `aggte()` summarizes the stored cells without refitting, here by time since adoption. `cdid::tidy(fit)` and `cdid::glance(fit)` give the same information as data frames. As in `did`, the defaults are doubly robust treatment adjustment, never-treated controls and no anticipation. `bstrap = FALSE` requests analytical standard errors for fast interactive use.
 
 [Get started](https://github.com/dvbn/cdid/blob/main/docs/get-started.md) walks through a simulated panel with recorded output, the four aggregation types, plots, export and a comparison with `did`. The [practical notebook](https://github.com/dvbn/cdid/blob/main/notebooks/README.md) lets you edit and rerun every example. The [user guide](https://github.com/dvbn/cdid/blob/main/docs/README.md) orders the remaining pages as a reading path.
 
@@ -71,6 +71,10 @@ A treatment cohort is the set of units first treated in the same period. For coh
 Write the outcome of unit i at date t as $Y_{it} = \alpha_i + u_{it}$, where $\alpha_i$ is a fixed individual effect and $u_{it}$ holds everything that varies over time: trends, the treatment effect and noise. The change between two observed dates, $Y_{it} - Y_{is} = u_{it} - u_{is}$, contains no $\alpha_i$. Suppose treated units with persistently low outcomes are more likely to leave the panel while controls leave at random. The treated units still observed later have a higher mean $\alpha_i$, so comparing their outcome levels with earlier ones adds this change in composition to the treatment effect. If attrition depends only on $\alpha_i$ and $\alpha_i$ is unrelated to $u_{it} - u_{is}$, the treated units that remain still have the mean change of their cohort.
 
 This is the main advantage of chained DiD for incomplete panels: observation may depend on the unobservable individual effect, as long as that effect is unrelated to the changes, and the observed levels need not stay representative of the population. Removing the fixed effect does not by itself make missing changes ignorable. If the persistent component is related to trends or to heterogeneous treatment effects, observation that depends on it also selects the changes.
+
+Built-in chained cohort fits use `gmm_weighting = "within"` by default. The weights account for shared dates using the covariance of within-unit changes implied by uncorrelated level shocks. This is the weighting behind the matched fixed-effects regressions and avoids estimating a large covariance matrix from the same sample used to fit the effects. Standard errors use the estimated influence functions.
+
+Set `gmm_weighting = "optimal"` to reproduce the previous default for these fits. The choice can change estimates and standard errors when several comparisons identify the same effect. You can inspect the active weighting with `fit$chained$covariance_handling$weighting_canonical`. [GMM weighting and the defaults by fit type](https://github.com/dvbn/cdid/blob/main/docs/methods/gmm.md)
 
 ### The assumptions
 
@@ -101,7 +105,7 @@ Covariates that change over time are read at each cohort's reference date from t
 
 `control_group` selects never-treated or not-yet-treated controls, as in `did`. `pt_assumption = "post"`, the default, assumes parallel trends from each cohort's reference period onward. `"all"` adds the same assumption from a chosen common start date `pt_start` up to each reference period, so that earlier dates can also serve as baselines. `"ctrl"` keeps PT-post and adds common untreated trends among the clean control cohorts only. Valid added restrictions can make more effects available or improve precision, but neither gain is guaranteed, and false restrictions bias the estimates. `base_period` changes only how cells before treatment are reported, not the assumption.
 
-When a cohort and its eligible controls are observed over different windows and share no date pair, set `cross_pair = TRUE` to link their separate within-unit changes through calendar dates where the trend assumption applies. `chain_report(fit)` shows which comparisons identify each effect and the weights that combine them. The default `gmm_weighting = "optimal"` estimates the moment covariance from the data. `"within"` weights comparisons by their within-unit covariance under uncorrelated level shocks.
+When a cohort and its eligible controls are observed over different windows and share no date pair, set `cross_pair = TRUE` to link their separate within-unit changes through calendar dates where the trend assumption applies. `chain_report(fit)` shows which comparisons identify each effect and the weights that combine them.
 
 [Parallel trends](https://github.com/dvbn/cdid/blob/main/docs/methods/parallel-trends.md) · [Add PT-all restrictions](https://github.com/dvbn/cdid/blob/main/docs/examples/pt-all-comparison.md) · [Cross-pair chaining, PT-ctrl and within-unit weighting](https://github.com/dvbn/cdid/blob/main/docs/methods/cross-pair-chaining.md) · [Short pre-treatment windows](https://github.com/dvbn/cdid/blob/main/docs/examples/short-pretreatment-windows.md) · [GMM weighting and covariance regularization](https://github.com/dvbn/cdid/blob/main/docs/methods/gmm.md)
 

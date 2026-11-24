@@ -30,16 +30,26 @@ Several properties follow directly from this formulation:
 - **Sensitivity to incompatible moments.** If the population limits of the retained comparisons cannot all be represented by one $A\theta$ (for example after invalid trend or observation restrictions), the moments are incompatible. Misspecification alone need not imply incompatibility or bias in every contrast. Under the relevant convergence conditions, the limiting criterion defines a weighted pseudo-target that generally depends on the limiting weights.
 - **Moment-covariance ridge is not a parameter penalty.** When the estimated moment covariance is regularized before inversion to form $W$, the positive ridge is added to the *moment covariance matrix*, not to $A'WA$ and not as an $L_2$ penalty on $\theta$. It imposes no shrinkage target on ATT and supplies no identifying restrictions on $\theta$. A particular estimate can nevertheless move closer to or farther from zero when its comparison weights change.
 
+## Why within is the cohort default
+
+When two comparisons use some of the same units and dates, they share information. For example, a shock to a unit's outcome in period 2 enters the change from period 1 to 2 positively and the change from period 2 to 3 negatively. With uncorrelated level shocks, the shared outcome contributes a negative covariance between those changes.
+
+`gmm_weighting = "within"` combines the comparisons using that working covariance, taking account of their dates and unit weights. It gives the fixed-effects weighting in the matched regression designs described in the [cross-pair guide](cross-pair-chaining.md). This is useful when many comparisons share observations and estimating their full covariance from the data would introduce noise into the weights.
+
+You can set `gmm_weighting = "optimal"` to estimate that covariance from the data. A well-estimated covariance can improve precision when the working covariance differs from the covariance in your panel. Either choice can yield tighter intervals in a given sample. To compare them, fit both on the same rows with the same adjustment, parallel trends assumption and inference settings. The working covariance determines how effects are estimated. Standard errors for both choices use a sandwich based on the full study-unit influence functions. [How to compare precision](../examples/precision.md)
+
 ## Public weighting and covariance options
 
 Two arguments of `cdid::att_gt()` configure the GMM criterion in chained mode, supplemented by two optional tuning entries in `control`:
 
 | Argument or `control` entry | Default | Accepted values | Meaning |
 | --- | --- | --- | --- |
-| `gmm_weighting` | `"optimal"` | `"optimal"`, `"two_step"`, `"identity"`, `"within"` | `"optimal"` selects feasible two-step GMM using the unit-level moment covariance; `"two_step"` is an explicit alias for `"optimal"`; `"identity"` selects explicit unweighted GMM in the full catalog metric; `"within"` weights moments by the inverse of the analytical covariance of within-unit changes under uncorrelated level shocks. See [Cross-pair chaining](cross-pair-chaining.md) for the conditions for matching stacked fixed-effect regression. |
+| `gmm_weighting` | `"within"` for built-in chained cohort methods | `"optimal"`, `"two_step"`, `"identity"`, `"within"` | `"optimal"` selects feasible two-step GMM using the unit-level moment covariance; `"two_step"` is an explicit alias for `"optimal"`; `"identity"` selects explicit unweighted GMM in the full catalog metric; `"within"` weights moments by the inverse of the analytical covariance of within-unit changes under uncorrelated level shocks. See [Cross-pair chaining](cross-pair-chaining.md) for the conditions for matching stacked fixed-effect regression. |
 | `gmm_covariance` | `"tikhonov"` | `"tikhonov"` | Singular or near-singular moment-covariance handler under feasible two-step weighting. `"moore_penrose"` is deferred and refused. |
 | `control$condition_trigger` | `1e-10` | finite numeric scalar in $(0, 1)$ | Reciprocal spectral condition threshold $\tau_{\mathrm{cond}}$ below which `"tikhonov"` covariance regularization is triggered. |
 | `control$ridge_relative` | `1e-4` | finite positive numeric scalar | Relative ridge multiplier $\alpha_{\mathrm{ridge}}$ applied to the full-catalog trace scale when regularization is triggered. |
+
+Use explicit `gmm_weighting = "optimal"` to reproduce the earlier default for built-in chained cohort fits. Switching fits, custom estimators, and the propensity-weighted and doubly robust branches of the cohort fixed-effects preset default to `"optimal"`. Use the regression branch of the preset for within-unit least squares. In ordinary mode, `did` estimates the effects. Inspect `fit$chained$covariance_handling$weighting_canonical` in a chained fit to see the weighting applied.
 
 Supplying `"two_step"` selects the same feasible two-step estimator as `"optimal"` and records in `fit$chained$covariance_handling` that the alias was used. Passing `gmm_covariance = "moore_penrose"` is refused by the request validator with class `"cdid_chained_request_input_error"`. Unsupported cutoff entries in `control`, such as `mp_cutoff`, instead raise `"cdid_chained_public_control_error"`. Both inherit `"cdid_error"`; Moore-Penrose pseudoinverse weighting is deferred and has no supported interface.
 
@@ -160,6 +170,7 @@ From the resulting $n \times J$ influence-function matrix (`fit$inffunc`), the p
 
 - `fit$V_analytical` estimates the asymptotic covariance of $\sqrt{n}(\hat{\tau} - \tau)$ and equals **$n$ times** the estimated covariance matrix of the cell estimates.
 - Analytical standard errors are `sqrt(diag(fit$V_analytical) / fit$n)`, also stored in `fit$chained$analytical_se`.
+- Multiplier signs are drawn in batches of the fit's chunk size, which is derived from `control$numeric_workspace_bytes` unless `control$chunk_rows` is set. Reproducing bootstrap standard errors and bands therefore requires the same package version, seed and RNG kind, data in the same row order, `numeric_workspace_bytes` (and `chunk_rows`, if set); a changed chunk size can also change point estimates in the last digits. See [Reproducing results](../reference/results.md#reproducing-results).
 - When bootstrap inference is actually performed, `fit$se` and `std.error` in `cdid::tidy(fit)` use multiplier interquartile-range standard errors on the estimate scale; otherwise, with inference computed, they use the analytical values. Requested flags alone do not establish what ran: inspect `fit$chained$inference` for the effective flags, kind and draws. Empty or exactly zero families may need no draws.
 - With `compute_inffunc = FALSE`, the covariance work needed for GMM weighting is retained, so `fit$att` equals that under `TRUE`. Returned `inffunc`, `V_analytical`, `W` and `Wpval` are `NULL`, `se` is a numeric vector of `NA`, effective `bstrap` and `cband` are `FALSE`, and the inference kind is `"not_computed"`. `aggte()` refuses this point-only result.
 
@@ -179,7 +190,7 @@ The snippet below reuses `sim_panel` from [Get started](../get-started.md#prepar
 
 
 ```r
-# Helper comparing default feasible two-step GMM, explicit identity weighting,
+# Helper comparing feasible two-step GMM, explicit identity weighting,
 # and an explicit covariance-regularization / resource control override on the
 # same prepared panel (and optional unit frame).
 fit_gmm_variants <- function(data, frame = NULL) {
@@ -265,7 +276,7 @@ cdid::glance(fits$optimal)
 
 ### Resource controls versus statistical and numerical limits
 
-Use the `control` list to adjust workspace and bootstrap settings. `numeric_workspace_bytes` limits the numerical arrays that `cdid` plans to allocate and defaults to one GiB. `counted_work_limit` is optional and limits the estimated operations for a calculation. Use `chunk_rows` to set the number of units processed at once or `workers` to allow additional bootstrap workers.
+Use the `control` list to adjust workspace and bootstrap settings. `numeric_workspace_bytes` sets the workspace limit on the numerical arrays that `cdid` plans to allocate and defaults to one GiB. `counted_work_limit` is optional and limits the estimated operations for a calculation. Use `chunk_rows` to set the number of units processed at once or `workers` to allow additional bootstrap workers. Unless set, the chunk size is derived from the workspace limit; on fits with many stored dates and cohorts, changing either value changes the batches of multiplier signs, and hence the bootstrap draws, and the last digits of the estimates. See [Workspace limit and chunk size](../reference/options.md#workspace-limit-and-chunk-size) and [Reproducing results](../reference/results.md#reproducing-results).
 
 These settings describe allocations and estimated work within the fit. Total R process memory and elapsed time depend on the machine and the rest of the R session. See [The control list](../reference/options.md#the-control-list) for accepted values.
 

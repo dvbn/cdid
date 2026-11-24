@@ -119,6 +119,17 @@ pt_post_equal <- function(a,b) {
     for (nm in c("if_fixed_full","if_share_full","se_fixed_shares_only")) {
       if (nyt_simple && identical(nm, "if_fixed_full")) {
         expect_true(pt_simple_leaf_num_ok(x$chained[[nm]], y$chained[[nm]]), info=type)
+      } else if (nyt_simple && identical(nm, "se_fixed_shares_only")) {
+        # The norm of the fixed-share influence vector can round differently
+        # when changing the reporting baseline changes the matrix layout.
+        expect_true(pt_simple_leaf_num_ok(x$chained[[nm]], y$chained[[nm]],
+                                          tol = 1e-10, entries = 1L))
+        for (agg in list(x, y)) {
+          u <- as.vector(agg$chained$if_fixed_full)
+          reference_se <- sqrt(sum((u - mean(u))^2)) / length(u)
+          expect_true(pt_simple_leaf_num_ok(unname(agg$chained[[nm]]), reference_se,
+                                            tol = 1e-10, entries = 1L))
+        }
       } else {
         expect_identical(x$chained[[nm]],y$chained[[nm]],info=type)
       }
@@ -274,7 +285,7 @@ test_that("NT and fixed-horizon NYT keep post inference and four fixed-target ag
 
 test_that("the explicit development request carries the same PT-all fit and request settings", {
   d <- pt_ref$cp03_public_tiny_data()
-  public <- pt_fit(d,pt_assumption="all",pt_start=2)
+  public <- pt_fit(d,pt_assumption="all",pt_start=2,gmm_weighting="optimal")
   pt_counts$development_requests <- 1L
   dev <- chained_att_gt_request(yname="y",tname="t",idname="id",gname="g",data=d,
     est_method="ipw",pt_assumption="all",pt_start=2,control=pt_control(d),
@@ -324,8 +335,8 @@ test_that("stored windows, singleton records and full-frame transport remain dis
   one <- d[1,,drop=FALSE]; one$id <- 9L
   panel <- rbind(d,one)
   frame <- data.frame(id=1:10,g=c(rep(4,4),rep(0,4),4,0),cluster=c(rep(1:4,each=2),5,5))
-  a <- pt_fit(panel,frame=frame,pt_assumption="all",pt_start=2)
-  b <- pt_fit(panel,frame=frame,pt_assumption="all",pt_start=2,clustervars="cluster")
+  a <- pt_fit(panel,frame=frame,pt_assumption="all",pt_start=2,gmm_weighting="optimal")
+  b <- pt_fit(panel,frame=frame,pt_assumption="all",pt_start=2,clustervars="cluster",gmm_weighting="optimal")
   expect_identical(a$att,b$att); expect_identical(a$inffunc,b$inffunc)
   expect_equal(a$n,10); expect_true(a$chained$frame$frame_only[10])
   post <- which(a$chained$role=="post")

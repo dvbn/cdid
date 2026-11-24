@@ -45,6 +45,14 @@ cp04_field_diagnostics <- function(b) {
     "cdid_or_corollary1", "cdid_dr_corollary1"))
 }
 
+# Dated augmented fits return the same summary fields as static fits. Their
+# reference layout is retained by the backend, so only the diagnostic copy
+# uses this field plan. Registry ownership keeps the dated checks.
+cp04_diagnostic_copy_by_field <- function(b) {
+  cp04_field_diagnostics(b) ||
+    (inherits(b, "cdid_augmented_backend") && !is.null(b$reference_ref) && !is.null(b$layout))
+}
+
 # Bound the fields actually returned, before creating any diagnostic table.
 # E scans one retained field at a time; it never builds an output projection.
 # Every alias occurrence is charged again. The factors below are occurrence
@@ -53,12 +61,18 @@ cp04_field_diagnostics <- function(b) {
 # the listed link scalars and never the link adjoints.
 cp04_public_diagnostic_plan <- function(b, selection_route = NULL, common_design = NULL,
                                         auxiliary_entries = 0) {
-  if (!cp04_field_diagnostics(b)) {
+  if (!cp04_diagnostic_copy_by_field(b)) {
     output <- 4 * b$accounting$owned_entries + 4096
     return(list(output = output, scratch = 4 * output, peak = 5 * output, work = 8 * output))
   }
   reader <- get("cp04_reader", b$reader_ref, inherits = FALSE)
-  cp04_registry_field_memory_sources(reader, b)
+  if (cp04_field_diagnostics(b)) {
+    cp04_registry_field_memory_sources(reader, b)
+  } else {
+    validate_augmented_backend(b)
+    if (!identical(b$reader_ref, reader$ref))
+      cp04_abort("Dated augmented diagnostic copy requires its fitted reader.", "integrity")
+  }
   E <- function(x) unname(cp04_payload(x)["entries"])
   field_E <- E
   fields <- function(x, nms) {
@@ -187,19 +201,19 @@ cp04_public_auxiliary_diagnostic_bound <- function(registry) {
 cp04_public_diagnostic_admit <- function(res, control, public_object, label) {
   b <- res$nuisance_registry$cp04
   auxiliary_entries <- cp04_public_auxiliary_diagnostic_bound(res$nuisance_registry)
-  if (cp04_field_diagnostics(b) &&
+  if (cp04_diagnostic_copy_by_field(b) &&
       unname(cp04_payload(res$auxiliary_reporting$descriptor_status)["entries"]) > auxiliary_entries)
     cp04_abort("Complete auxiliary diagnostic table exceeds its registry source bound.", "bound")
   plan <- cp04_public_diagnostic_plan(b, res$selection, res$controls$or_basis, auxiliary_entries)
   retained <- cp04_public_diagnostic_retained(res, public_object)
-  if (cp04_field_diagnostics(b)) {
+  if (cp04_diagnostic_copy_by_field(b)) {
     # The recorded envelope is a reservation, not a second copy of res. Take
     # the larger of that envelope and the actual retained result, counting all
     # repeated aliases in res. Its design owner lives behind an environment
     # reference and therefore needs its own explicit payload charge.
     design <- if (is.null(b$design_ref)) 0 else
       get("imputation_design_owner", b$design_ref, inherits = FALSE)$accounting$owned_entries
-    actual <- ipw_owner_safe_sum(c(unname(cp04_payload(res)["entries"]), design))
+    actual <- ipw_owner_safe_sum(c(unname(cp04_payload(cp04_without_owner_record(res))["entries"]), design))
     retained <- ipw_owner_safe_sum(c(max(retained, actual),
       unname(cp04_payload(public_object)["entries"])), label = "retained result and partial public diagnostic copy")
   }
@@ -207,8 +221,32 @@ cp04_public_diagnostic_admit <- function(res, control, public_object, label) {
   plan$output
 }
 
+# The copy into the returned object on the static OR/DR route without memory
+# phases is charged after estimation by `or_public_diagnostics()`,
+# `dr_public_diagnostics()` or `cdid_fast_or_dr_baseline_diagnostics()` with
+# `cp04_public_diagnostic_retained()`, which on this route is the larger of the
+# recorded simultaneous entries and the prefix, plus four times the backend's
+# owned entries and 4096. Every term is final once the point carrier and the
+# sparse replay state are reserved, so the same charge, with the same label,
+# is made there, before estimation. The fast diagnostic path omits the charge
+# when every limit is at least 1e8 entries, the bound is at most 5e6 entries and
+# the frame has at most 50,000 units; the charge is omitted here in the same case,
+# so a fit admitted after estimation is admitted here as well.
+cp04_public_copy_precheck <- function(b, owner_control, frame_owner, simultaneous, prefix) {
+  if (!inherits(b, c("cdid_or_baseline", "cdid_dr_baseline")) || cp04_field_diagnostics(b)) return(invisible(FALSE))
+  bound <- 4 * b$accounting$owned_entries + 4096
+  fast_skip <- is.null(b$reference_ref) && is.list(owner_control) &&
+    owner_control$max_retained_entries >= 1e8 && owner_control$max_matrix_entries >= 1e8 &&
+    owner_control$max_work_ops >= 1e8 && owner_control$max_output_entries >= 1e8 && bound <= 5e6 &&
+    is.list(frame_owner) && frame_owner$n_a_units <= 50000L
+  if (fast_skip) return(invisible(FALSE))
+  label <- if (inherits(b, "cdid_dr_baseline")) "DR public diagnostic copy" else "OR public diagnostic copy"
+  cp04_budget(owner_control, c(max(c(0, simultaneous, prefix)), bound), 4 * bound, 8 * bound, bound, label)
+  invisible(TRUE)
+}
+
 cp04_public_diagnostic_check <- function(out, b, bound) {
-  if (cp04_field_diagnostics(b) && unname(cp04_payload(out)["entries"]) > bound)
+  if (cp04_diagnostic_copy_by_field(b) && unname(cp04_payload(out)["entries"]) > bound)
     cp04_abort("Source-field public diagnostic output bound underestimated.", "bound")
   out
 }

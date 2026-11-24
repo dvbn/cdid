@@ -52,7 +52,7 @@ reconstruction_fit_extra <- function(cat, recipe, st) {
 # its fixed rows, cell/group fits, X and weights. Only declared needed cells
 # persist, including NULL nonobserver records. Named-row designs retain the
 # original path rather than replicating unbounded row-label metadata.
-reconstruction_stage1_forward_plan <- function(backend, B, gids, X_F, n_links, details) {
+reconstruction_stage1_forward_plan <- function(backend, B, gids, X_F, n_links, details, funding_entries = NULL) {
   declined <- list(enabled = FALSE, gids = integer(0L), entries = 0)
   if (details || !reconstruction_separate(backend$shared_or) || !length(gids) ||
       !is.null(rownames(X_F))) return(declined)
@@ -73,7 +73,8 @@ reconstruction_stage1_forward_plan <- function(backend, B, gids, X_F, n_links, d
   # Fund ALL needed groups or leave the exact V6 scalar adjoint route intact.
   entries <- 1024 + 4 * rows * sum(p) + 16 * rows * peak +
     4 * peak^2 + 256 * length(gids) + 8 * column_bytes
-  if (!is.finite(entries) || entries > 32 * rows * n_links) return(declined)
+  if (is.null(funding_entries)) funding_entries <- 32 * rows * n_links
+  if (!is.finite(entries) || entries > funding_entries) return(declined)
   list(enabled = TRUE, gids = gids, entries = entries)
 }
 
@@ -128,7 +129,7 @@ reconstruction_cached_cell_reader <- function(read, plan, n_cells) {
 
 # Both reconstructed routes retain the same local OR and stage1/treatment row
 # shapes. Selection adds only its existing upstream admission and q channels.
-reconstruction_if_envelope <- function(backend, B, links, details, augmented = FALSE) {
+reconstruction_if_envelope <- function(backend, B, links, details, augmented = FALSE, plan_rows = FALSE) {
   can_cache <- !details && is.null(attributes(links)) && is.null(backend$layout) &&
     is.null(backend$reference_ref) &&
     identical(environment(sys.function()), environment(cdid_fast_kernel)) &&
@@ -235,21 +236,53 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
     channels * sum(local_p + 1) + nt * 5 * pt + 64 * nl + nu + 8 else 0
   output <- metadata + B * width
   X_F <- if (augmented) augmented_backend_X_F(backend) else imputation_backend_X_F(backend, reader)
-  stage1_forward <- reconstruction_stage1_forward_plan(backend, B, sets$gids, X_F, nl, details)
-  score_cache <- reconstruction_score_cache_plan(backend, B, sets$cids, X_F, nl,
-    reserved_entries = stage1_forward$entries)
-  scratch <- maps + output + 2 * operator_peak + 16 * B * (3 * J + length(backend$design_columns) +
-    5 * nt * pt + 4 * nl + 12 * (max(c(0, local_p)) + 1) + nu + nz + 24) +
+  layout_batches <- augmented && !details && !plan_rows && !is.null(backend$layout) &&
+    B > backend$control$max_chunk_rows
+  core_rows <- if (layout_batches) backend$control$max_chunk_rows else B
+  # A dated reader folds every layout row, but runs only one core batch at
+  # a time. The outer map, full phi and fold copies remain live. Charge a
+  # separate allowance for a forward solve in addition to the core scratch.
+  core_width <- 16 * (3 * J + length(backend$design_columns) + 5 * nt * pt +
+    4 * nl + 12 * (max(c(0, local_p)) + 1) + nu + nz + 24)
+  scratch <- maps + output + 2 * operator_peak + core_rows * core_width +
     64 * nc_all * (p + 2) + 128 * ((p + 2)^2 + (pt + 2)^2)
+  forward_funding <- NULL
+  batch_rows <- core_rows
   work <- 128 * maps + 128 * B * ((nc + 1) * (p + 2)^2 *
     (1 + ceiling(log2(st$n_A + 1))) + (sum(local_p + 1) + 2 * nl) * (adjoint + nc * (p + 2)) +
     nt * (pt + 2) * (pt + J + 4) + J + nl * (p + pt + 8) + (nz + nb + 2 * nl) * (nu + 4))
   if (augmented) {
-    sp <- selection_if_budget(backend$selection_backend, B, sets$q_ids, details = details)
-    scratch <- scratch + sp$output + sp$scratch; work <- work + sp$work
+    sp <- selection_if_budget(backend$selection_backend, core_rows, sets$q_ids, details = details)
+    scratch <- scratch + sp$output + sp$scratch
+    work <- work + sp$work * ceiling(B / core_rows)
+    if (layout_batches) {
+      # Compare two valid reservations above the same core. The original
+      # strategy charges every extra row at the full per-row rate. The
+      # batched strategy reserves the fold and extra cache instead. Near
+      # the boundary even a single extra row must remain admissible.
+      row_peak <- core_width + sp$peak_per_row
+      old_extra <- (B - core_rows) * row_peak
+      fold_extra <- 8 * B * (nl + 16)
+      extra_cache <- 32 * core_rows * nl
+      batch_extra <- fold_extra + extra_cache
+      scratch <- scratch + min(old_extra, batch_extra)
+      if (batch_extra <= old_extra) {
+        forward_funding <- 32 * core_rows * nl + extra_cache
+      } else if (fold_extra > old_extra) {
+        # Shrink the actual inner batch enough to fund the live fold even
+        # without the optional cache. The per-row rate is at least three
+        # times the fold rate, so this still takes at most two batches.
+        batch_rows <- core_rows - ceiling((fold_extra - old_extra) / row_peak)
+      }
+    }
   }
+  stage1_forward <- reconstruction_stage1_forward_plan(backend, batch_rows, sets$gids, X_F, nl, details,
+    funding_entries = forward_funding)
+  score_cache <- reconstruction_score_cache_plan(backend, batch_rows, sets$cids, X_F, nl,
+    reserved_entries = stage1_forward$entries, funding_entries = forward_funding)
   pre <- c(sets, list(output = output, scratch = scratch, work = work, score_cache = score_cache,
     stage1_forward = stage1_forward))
+  if (layout_batches) pre$layout_batch_rows <- batch_rows
   if (can_cache) {
     cdid_set_if_chunk_meta(backend, B, links, pre, isTRUE(augmented), cache_tag)
     if (!is.null(c_env) && !is.null(env_key)) assign(env_key, pre, envir = c_env)

@@ -152,10 +152,16 @@ ipw_owner_safe_product <- function(a, b, max_entries = NULL, label = "allocation
     )
   }
   if (!is.null(max_entries) && prod_val > max_entries) {
+    # Optional record of the governing control (R/chained_resource_refusal.R): the bound's
+    # expression and the caller are captured in this frame, then resolved under protection,
+    # so that a missing or failing resolver leaves the original condition unchanged.
+    bound_expr <- substitute(max_entries); caller_frame <- sys.parent()
+    kind <- tryCatch(resource_bound_kind(bound_expr, resource_caller(caller_frame)), error = function(e) NA_character_)
     cdid_ipw_owner_abort(
       paste0("Count for ", label, " (", prod_val, ") exceeds explicit bound (", max_entries, ")."),
       c("cdid_ipw_owner_bound_error", "cdid_ipw_enclosure_bound_error"),
-      diagnostics = list(label = label, requested = prod_val, bound = max_entries)
+      diagnostics = list(label = label, requested = prod_val, bound = max_entries,
+        limit_kind = kind)
     )
   }
   prod_val
@@ -176,10 +182,16 @@ ipw_owner_safe_sum <- function(vals, max_bound = NULL, label = "sum") {
     total <- total + dv
   }
   if (!is.null(max_bound) && total > max_bound) {
+    # Optional record of the governing control (R/chained_resource_refusal.R): the bound's
+    # expression and the caller are captured in this frame, then resolved under protection,
+    # so that a missing or failing resolver leaves the original condition unchanged.
+    bound_expr <- substitute(max_bound); caller_frame <- sys.parent()
+    kind <- tryCatch(resource_bound_kind(bound_expr, resource_caller(caller_frame)), error = function(e) NA_character_)
     cdid_ipw_owner_abort(
       paste0("Total ", label, " (", total, ") exceeds explicit bound (", max_bound, ")."),
       c("cdid_ipw_owner_bound_error", "cdid_ipw_enclosure_bound_error"),
-      diagnostics = list(label = label, requested = total, bound = max_bound)
+      diagnostics = list(label = label, requested = total, bound = max_bound,
+        limit_kind = kind)
     )
   }
   total

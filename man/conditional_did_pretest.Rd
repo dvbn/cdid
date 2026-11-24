@@ -68,7 +68,11 @@ conditional_did_pretest(
 \item{bstrap, cband}{Validated only. As in did, the conditional test always
   uses multiplier draws and reports no standard errors.}
 
-\item{biters}{Number of multiplier draws.}
+\item{biters}{Number of multiplier draws. The signs are drawn in batches of
+  the fit's processing chunk size, so reproducing the draws requires the same
+  package version, seed and RNG kind, the same data in the same row order, and
+  the same \code{control$numeric_workspace_bytes} (and
+  \code{control$chunk_rows}, if set) in the fit.}
 
 \item{est_method}{Treatment adjustment of the tested comparisons:
   \code{"ipw"} (default), \code{"reg"} or \code{"dr"} in chained mode. A

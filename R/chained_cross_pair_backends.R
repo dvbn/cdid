@@ -164,9 +164,13 @@ build_within_scale_by_g <- function(g_vec, view_rec, reader, frame_owner, cp04, 
 # candidate chord edge (s_m, t_m) is pruned if and only if its post-fit moment,
 # full-roster IF (when supplied), and per-date level loadings (when supplied)
 # telescope along the tree path within `tol`.
+# `Phi_block(r0, r1, cols)` and `U_log` supply the same IF columns and
+# per-date loadings in bounded row blocks (`block_rows`) instead of dense
+# matrices; the checked maxima, and hence the reduction, are identical.
 verify_post_fit_forest_reduction <- function(s_vec, t_vec, group_key, mhat_all,
                                              Phi_all = NULL, U_list_all = NULL,
-                                             tol = 1e-9) {
+                                             tol = 1e-9, Phi_block = NULL, n_phi_rows = 0L,
+                                             U_log = NULL, block_rows = NULL) {
   M <- length(s_vec)
   if (M == 0L) {
     return(list(kept_idx = integer(0L), dropped_idx = integer(0L),
@@ -184,6 +188,9 @@ verify_post_fit_forest_reduction <- function(s_vec, t_vec, group_key, mhat_all,
   kept_chunks <- vector("list", n_grp)
   G_blocks <- vector("list", n_grp)
   max_m_diff <- 0.0
+  pending <- vector("list", n_grp)
+  streamed <- !is.null(Phi_block) || !is.null(U_log)
+  b_rows <- if (is.null(block_rows)) .Machine$integer.max else max(1L, as.integer(block_rows))
 
   for (g_i in seq_len(n_grp)) {
     idx <- grp_indices[[g_i]]
@@ -315,7 +322,36 @@ verify_post_fit_forest_reduction <- function(s_vec, t_vec, group_key, mhat_all,
     m_err <- abs(m_cand - m_pred)
     ok_vec <- is.finite(m_err) & (m_err <= tol * m_scale)
 
-    if (any(ok_vec) && !is.null(Phi_all)) {
+    if (any(ok_vec) && !is.null(Phi_block)) {
+      surv <- which(ok_vec)
+      E_s <- E_cand[, surv, drop = FALSE]
+      d_s <- length(surv)
+      mx_ca <- numeric(d_s)
+      mx_pr <- numeric(d_s)
+      mx_err <- numeric(d_s)
+      any_nz <- FALSE
+      n_ph <- as.integer(n_phi_rows)
+      for (r0 in seq.int(1L, max(1L, n_ph), by = min(b_rows, max(1L, n_ph)))) {
+        r1 <- min(n_ph, r0 + b_rows - 1L)
+        if (r1 < r0) next
+        # Release the previous block's buffers before forming the next block.
+        Phi_tr <- Phi_ca <- Phi_pred <- Phi_ca_nz <- NULL
+        Phi_tr <- Phi_block(r0, r1, tree_ids)
+        Phi_ca <- Phi_block(r0, r1, cand_ids[surv])
+        nz_phi <- which(rowSums(Phi_tr != 0) > 0L | rowSums(Phi_ca != 0) > 0L)
+        if (!length(nz_phi)) next
+        any_nz <- TRUE
+        Phi_pred <- Phi_tr[nz_phi, , drop = FALSE] %*% E_s
+        Phi_ca_nz <- Phi_ca[nz_phi, , drop = FALSE]
+        mx_ca <- pmax(mx_ca, apply(abs(Phi_ca_nz), 2L, max))
+        mx_pr <- pmax(mx_pr, apply(abs(Phi_pred), 2L, max))
+        mx_err <- pmax(mx_err, apply(abs(Phi_ca_nz - Phi_pred), 2L, max))
+      }
+      if (any_nz) {
+        phi_scale <- pmax(1.0, mx_ca, mx_pr)
+        ok_vec[surv] <- is.finite(mx_err) & (mx_err <= tol * phi_scale)
+      }
+    } else if (any(ok_vec) && !is.null(Phi_all)) {
       surv <- which(ok_vec)
       Phi_tr <- Phi_all[, tree_ids, drop = FALSE]
       Phi_ca <- Phi_all[, cand_ids[surv], drop = FALSE]
@@ -329,7 +365,11 @@ verify_post_fit_forest_reduction <- function(s_vec, t_vec, group_key, mhat_all,
       }
     }
 
-    if (any(ok_vec) && !is.null(U_list_all)) {
+    if (any(ok_vec) && !is.null(U_log)) {
+      surv <- which(ok_vec)
+      pending[[g_i]] <- list(tree = tree_ids, cand = cand_ids[surv], surv = surv,
+        E = E_cand[, surv, drop = FALSE])
+    } else if (any(ok_vec) && !is.null(U_list_all)) {
       for (tau in seq_along(U_list_all)) {
         surv <- which(ok_vec)
         if (!length(surv)) break
@@ -350,21 +390,37 @@ verify_post_fit_forest_reduction <- function(s_vec, t_vec, group_key, mhat_all,
       }
     }
 
-    ok_pos <- which(ok_vec)
-    if (length(ok_pos) > 0L) {
-      max_ok_err <- max(m_err[ok_pos])
-      if (max_ok_err > max_m_diff) max_m_diff <- max_ok_err
+    if (streamed) {
+      if (is.null(pending[[g_i]])) pending[[g_i]] <- list()
+      pending[[g_i]]$final <- list(ok_vec = ok_vec, m_err = m_err, cand_ids = cand_ids,
+        tree_ids = tree_ids, k_g = k_g, E_cand = E_cand)
+      next
     }
-    extra_keep <- cand_ids[!ok_vec]
-    kept_g <- c(tree_ids, extra_keep)
-    k_tot <- length(kept_g)
-    B_g <- diag(1.0, k_tot)
-    if (length(ok_pos) > 0L) {
-      B_tree <- diag(1.0, k_g) + tcrossprod(E_cand[, ok_pos, drop = FALSE])
-      B_g[seq_len(k_g), seq_len(k_g)] <- 0.5 * (B_tree + t(B_tree))
+    fin <- forest_group_finalize(ok_vec, m_err, cand_ids, tree_ids, k_g, E_cand)
+    if (fin$max_ok_err > max_m_diff) max_m_diff <- fin$max_ok_err
+    kept_chunks[[g_i]] <- fin$kept_g
+    G_blocks[[g_i]] <- fin$B_g
+  }
+
+  if (streamed) {
+    chk_ids <- which(vapply(pending, function(pg) !is.null(pg$cand), logical(1L)))
+    if (length(chk_ids)) {
+      bad <- loading_log_witness(U_log, lapply(pending[chk_ids], function(pg)
+        list(tree = pg$tree, cand = pg$cand, E = pg$E)), tol,
+        min(b_rows, max(1L, U_log$n_a)))
+      for (jj in seq_along(chk_ids)) {
+        pg <- pending[[chk_ids[jj]]]
+        if (any(bad[[jj]])) pending[[chk_ids[jj]]]$final$ok_vec[pg$surv[bad[[jj]]]] <- FALSE
+      }
     }
-    kept_chunks[[g_i]] <- kept_g
-    G_blocks[[g_i]] <- B_g
+    for (g_i in seq_len(n_grp)) {
+      fn <- pending[[g_i]]$final
+      if (is.null(fn)) next
+      fin <- forest_group_finalize(fn$ok_vec, fn$m_err, fn$cand_ids, fn$tree_ids, fn$k_g, fn$E_cand)
+      if (fin$max_ok_err > max_m_diff) max_m_diff <- fin$max_ok_err
+      kept_chunks[[g_i]] <- fin$kept_g
+      G_blocks[[g_i]] <- fin$B_g
+    }
   }
 
   kept_raw <- unlist(kept_chunks, use.names = FALSE)
@@ -386,6 +442,20 @@ verify_post_fit_forest_reduction <- function(s_vec, t_vec, group_key, mhat_all,
 
   list(kept_idx = kept_idx, dropped_idx = dropped_idx,
        G = G_mat, max_moment_diff = max_m_diff)
+}
+
+forest_group_finalize <- function(ok_vec, m_err, cand_ids, tree_ids, k_g, E_cand) {
+  ok_pos <- which(ok_vec)
+  max_ok_err <- if (length(ok_pos) > 0L) max(m_err[ok_pos]) else 0.0
+  extra_keep <- cand_ids[!ok_vec]
+  kept_g <- c(tree_ids, extra_keep)
+  k_tot <- length(kept_g)
+  B_g <- diag(1.0, k_tot)
+  if (length(ok_pos) > 0L) {
+    B_tree <- diag(1.0, k_g) + tcrossprod(E_cand[, ok_pos, drop = FALSE])
+    B_g[seq_len(k_g), seq_len(k_g)] <- 0.5 * (B_tree + t(B_tree))
+  }
+  list(kept_g = kept_g, B_g = B_g, max_ok_err = max_ok_err)
 }
 
 # Build canonical link descriptors and lightweight cdid_cross_pair_cell_view
@@ -535,7 +605,8 @@ evaluate_weighted_regimes_core <- function(descs, views, reader, frame_owner, f_
                                            est_method, outcome_pooling, sel_mode,
                                            glm_control, rank_tol, ctrl,
                                            compute_if = TRUE, compute_within = FALSE,
-                                           existing_sel_fit = NULL, nuisance_sink = NULL) {
+                                           existing_sel_fit = NULL, nuisance_sink = NULL,
+                                           within_log_limit = Inf, center_if = FALSE) {
   st <- reader$state
   N <- st$N
   n_a <- nrow(Y_mat)
@@ -888,7 +959,7 @@ evaluate_weighted_regimes_core <- function(descs, views, reader, frame_owner, f_
   # ----------------------------------------------------------------------------
   mhat <- numeric(L)
   Phi_F <- if (compute_if) matrix(0.0, N, L) else NULL
-  U_list <- if (compute_within) replicate(n_cal, matrix(0.0, n_a, L), simplify = FALSE) else NULL
+  U_log <- if (compute_within) level_loading_log(n_cal, n_a, L, within_log_limit) else NULL
 
   # Accumulators for Stage-1 OR adjoints across all L links
   Lambda_or_alpha <- if (n_or_blks > 0L) matrix(0.0, n_or_blks, L) else NULL
@@ -929,8 +1000,7 @@ evaluate_weighted_regimes_core <- function(descs, views, reader, frame_owner, f_
         }
       }
       if (compute_within) {
-        U_list[[d$ct]][t_cell$a_obs, ell] <- U_list[[d$ct]][t_cell$a_obs, ell] + omega_t
-        U_list[[d$cs]][t_cell$a_obs, ell] <- U_list[[d$cs]][t_cell$a_obs, ell] - omega_t
+        loading_log_pair_vec(U_log, t_cell$a_obs, d$ct, d$cs, ell, omega_t)
       }
     }
 
@@ -1116,8 +1186,7 @@ evaluate_weighted_regimes_core <- function(descs, views, reader, frame_owner, f_
       }
 
       if (compute_within) {
-        U_list[[d$ct]][a_c_all, ell] <- U_list[[d$ct]][a_c_all, ell] + sgn * omega_c
-        U_list[[d$cs]][a_c_all, ell] <- U_list[[d$cs]][a_c_all, ell] - sgn * omega_c
+        loading_log_pair_vec(U_log, a_c_all, d$ct, d$cs, ell, sgn * omega_c)
       }
     }
 
@@ -1222,7 +1291,7 @@ evaluate_weighted_regimes_core <- function(descs, views, reader, frame_owner, f_
             }
           }
           if (compute_within) {
-            U_list <- add_pair_diff_to_U(U_list, cc$a_obs, cc$cs, cc$ct, W_int, cols = cols_a)
+            loading_log_pair_outer(U_log, cc$a_obs, cc$ct, cc$cs, cols_a, fw_s / bf$weight_sum, lam_a[cols_a])
           }
         }
 
@@ -1238,7 +1307,7 @@ evaluate_weighted_regimes_core <- function(descs, views, reader, frame_owner, f_
             }
           }
           if (compute_within) {
-            U_list <- add_pair_diff_to_U(U_list, cc$a_obs, cc$cs, cc$ct, H_nu, cols = cols_b)
+            loading_log_lowrank(U_log, cc$a_obs, cc$ct, cc$cs, cols_b, (fw_s / N) * d_tilde, nu_sub)
           }
         }
         next
@@ -1299,7 +1368,7 @@ evaluate_weighted_regimes_core <- function(descs, views, reader, frame_owner, f_
               }
             }
             if (compute_within) {
-              U_list <- add_pair_diff_to_U(U_list, cc$a_obs, cc$cs, cc$ct, W_int, cols = cols_a)
+              loading_log_pair_outer(U_log, cc$a_obs, cc$ct, cc$cs, cols_a, fw_s / bf$weight_sum, lam_a_sub)
             }
           }
 
@@ -1345,7 +1414,7 @@ evaluate_weighted_regimes_core <- function(descs, views, reader, frame_owner, f_
           for (ti in seq_along(active_taus)) {
             if (any(U_grp[[ti]] != 0)) {
               tau <- active_taus[ti]
-              U_list[[tau]][u_a_rows, cols_b] <- U_list[[tau]][u_a_rows, cols_b, drop = FALSE] + U_grp[[ti]] %*% nu_sub
+              loading_log_lowrank(U_log, u_a_rows, tau, 0L, cols_b, U_grp[[ti]], nu_sub)
             }
           }
         }
@@ -1416,7 +1485,14 @@ evaluate_weighted_regimes_core <- function(descs, views, reader, frame_owner, f_
     class = "cdid_cross_pair_backend"
   )
 
-  list(mhat = mhat, Phi_F = Phi_F, U_list = U_list, backend = backend)
+  # Centered in place, one column at a time, when requested: entrywise
+  # `Phi_F - colMeans(Phi_F)`, with transients of one column.
+  Phi_mean <- NULL
+  if (isTRUE(center_if) && !is.null(Phi_F)) {
+    Phi_mean <- colMeans(Phi_F)
+    for (j in seq_len(ncol(Phi_F))) Phi_F[, j] <- Phi_F[, j] - Phi_mean[j]
+  }
+  list(mhat = mhat, Phi_F = Phi_F, Phi_mean = Phi_mean, U_log = U_log, backend = backend)
 }
 
 # Core unified evaluator for Regime C (`selection_est_method = "imputation"`)
@@ -1426,7 +1502,8 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
                                                  est_method, outcome_pooling, imputation_pooling,
                                                  augmented, glm_control, rank_tol, ctrl,
                                                  compute_if = TRUE, compute_within = FALSE,
-                                                 existing_sel_fit = NULL, nuisance_sink = NULL) {
+                                                 existing_sel_fit = NULL, nuisance_sink = NULL,
+                                                 within_log_limit = Inf, center_if = FALSE) {
   L <- length(descs)
   n_a <- nrow(Y_mat)
   n_cal <- length(all_times)
@@ -1815,7 +1892,7 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
   # ----------------------------------------------------------------------------
   mhat <- numeric(L)
   Phi_lay <- if (compute_if) matrix(0.0, N_lay, L) else NULL
-  U_list <- if (compute_within) replicate(n_cal, matrix(0.0, n_a, L), simplify = FALSE) else NULL
+  U_log <- if (compute_within) level_loading_log(n_cal, n_a, L, within_log_limit) else NULL
 
   Lambda_imp_alpha <- matrix(0.0, n_cells, L)
   Lambda_imp_beta <- lapply(imp_groups, function(g) matrix(0.0, g$p, L))
@@ -1856,8 +1933,7 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
         }
         if (compute_within && length(cd_g$obs_local)) {
           w_dy <- (cd_g$w_syn[cd_g$obs_local] / (N_orig * dp)) * cd_g$pi_obs
-          U_list[[d$ct]][cd_g$a_obs, ell] <- U_list[[d$ct]][cd_g$a_obs, ell] + w_dy
-          U_list[[d$cs]][cd_g$a_obs, ell] <- U_list[[d$cs]][cd_g$a_obs, ell] - w_dy
+          loading_log_pair_vec(U_log, cd_g$a_obs, d$ct, d$cs, ell, w_dy)
         }
       }
     }
@@ -1973,8 +2049,7 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
           }
           if (compute_within && length(cd_k$obs_local)) {
             w_dy_k <- sgn * (wm_k[cd_k$obs_local] / (N_orig * dm)) * cd_k$pi_obs
-            U_list[[d$ct]][cd_k$a_obs, ell] <- U_list[[d$ct]][cd_k$a_obs, ell] + w_dy_k
-            U_list[[d$cs]][cd_k$a_obs, ell] <- U_list[[d$cs]][cd_k$a_obs, ell] - w_dy_k
+            loading_log_pair_vec(U_log, cd_k$a_obs, d$ct, d$cs, ell, w_dy_k)
           }
         }
       }
@@ -2009,7 +2084,7 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
     }
   }
 
-  # Backpropagate Stage-2 OR -> Phi_lay + Stage-1 (Lambda_imp_*) + Stage-0 (Lambda_a, Lambda_theta) + U_list
+  # Backpropagate Stage-2 OR -> Phi_lay + Stage-1 (Lambda_imp_*) + Stage-0 (Lambda_a, Lambda_theta) + U_log
   if (n_or_blks > 0L) {
     for (bid in seq_len(n_or_blks)) {
       bf <- blk_fits[[bid]]
@@ -2083,11 +2158,9 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
                 crossprod(cd$T_logit, (cd$pi_obs * cd$e_imp_obs) * Q_obs_int)
             }
             if (compute_within) {
-              U_list <- add_pair_diff_to_U(
-                U_list, cd$a_obs,
-                cd$cf$pair$s_calendar_index, cd$cf$pair$t_calendar_index,
-                cd$pi_obs * Q_obs_int, cols = cols_a
-              )
+              loading_log_pair_outer(U_log, cd$a_obs, cd$cf$pair$t_calendar_index,
+                cd$cf$pair$s_calendar_index, cols_a, cd$w_syn / bf$weight_sum, lam_a[cols_a],
+                src = cd$obs_local, pre = cd$pi_obs)
             }
           }
         }
@@ -2112,11 +2185,9 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
                 crossprod(cd$T_logit, (cd$pi_obs * cd$e_imp_obs) * H_obs_nu)
             }
             if (compute_within) {
-              U_list <- add_pair_diff_to_U(
-                U_list, cd$a_obs,
-                cd$cf$pair$s_calendar_index, cd$cf$pair$t_calendar_index,
-                cd$pi_obs * H_obs_nu, cols = cols_b
-              )
+              loading_log_lowrank(U_log, cd$a_obs, cd$cf$pair$t_calendar_index,
+                cd$cf$pair$s_calendar_index, cols_b, (cd$w_syn / N_orig) * d_tilde, nu_sub,
+                src = cd$obs_local, pre = cd$pi_obs)
             }
           }
         }
@@ -2192,11 +2263,9 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
                   crossprod(cd$T_logit, (cd$pi_obs * cd$e_imp_obs) * Q_obs_int)
               }
               if (compute_within) {
-                U_list <- add_pair_diff_to_U(
-                  U_list, cd$a_obs,
-                  cd$cf$pair$s_calendar_index, cd$cf$pair$t_calendar_index,
-                  cd$pi_obs * Q_obs_int, cols = cols_a
-                )
+                loading_log_pair_outer(U_log, cd$a_obs, cd$cf$pair$t_calendar_index,
+                  cd$cf$pair$s_calendar_index, cols_a, cd$w_syn / bf$weight_sum, lam_a[cols_a],
+                  src = cd$obs_local, pre = cd$pi_obs)
               }
             }
           }
@@ -2270,7 +2339,7 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
           for (ti in seq_along(active_taus)) {
             if (any(U_grp[[ti]] != 0)) {
               tau <- active_taus[ti]
-              U_list[[tau]][u_a_obs, cols_b] <- U_list[[tau]][u_a_obs, cols_b, drop = FALSE] + U_grp[[ti]] %*% nu_sub
+              loading_log_lowrank(U_log, u_a_obs, tau, 0L, cols_b, U_grp[[ti]], nu_sub)
             }
           }
         }
@@ -2331,11 +2400,8 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
           Phi_lay[cd$rows_obs, cols_a] <- Phi_lay[cd$rows_obs, cols_a, drop = FALSE] + (N_orig * cd$e_imp_obs) * W_int
         }
         if (compute_within) {
-          U_list <- add_pair_diff_to_U(
-            U_list, cd$a_obs,
-            cd$cf$pair$s_calendar_index, cd$cf$pair$t_calendar_index,
-            W_int, cols = cols_a
-          )
+          loading_log_pair_outer(U_log, cd$a_obs, cd$cf$pair$t_calendar_index,
+            cd$cf$pair$s_calendar_index, cols_a, w_obs / cd$cf$weight_sum, lam_a[cols_a])
         }
       }
 
@@ -2345,11 +2411,8 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
           Phi_lay[cd$rows_obs, cols_b] <- Phi_lay[cd$rows_obs, cols_b, drop = FALSE] + (N_orig * cd$e_imp_obs) * H_nu
         }
         if (compute_within) {
-          U_list <- add_pair_diff_to_U(
-            U_list, cd$a_obs,
-            cd$cf$pair$s_calendar_index, cd$cf$pair$t_calendar_index,
-            H_nu, cols = cols_b
-          )
+          loading_log_lowrank(U_log, cd$a_obs, cd$cf$pair$t_calendar_index,
+            cd$cf$pair$s_calendar_index, cols_b, (w_obs / N_orig) * cd$d_imp_tilde, nu_sub)
         }
       }
       next
@@ -2386,11 +2449,8 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
           Phi_lay[cd$rows_obs, cols_a] <- Phi_lay[cd$rows_obs, cols_a, drop = FALSE] + (N_orig * cd$e_imp_obs) * W_int
         }
         if (compute_within) {
-          U_list <- add_pair_diff_to_U(
-            U_list, cd$a_obs,
-            cd$cf$pair$s_calendar_index, cd$cf$pair$t_calendar_index,
-            W_int, cols = cols_a
-          )
+          loading_log_pair_outer(U_log, cd$a_obs, cd$cf$pair$t_calendar_index,
+            cd$cf$pair$s_calendar_index, cols_a, w_obs / cd$cf$weight_sum, lam_a[cols_a])
         }
       }
 
@@ -2417,7 +2477,7 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
         for (ti in seq_along(active_taus)) {
           if (any(U_grp_imp[[ti]] != 0)) {
             tau <- active_taus[ti]
-            U_list[[tau]][u_a_obs, cols_b] <- U_list[[tau]][u_a_obs, cols_b, drop = FALSE] + U_grp_imp[[ti]] %*% nu_sub
+            loading_log_lowrank(U_log, u_a_obs, tau, 0L, cols_b, U_grp_imp[[ti]], nu_sub)
           }
         }
       }
@@ -2483,7 +2543,14 @@ evaluate_reconstruction_regimes_core <- function(descs, views, reader, frame_own
     class = "cdid_cross_pair_backend"
   )
 
-  list(mhat = mhat, Phi_F = Phi_F, U_list = U_list, backend = backend)
+  # Centered in place, one column at a time, when requested: entrywise
+  # `Phi_F - colMeans(Phi_F)`, with transients of one column.
+  Phi_mean <- NULL
+  if (isTRUE(center_if) && !is.null(Phi_F)) {
+    Phi_mean <- colMeans(Phi_F)
+    for (j in seq_len(ncol(Phi_F))) Phi_F[, j] <- Phi_F[, j] - Phi_mean[j]
+  }
+  list(mhat = mhat, Phi_F = Phi_F, Phi_mean = Phi_mean, U_log = U_log, backend = backend)
 }
 
 # Public entry for cross-pair general evaluation (all selection modes, pooled OR,
@@ -2492,7 +2559,8 @@ evaluate_cross_pair_general_moments <- function(links_all, panel_owner, frame_ow
                                                 cp04, cp04_reader, f_Z, pm,
                                                 est_method, ctrl, wt_mode,
                                                 reduce_structural_redundancy = TRUE,
-                                                compute_if = TRUE, nuisance_sink = NULL) {
+                                                compute_if = TRUE, nuisance_sink = NULL,
+                                                defer_covariance = FALSE) {
   sel_mode <- if (is.null(cp04)) "none" else if (!is.null(cp04$selection_est_method)) {
     cp04$selection_est_method
   } else if (identical(cp04$canonical_assumption, "conditional_mtar")) {
@@ -2569,7 +2637,8 @@ evaluate_cross_pair_general_moments <- function(links_all, panel_owner, frame_ow
       cp04 = cp04, reference = reference, est_method = est_method,
       outcome_pooling = outcome_pooling, sel_mode = sel_mode,
       glm_control = ctrl_eff$glm_control, rank_tol = or_public_rank_tol(), ctrl = ctrl_eff,
-      compute_if = compute_if, compute_within = want_within, nuisance_sink = nuisance_sink
+      compute_if = compute_if, compute_within = want_within, nuisance_sink = nuisance_sink,
+      center_if = TRUE
     )
   } else {
     evaluate_reconstruction_regimes_core(
@@ -2579,20 +2648,26 @@ evaluate_cross_pair_general_moments <- function(links_all, panel_owner, frame_ow
       outcome_pooling = outcome_pooling, imputation_pooling = imputation_pooling,
       augmented = identical(sel_mode, "dr"),
       glm_control = ctrl_eff$glm_control, rank_tol = or_public_rank_tol(), ctrl = ctrl_eff,
-      compute_if = compute_if, compute_within = want_within, nuisance_sink = nuisance_sink
+      compute_if = compute_if, compute_within = want_within, nuisance_sink = nuisance_sink,
+      center_if = TRUE
     )
   }
 
   mhat_all <- res$mhat
-  Phi_F_centered_all <- NULL
+  N_orig <- cp04_reader$state$N
+  n_a <- nrow(pm$Y_mat)
+  max_e <- ctrl$gmm_bounds$max_matrix_entries
+  Phi_F_all <- NULL
   mean_phi_all <- NULL
   if (isTRUE(compute_if)) {
+    # One complete original-unit IF matrix, centered by the producer in place
+    # (`x - colMeans(x)`, entrywise as `sweep()` computes it).
     Phi_F_all <- res$Phi_F
+    mean_phi_all <- res$Phi_mean
     res$Phi_F <- NULL
-    mean_phi_all <- colMeans(Phi_F_all)
-    Phi_F_centered_all <- sweep(Phi_F_all, 2L, mean_phi_all, "-")
-    Phi_F_all <- NULL
   }
+  U_log <- res$U_log
+  res$U_log <- NULL
 
   # Post-fit exact-mask spanning-forest reduction (preserves 100% of pooled fits)
   rec_tag <- if (is.null(reference)) rep.int(1L, M_all) else as.integer(reference$view_recipe)
@@ -2600,11 +2675,17 @@ evaluate_cross_pair_general_moments <- function(links_all, panel_owner, frame_ow
   sf_gram <- NULL
   max_m_diff <- 0.0
   if (isTRUE(reduce_structural_redundancy) && wt_mode %in% c("optimal", "within")) {
+    use_phi <- identical(wt_mode, "optimal") && !is.null(Phi_F_all)
+    live_w <- (if (use_phi) as.double(length(Phi_F_all)) else 0) +
+      (if (want_within && !is.null(U_log)) U_log$entries else 0)
+    b_w <- stream_block_rows(if (use_phi) N_orig else n_a, 7.0 * M_all, max_e, live_w)
     sf <- verify_post_fit_forest_reduction(
       s_vec = links_all$s, t_vec = links_all$t, group_key = grp_key,
       mhat_all = mhat_all,
-      Phi_all = if (identical(wt_mode, "optimal")) Phi_F_centered_all else NULL,
-      U_list_all = if (want_within) res$U_list else NULL
+      Phi_block = if (use_phi) function(r0, r1, cols) Phi_F_all[r0:r1, cols, drop = FALSE] else NULL,
+      n_phi_rows = if (use_phi) nrow(Phi_F_all) else 0L,
+      U_log = if (want_within) U_log else NULL,
+      block_rows = b_w
     )
     kept_idx <- sf$kept_idx
     dropped_idx <- sf$dropped_idx
@@ -2615,44 +2696,47 @@ evaluate_cross_pair_general_moments <- function(links_all, panel_owner, frame_ow
     dropped_idx <- integer(0L)
   }
 
-  N_orig <- cp04_reader$state$N
-  n_a <- nrow(pm$Y_mat)
   L_kept <- length(kept_idx)
   mhat_used <- mhat_all[kept_idx]
+  phi_scale <- as.double(n_a) / as.double(N_orig)
   if (isTRUE(compute_if)) {
-    Phi_centered_used <- Phi_F_centered_all[, kept_idx, drop = FALSE]
-    Phi_F_centered_all <- NULL
-    Phi_core <- Phi_centered_used * (as.double(n_a) / as.double(N_orig))
-    Phi_centered_used <- NULL
-    mean_phi_used <- mean_phi_all[kept_idx] * (as.double(n_a) / as.double(N_orig))
+    Phi_kept <- if (L_kept == M_all) Phi_F_all else Phi_F_all[, kept_idx, drop = FALSE]
+    Phi_F_all <- NULL
+    mean_kept <- mean_phi_all[kept_idx]
+    mean_phi_used <- mean_kept * phi_scale
+    # Complete centered, scaled original-unit rows with every cohort's column,
+    # entrywise equal to `(Phi_F - colMeans(Phi_F))[, kept] * n_A / N`: every
+    # replay scales the centered rows it reads.
+    phi_rows <- phi_row_reader(Phi_kept, phi_scale)
   } else {
-    Phi_core <- NULL
+    Phi_kept <- NULL
+    phi_rows <- NULL
     mean_phi_used <- numeric(L_kept)
   }
 
-  V_used <- if (want_within) {
-    U_used <- lapply(res$U_list, function(U_t) U_t[, kept_idx, drop = FALSE])
-    res$U_list <- NULL
-    sc_by_g <- build_within_scale_by_g(
+  cov_source <- list(
+    wt_mode = wt_mode, L = L_kept, n_a = n_a, N_orig = N_orig,
+    U_log = if (want_within) U_log else NULL,
+    within_cols = kept_idx,
+    within_g = links_all$g[kept_idx],
+    within_scale = if (want_within) build_within_scale_by_g(
       g_vec = links_all$g[kept_idx],
       view_rec = rec_tag[kept_idx],
       reader = cp04_reader,
       frame_owner = frame_owner,
       cp04 = cp04,
       reference = reference
-    )
-    within_cov_from_level_loadings(U_used, links_all$g[kept_idx], sc_by_g)
-  } else if (identical(wt_mode, "optimal")) {
-    V_opt <- crossprod(Phi_core) / as.double(n_a)
-    0.5 * (V_opt + t(V_opt))
-  } else {
-    matrix(0.0, L_kept, L_kept)
-  }
+    ) else NULL,
+    phi_rows = phi_rows,
+    phi_live_entries = if (is.null(Phi_kept)) 0 else as.double(length(Phi_kept))
+  )
+  U_log <- NULL
 
-  list(
+  out <- list(
     mhat_used = mhat_used,
-    V_used = V_used,
-    Phi_core = Phi_core,
+    V_used = NULL,
+    phi_rows = phi_rows,
+    cov_source = cov_source,
     mean_phi = mean_phi_used,
     kept_idx = kept_idx,
     dropped_idx = dropped_idx,
@@ -2660,13 +2744,66 @@ evaluate_cross_pair_general_moments <- function(links_all, panel_owner, frame_ow
     max_moment_diff = max_m_diff,
     backend = res$backend
   )
+  if (!isTRUE(defer_covariance)) {
+    out$V_used <- cross_pair_general_covariance(cov_source, max_e)
+  }
+  out
+}
+
+make_centered_phi_rows <- function(Phi_kept, mean_kept, phi_scale) {
+  for (j in seq_len(ncol(Phi_kept))) Phi_kept[, j] <- Phi_kept[, j] - mean_kept[j]
+  phi_row_reader(Phi_kept, phi_scale)
+}
+
+phi_row_reader <- function(Phi_centered, phi_scale) {
+  force(Phi_centered)
+  force(phi_scale)
+  function(rr) Phi_centered[rr, , drop = FALSE] * phi_scale
+}
+
+# Retained weighting covariance of the cross-pair general route from streamed
+# sources. `within`: per-cohort Gram of scaled signed level loadings replayed by
+# date and A-row block. `optimal`: `crossprod` of complete centered, scaled
+# original-unit IF rows (all cohorts in each row, so shared controls carry
+# cross-cohort covariance) divided by `n_A`. `identity`: zero matrix. The row
+# block is chosen from the workspace left after the arrays live during the
+# accumulation; at least one row is always admitted, so this pass never
+# refuses a fit that the retained solve admits.
+cross_pair_general_covariance <- function(cov_source, max_entries, block_rows = NULL) {
+  L <- cov_source$L
+  if (identical(cov_source$wt_mode, "within")) {
+    lg <- cov_source$U_log
+    if (is.null(block_rows)) {
+      block_rows <- stream_block_rows(lg$n_a, 4.0 * L, max_entries,
+        lg$entries + cov_source$phi_live_entries + 5.0 * as.double(L) * L)
+    }
+    return(within_cov_stream(lg, cov_source$within_cols, cov_source$within_g,
+      cov_source$within_scale, block_rows))
+  }
+  if (identical(cov_source$wt_mode, "optimal")) {
+    n_rows <- cov_source$N_orig
+    if (is.null(block_rows)) {
+      block_rows <- stream_block_rows(n_rows, 3.0 * L, max_entries,
+        cov_source$phi_live_entries + 5.0 * as.double(L) * L)
+    }
+    S <- matrix(0.0, L, L)
+    for (r0 in seq.int(1L, max(1L, n_rows), by = block_rows)) {
+      r1 <- min(n_rows, r0 + block_rows - 1L)
+      if (r1 < r0) next
+      S <- S + crossprod(cov_source$phi_rows(r0:r1))
+    }
+    V_opt <- S / as.double(cov_source$n_a)
+    return(0.5 * (V_opt + t(V_opt)))
+  }
+  matrix(0.0, L, L)
 }
 
 # Same-pair `gmm_weighting = "within"` helper for all CP04 routes (pooled OR,
 # selection IPW, imputation, augmented, and reference inputs).
 compute_same_pair_within_bundle <- function(design_links, point_links_all, panel_owner,
                                             frame_owner, cp04, cp04_reader, nuis_res,
-                                            f_Z, ctrl, reduce_structural_redundancy = TRUE) {
+                                            f_Z, ctrl, reduce_structural_redundancy = TRUE,
+                                            within_log_limit = Inf) {
   M_all <- nrow(design_links)
   n_a <- as.integer(frame_owner$n_a_units)
   pm <- cross_pair_extract_panel_matrices(panel_owner, n_a)
@@ -2745,7 +2882,8 @@ compute_same_pair_within_bundle <- function(design_links, point_links_all, panel
       cp04 = cp04, reference = reference, est_method = est_method,
       outcome_pooling = outcome_pooling, sel_mode = sel_mode,
       glm_control = ctrl_eff$glm_control, rank_tol = or_public_rank_tol(), ctrl = ctrl_eff,
-      compute_if = FALSE, compute_within = TRUE, existing_sel_fit = existing_sb
+      compute_if = FALSE, compute_within = TRUE, existing_sel_fit = existing_sb,
+      within_log_limit = within_log_limit
     )
   } else {
     evaluate_reconstruction_regimes_core(
@@ -2755,12 +2893,14 @@ compute_same_pair_within_bundle <- function(design_links, point_links_all, panel
       outcome_pooling = outcome_pooling, imputation_pooling = imputation_pooling,
       augmented = identical(sel_mode, "dr"),
       glm_control = ctrl_eff$glm_control, rank_tol = or_public_rank_tol(), ctrl = ctrl_eff,
-      compute_if = FALSE, compute_within = TRUE, existing_sel_fit = existing_sb
+      compute_if = FALSE, compute_within = TRUE, existing_sel_fit = existing_sb,
+      within_log_limit = within_log_limit
     )
   }
 
-  U_list_cat <- lapply(res$U_list, function(U_t) U_t[, seq_len(M_all), drop = FALSE])
-  res$U_list <- NULL
+  # Signed loadings stay in the replay log; only catalog columns are read.
+  U_log <- res$U_log
+  res$U_log <- NULL
 
   # Build exact mask key on A per link via per-cohort BLAS pair-mask IDs
   a_g <- as.double(frame_owner$a_g)
@@ -2802,9 +2942,11 @@ compute_same_pair_within_bundle <- function(design_links, point_links_all, panel
   all_est <- vapply(point_links_all, `[[`, numeric(1L), "estimate")
   sf_gram <- NULL
   if (isTRUE(reduce_structural_redundancy)) {
+    max_e <- ctrl$gmm_bounds$max_matrix_entries
     sf <- verify_post_fit_forest_reduction(
       s_vec = design_links$s, t_vec = design_links$t, group_key = mask_keys,
-      mhat_all = all_est, Phi_all = NULL, U_list_all = U_list_cat
+      mhat_all = all_est, Phi_all = NULL, U_log = U_log,
+      block_rows = stream_block_rows(n_a, 7.0 * M_all, if (is.null(max_e)) Inf else max_e, U_log$entries)
     )
     kept_idx <- sf$kept_idx
     dropped_idx <- sf$dropped_idx
@@ -2823,10 +2965,11 @@ compute_same_pair_within_bundle <- function(design_links, point_links_all, panel
     cp04 = cp04,
     reference = reference
   )
-  U_list_cat <- scale_level_loadings_by_g(U_list_cat, design_links$g, sc_by_g)
 
+  # The scale is applied to replayed rows when the retained Gram is formed.
   list(
-    U_list_all = U_list_cat,
+    U_log = U_log,
+    scale_by_g = sc_by_g,
     kept_idx = kept_idx,
     dropped_idx = dropped_idx,
     G = sf_gram

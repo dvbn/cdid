@@ -2,7 +2,7 @@
 
 Work through a first chained difference-in-differences fit, then prepare your panel, choose comparisons and adjustments, and interpret the results. The [package overview on GitHub](https://github.com/dvbn/cdid) has a runnable first example and the source installation requirements.
 
-The guide describes R `cdid` 1.3.0.4 on GitHub. Numerical output on the article pages comes from recorded runs, and each page states the package versions it used. Analytical population values are labeled separately. The [release notes](../NEWS.md) list what each version added.
+This guide follows the GitHub version of R `cdid`. The default for built-in chained cohort fits is `gmm_weighting = "within"`. The articles with numerical output name the package versions used to produce it. When replaying an older built-in cohort example that left the weighting implicit, set `gmm_weighting = "optimal"` to reproduce its weighting. Analytical population values are labeled separately. [GMM weighting](methods/gmm.md) · [Release notes](../NEWS.md)
 
 ## Installation
 
@@ -56,7 +56,7 @@ The 22 steps below are numbered as on the pages themselves. The stage headings g
 | --- | --- | --- |
 | 13 | [Parallel trends](methods/parallel-trends.md) | PT-post, PT-all and the separate reporting choice `base_period`. |
 | 14 | [Add PT-all restrictions](examples/pt-all-comparison.md) | What true and false PT-all restrictions change on one incomplete panel. |
-| 15 | [GMM weighting and covariance regularization](methods/gmm.md) | How comparisons are combined and what covariance regularization does. |
+| 15 | [GMM weighting and covariance regularization](methods/gmm.md) | Why built-in chained cohort estimators use within-unit weighting, when to choose another weighting, and how regularization works. |
 | 16 | [Robustness](examples/robustness.md) | Which models must be correct for each combination of treatment adjustment and missing outcome handling. |
 
 ### Stage 6. Inference, reference and troubleshooting

@@ -19,7 +19,7 @@ cdid::att_gt(
   selection_model = "pair_logit", selection_pooling = "separate",
   selection_xformla = NULL, selection_universe = "F", selection_rho = NULL,
   selection_justification = NULL, selection_est_method = "ipw",
-  imputation_pooling = "separate", gmm_weighting = c("optimal", "identity", "within"),
+  imputation_pooling = "separate", gmm_weighting = "within",
   gmm_covariance = "tikhonov", pt_assumption = c("post", "all", "ctrl"),
   pt_start = NULL, cross_pair = FALSE, control = NULL, outcome_pooling = "separate",
   dname = NULL, imputation_scale = "per_period",
@@ -103,7 +103,7 @@ A custom function has `did`'s panel IPW interface `f(y1, y0, D, covariates, i.we
 | `imputation_scale` | `"per_period"` | `"per_period"` or `"per_change"` | Static `dname` route when `selection_est_method` is `"imputation"` or `"dr"`; otherwise never evaluated. `"per_period"` multiplies non-intercept covariate slopes by the stored-calendar index gap $L_k = u_{\text{idx}} - s_{\text{idx}}$; `"per_change"` leaves them unscaled. |
 | `switchers` | `"both"` | `"both"`, `"entry"` or `"exit"` | Static `dname` route: selects both transition directions ($0 \to 1$ and $1 \to 0$), entry only ($D_{t-1} = 0 \to D_t = 1$), or exit only ($D_{t-1} = 1 \to D_t = 0$). |
 | `switch_times` | `NULL` | `NULL` or a vector of panel transition dates in $t_2, \dots, t_T$ | Static `dname` route: `NULL` automatically includes all transition cells in the requested direction(s) with at least one switcher ($n_{\text{switchers}} \ge 1$). Explicit dates retain all requested directions at those dates (keeping zero-switcher cells as `available = FALSE` with `support_status = "empty_switchers"`). |
-| `gmm_weighting` | `"optimal"` | `"optimal"`, its alias `"two_step"`, `"identity"` or `"within"` (cohort `gname` only) | Chained mode (both cohort `gname` and static `dname` routes; on a complete panel with `dname` and `selection = "none"`, all-pair chaining reduces to the direct complete-data baseline estimator with `gmm_executed = FALSE`). `"within"` requires a built-in `est_method` (`"ipw"`, `"reg"` or `"dr"`) and supports all `selection`, `outcome_pooling`, and reference-date covariate/weight options on the cohort route; it is inapplicable and refused on the static `dname` route. |
+| `gmm_weighting` | `"within"` for built-in chained cohort methods, with the exceptions below | `"optimal"`, its alias `"two_step"`, `"identity"` or `"within"` (cohort `gname` only) | Chained mode (both cohort `gname` and static `dname` routes; on a complete panel with `dname` and `selection = "none"`, all-pair chaining reduces to the direct complete-data baseline estimator with `gmm_executed = FALSE`). `"within"` requires a built-in `est_method` (`"ipw"`, `"reg"` or `"dr"`) and supports all `selection`, `outcome_pooling`, and reference-date covariate/weight options on the cohort route; it is inapplicable and refused on the static `dname` route. |
 | `gmm_covariance` | `"tikhonov"` | `"tikhonov"` | Validated in chained mode; the handler is used under covariance-whitened weighting (`"optimal"`, or `"within"` on the cohort route). |
 | `pt_assumption` | `"post"` | `"post"`, `"all"` or `"ctrl"` | Cohort `gname` route (`"all"` and `"ctrl"` are inapplicable and refused on the static `dname` route). |
 | `pt_start` | `NULL` | one finite numeric date of the stored calendar (or `NULL` under `"post"` and `"ctrl"`) | Cohort `gname` route: required under `"all"`; optional under `"ctrl"` (`NULL` defaults to the earliest stored calendar date); refused under `"post"`. A non-`NULL` value is refused on the static `dname` route. |
@@ -133,7 +133,7 @@ A custom function has `did`'s panel IPW interface `f(y1, y0, D, covariates, i.we
 
 ## GMM weighting and covariance regularization
 
-Chained mode combines the available comparisons by GMM. `gmm_weighting = "optimal"`, the default, uses feasible two step weighting based on the estimated covariance of the comparisons; `"two_step"` is an alias for it. `gmm_weighting = "identity"` requests unweighted estimation explicitly. `gmm_weighting = "within"` weights moments by the inverse of the analytical covariance of within-unit changes under uncorrelated level shocks. Inference uses complete unit-level influence functions. See [Cross-pair chaining](../methods/cross-pair-chaining.md) for the matched regression specification. Identity weighting is never substituted automatically.
+Chained mode combines the available comparisons by GMM. Built-in cohort IPW, OR and DR default to `gmm_weighting = "within"`, which weights comparisons using the covariance of within-unit changes implied by uncorrelated level shocks. Use `gmm_weighting = "optimal"` (also `"two_step"`) to estimate the covariance of the comparison scores and reproduce the earlier default. Choose `"identity"` for an unweighted criterion over the full comparison catalog. Switching fits, custom estimators, and propensity-weighted or doubly robust cohort fixed-effects fits default to `"optimal"`. The regression branch of the cohort fixed-effects preset uses within-unit least squares. Inference uses complete unit-level influence functions. [Why within is the cohort default](../methods/gmm.md#why-within-is-the-cohort-default)
 
 Before the covariance is checked, the package applies exact reductions that remove proven redundancies among the comparisons. When the reduced covariance is well conditioned, it is used as it is. When it is singular or nearly singular, judged by the ratio of its smallest to its largest eigenvalue, or when it is known to be rank deficient or its Cholesky factorization fails, the selected handler `gmm_covariance = "tikhonov"` adds a ridge proportional to the trace of the reduced covariance before it is inverted for the weights. At exactly zero covariance the criterion is full-catalog least squares with the actual zero sandwich variance. Invalid or materially indefinite covariance inputs still refuse. No comparison, unit or identified contrast is dropped. `"tikhonov"` is the only accepted value of `gmm_covariance`. The weighting request, whether the handler was invoked and why, its tuning and the conditioning are recorded in `fit$chained$covariance_handling`. The advanced entries `condition_trigger` and `ridge_relative` of the control list belong to this step.
 
@@ -146,7 +146,7 @@ Covariance regularization affects only how comparisons are weighted. It supplies
 | `alp` | 0.05 | Significance level of intervals and bands. |
 | `bstrap` | `TRUE` | Standard errors from multiplier bootstrap draws instead of analytical ones. |
 | `cband` | `TRUE` | Simultaneous band over the available cells where requested. |
-| `biters` | 1000 | Number of multiplier draws. |
+| `biters` | 1000 | Number of multiplier draws. The draws depend on the seed and on the chunk size; see [Reproducing results](results.md#reproducing-results). |
 | `clustervars` | `NULL` | At most one cluster variable in addition to `idname`, with a label for every unit of the unit table. Clustering changes standard errors and bands; the point estimates stay the same. |
 | `compute_inffunc` | `TRUE` | `FALSE` returns point estimates only, which equal those of `TRUE`: no influence functions, standard errors, bands or pretrend test, and `aggte()` refuses the result. |
 | `pl`, `cores` | `FALSE`, 1 | `pl = TRUE, cores = k` computes the multiplier draw products on `k` worker processes, which must be declared with `control = list(workers = k)`; otherwise the request is refused before the data are read. Signs are drawn in your session, so the results equal those of `cores = 1`. Estimation itself stays serial. |
@@ -161,10 +161,10 @@ The exact combinations of `bstrap` and `cband` at each output are listed in the 
 
 | Entry | Default | Meaning |
 | --- | --- | --- |
-| `numeric_workspace_bytes` | 1073741824 (1 GiB) | Admission limit for the counted numeric workspace of a fit. |
+| `numeric_workspace_bytes` | 1073741824 (1 GiB) | The workspace limit: the cap on the numeric arrays that `cdid` plans to allocate during a fit. It also sets the automatic chunk size, so changing it can change multiplier bootstrap draws and last-digit rounding on large fits; keep it fixed to replicate results. See [Workspace limit and chunk size](#workspace-limit-and-chunk-size). |
 | `workers` | 1 | Number of worker processes that `pl = TRUE, cores = k` may use for multiplier draws. It is never raised automatically, and the workers' buffers count against the same workspace. |
 | `counted_work_limit` | `Inf` | The estimated work cap is off by default. A finite positive whole number refuses, before a stage runs, a fit whose conservative work estimate exceeds it; an explicit `Inf` also turns it off. Zero, negative, `NA` and `NaN` values, numbers that are not whole, values out of range and nonnumeric values are refused. |
-| `chunk_rows` | chosen automatically | Number of rows per processing chunk. |
+| `chunk_rows` | chosen automatically | Number of units processed at once. Chosen from the workspace limit unless set; a set value changes the same results as a changed workspace limit, so keep it fixed to replicate results. See [Workspace limit and chunk size](#workspace-limit-and-chunk-size). |
 | `condition_trigger` | `1e-10` | Finite, strictly between zero and one; used by the covariance regularization step. |
 | `ridge_relative` | `1e-4` | Finite and positive; used by the covariance regularization step. |
 
@@ -176,6 +176,30 @@ adjustments. The preset also accepts `keep_nuisance` for coefficient reporting.
 Unknown entries are refused. The opt-in reporting flag `keep_nuisance` (`TRUE` or `FALSE`, default `FALSE`) is validated and removed before these checks; it keeps the capture read by `nuisance_models()` for supported fits on the cohort and static routes. The entry `relative_accuracy` is refused with class `cdid_chained_public_accuracy_deferred`, because a guaranteed accuracy for each fit is not provided. The fitted result records the public cap and the internal arithmetic ceiling separately, in `fit$chained$public$counted_work_limit` and `fit$chained$public$work_cap`.
 
 Work estimates are conservative diagnostics, not measured run time. These controls limit counted numeric storage and estimated work; they do not limit the memory of the R process, CPU time or the work of a whole call, and the package does not detect the memory or speed of your machine.
+
+## Workspace limit and chunk size
+
+**What it is.** `control$numeric_workspace_bytes` sets the workspace limit, a fixed cap on the numeric arrays that `cdid` plans to allocate during a chained fit. The default is 1073741824 bytes (1 GiB). You do not need to set it: the limit is applied automatically, and the size of every stage is chosen from it. Before a stage runs, its planned arrays are counted against the limit. A fit whose counted workspace exceeds the limit is refused, with a resource error that keeps the diagnostic of the failing check and states what that check counted; [Resource errors](#resource-errors) describes the error. Nothing is dropped or approximated to make a fit fit.
+
+**When to raise it.** Raise it when a fit is refused on the workspace limit, for example to `control = list(numeric_workspace_bytes = 2147483648)` (2 GiB). The error states no sufficient value, because the count of the failing check is not what the whole call needs (see [Resource errors](#resource-errors)). A warning on augmented fits with time-varying covariates also says when a larger value allows longer passes. The value is a count of planned numeric arrays, not a reservation of memory; whether your machine can hold a fit admitted under a larger value is for you to judge.
+
+**What it does not limit.** The workspace limit applies to the numerical arrays that `cdid` plans to allocate during a fit; it is not a limit on the memory of the R process. The process also holds the R session and the loaded packages, R's storage for small objects created during the fit, garbage not yet collected, and memory that the system allocator keeps after it is freed. On some fits, in particular inverse probability weighting fits with few dates, the increase in process memory during the call can exceed the counted workspace; on many others the counted workspace is well above what is used.
+
+**The automatic chunk size.** Many stages process the units in chunks: the comparisons' influence functions are replayed chunk by chunk, and the multiplier signs are drawn in batches of the same size. Unless you set `chunk_rows`, the number of units in a chunk is the smallest of three numbers, but at least one:
+
+- the number of units in the unit table;
+- 256;
+- the workspace limit divided by 16 KiB (2,048 numbers) times the sum of the largest number of comparisons the catalog can contain, the number of columns of the covariate design (intercept included) and one. On the cohort (`gname`) route, the largest number of comparisons is the number of treated cohorts times the number of date pairs, T(T - 1)/2 for T stored dates, times the number of cohort groups, the never-treated group included; the switching-model (`dname`) route uses its own count of comparisons in the same rule. The cohort-by-date preset (`control = list(preset = "cohort_time_fe")`) does not use this rule: its chunk size is the smaller of the number of units and 256, or `chunk_rows` if set, whatever the workspace limit.
+
+The rule allots 16 KiB per unit, possible comparison and covariate column, so that the slice the package charges for one chunk (256 bytes per unit, comparison and column) is at most 1/64 of the limit. For example, with 32 stored dates, two treated cohorts and a never-treated group, the catalog can contain 2 x 496 x 3 = 2,976 comparisons; with an intercept-only design the chunk is 22 units at the default limit, 44 at 2 GiB and 88 at 4 GiB. Panels with few dates and cohorts reach the first two bounds, and their chunk size does not depend on the limit. Some stages use a smaller chunk than this when the counted workspace requires it.
+
+**How results depend on it.** The chunk size changes only the order in which sums are formed and the batches in which multiplier signs are drawn. In consequence:
+
+- Point estimates, influence functions and analytical standard errors can differ in the last digits between two chunk sizes (floating-point rounding).
+- Multiplier bootstrap standard errors, simultaneous critical values and bands of `att_gt()`, of `aggte()` and of `conditional_did_pretest()` change when the chunk size changes, because the signs are drawn in batches of the chunk size (or of `biters`, whichever is smaller) and filled into each batch column by column. The two sets of draws are equally valid; their difference is Monte Carlo noise, like the difference between two seeds, and its size depends on `biters` and on the fit.
+- This happens only on fits whose automatic chunk size is below both the number of units and 256, that is, on fits with many stored dates and cohorts. It applies to cohort fits and to switching-model (`dname`) fits; on the cohort-by-date preset the draws depend on `chunk_rows` but not on the workspace limit. The number of multiplier workers (`workers`, `pl`, `cores`) does not change the draws: the signs are drawn in your session, in batch order.
+
+**Keeping results reproducible.** Keep `numeric_workspace_bytes` fixed, and `chunk_rows` if you set it, together with the package version, the seed and RNG kind, and the data in the same row order; see [Reproducing results](results.md#reproducing-results). Cohort (`gname`) fits record the values used: `fit$chained$public$profile$numeric_workspace_bytes` (the workspace limit), `fit$chained$public$chunk_rows` (the chunk size) and, when multiplier draws were made, `fit$chained$inference$rng$batch_rows` (the batch size of the draws). Switching-model (`dname`) fits record the workspace limit and the chunk size in `fit$request$control$profile$numeric_workspace_bytes` and `fit$request$control$chunk_rows`, and not the batch size. Fits with the cohort-by-date preset record only the batch size, when draws were made. Ordinary mode does not use `control`, and its draws do not depend on these settings. To reproduce a fit, pass the recorded workspace limit as `control = list(numeric_workspace_bytes = ...)`; if `chunk_rows` was set, pass it as well.
 
 ## Supported combinations
 
@@ -216,7 +240,7 @@ Covariates and sampling weights that are constant within each unit and agree wit
 
 Selector details matter: simple and group aggregation use only `max_e`, measured on the sorted union of calendar and cohort dates; `min_e` and `balance_e` have no effect there. Dynamic aggregation uses `e = t - g` in original date units and applies its window and cohort-balance rules. Calendar aggregation ignores all three selectors with a warning. These selectors change the reported target, not the fitted comparison catalog.
 
-A result fitted with `compute_inffunc = FALSE` is refused with class `cdid_chained_request_no_inffunc_error`. Multiplier draws use your session's random number stream, so `set.seed()` before the call reproduces them, and workers admitted by the fit are reused.
+A result fitted with `compute_inffunc = FALSE` is refused with class `cdid_chained_request_no_inffunc_error`. Multiplier draws use your session's random number stream, so `set.seed()` before the call reproduces them, and workers admitted by the fit are reused. The draws are taken in batches of the fit's chunk size, which `aggte()` inherits from the fit; see [Reproducing results](results.md#reproducing-results).
 
 ## Conditional pretrend test arguments
 
@@ -227,7 +251,7 @@ A result fitted with `compute_inffunc = FALSE` is refused with class `cdid_chain
 | `est_method` | `"ipw"` (default), `"reg"` or `"dr"`. A custom function returns a result with status `"not_applicable"`. |
 | `xformla` | Its design columns are the coordinates of the test; variables that appear only in `selection_xformla` are not. |
 | `bstrap`, `cband` | Validated only. The test always uses multiplier draws and reports no standard errors. |
-| `biters`, `alp` | Number of multiplier draws and level of the reported critical value. |
+| `biters`, `alp` | Number of multiplier draws and level of the reported critical value. The draws are taken in batches of the chunk size and depend on it as well as on the seed; see [Reproducing results](results.md#reproducing-results). |
 | `pl`, `cores` | Parallel draws when `control$workers` declares them; results equal those of `cores = 1`. |
 | `anticipation`, `base_period`, `fix_weights`, `frame`, the `selection` arguments, `imputation_pooling`, `outcome_pooling`, `control` | The chained settings of `att_gt()`, with the same meanings; they select the fitted route whose comparisons before treatment are tested. |
 
@@ -268,7 +292,23 @@ Refusals are errors that inherit class `cdid_error`. The most common classes are
 
 `aggte()` on a static result gives the upstream error that an `MP` object is required. Use `fit$aggregate` for the static switcher-weighted average.
 
-Fits can also stop because a numeric workspace or work limit would be exceeded, or because a model fit, covariance or solve is invalid. Such failures concern the computation; they are not conclusions about whether an effect is identified in the population. Nothing is dropped or relaxed to make a fit succeed.
+Fits can also stop because the workspace limit or the work limit would be exceeded, or because a model fit, covariance or solve is invalid. Such failures concern the computation; they are not conclusions about whether an effect is identified in the population. Nothing is dropped or relaxed to make a fit succeed.
+
+### Resource errors
+
+A fit that does not fit in the workspace limit stops at the first check that fails, with one error of class `cdid_resource_refusal`; nothing is run again to explain the refusal. The error keeps the class of the check that stopped the call, and its message keeps the original diagnostic after "Check:". It states what that check counted against the limit. That count is not what the whole call needs: later stages can need more, and several counts depend on the chunk size, which follows the workspace limit. The error therefore gives no value as sufficient and ends with "Increase the workspace limit." A refusal on the work limit or on a fixed size limit of R does not end with that sentence: it names `counted_work_limit`, or says that no setting changes the limit. A refusal is restated only when the failing check records which control its bound comes from (the workspace limit, the work limit, or a fixed size limit); a check whose bound is, for example, a remainder of the work limit records none, and its error is the original one, unchanged and without these classes. The numbers are in the `resource` field of the condition: `kind`, `setting` (the governing control), `stage` and `check` (the internal name of the check), `units`, `requested` and `allowed` (the failing check's count and its allowance), `requested_bytes` and `allowed_bytes`, `limit` and `limit_entries`, `limit_from` (`"call"`, or `"fit"` for an aggregation), `reason`, and `sufficient_value` and `verified`, which are `NA` and `FALSE` on every refusal of this version. The original message is also kept in `diagnostics$internal_message`.
+
+**When a refusal comes.** A refusal normally comes before estimation, when the stages of the fit are planned. On some routes the copy of the results and diagnostics into the returned object is checked only after estimation, so a fit close to the limit can run its estimation and then be refused at that copy. On outcome-regression and doubly robust fits (`est_method = "reg"` or `"dr"`) without an adjustment for missing outcomes whose copy is not counted from the returned result, for example under `gmm_weighting = "identity"`, the copy is also checked before estimation, with the same check and the same count, so these fits are refused promptly. Late refusals remain possible where the copy is counted from the returned result itself: outcome-regression and doubly robust fits under `gmm_weighting = "within"`, and those with static covariates under `"optimal"`; they have been observed on such fits. Such a refusal can come after a long estimation. It is otherwise as described above, and the remedy is the same.
+
+| Class | Cause | What to do |
+| --- | --- | --- |
+| `cdid_workspace_refusal` | the arrays counted by a check exceed the workspace limit, `control$numeric_workspace_bytes` | increase the workspace limit, `control = list(numeric_workspace_bytes = ...)`; the result can differ in the last digits, and multiplier bootstrap draws can differ, because the chunk size follows the workspace limit |
+| `cdid_work_limit_refusal` | the estimated work of a check exceeds a finite `control$counted_work_limit` (including the comparison catalog's work check) | raise `counted_work_limit` or set it to `Inf` (the default); the workspace limit does not change it |
+| `cdid_size_limit_refusal` | a fixed size limit of R is exceeded, for example the largest matrix dimension | no setting changes it; reduce the number of units, dates or comparisons |
+
+`aggte()` uses the workspace limit and the work limit of the fit. When an aggregation exceeds one of them, the error says that the limit comes from the fit and that the fit must be rerun with a larger limit.
+
+An augmented fit with time-varying covariates and an automatic chunk size whose influence functions are evaluated in passes of fewer than 16 units may take a long time, because each pass has a fixed cost. It signals a warning of class `cdid_workspace_speed_warning` that says so and that a larger workspace limit allows longer passes; it states no value. Fits with an explicit `chunk_rows` and other fits do not signal it.
 
 ## Tested versions and dependencies
 

@@ -158,7 +158,7 @@ Which rows need covariates depends on the route ([Static versus changing covaria
 
 ## Covariance regularization
 
-Under `gmm_weighting = "optimal"`, the default, the generalized method of moments (GMM) weights comparisons by the inverse of their estimated covariance. When that covariance needs regularization after exact reductions, `gmm_covariance = "tikhonov"` adds a ridge proportional to its trace. At exactly zero covariance a separate least-squares rule applies, with the actual zero sandwich variance. The control entries `condition_trigger` (default `1e-10`) and `ridge_relative` (default `1e-4`) set the trigger and size, and `fit$chained$covariance_handling` records its use. The ridge changes only the weighting: it supplies no identifying information, cannot make an unavailable cell available, and says nothing by itself about identification. Standard errors still use the sandwich variance of the complete influence functions, identity weighting is never substituted, and nonfinite or materially indefinite covariance inputs are refused without clipping eigenvalues or enlarging the ridge.
+Under `gmm_weighting = "optimal"`, the generalized method of moments (GMM) weights comparisons by the inverse of their estimated covariance. When that covariance needs regularization after exact reductions, `gmm_covariance = "tikhonov"` adds a ridge proportional to its trace. At exactly zero covariance a separate least-squares rule applies, with the actual zero sandwich variance. The control entries `condition_trigger` (default `1e-10`) and `ridge_relative` (default `1e-4`) set the trigger and size, and `fit$chained$covariance_handling` records its use. The ridge changes only the weighting: it supplies no identifying information, cannot make an unavailable cell available, and says nothing by itself about identification. Standard errors still use the sandwich variance of the complete influence functions, identity weighting is never substituted, and nonfinite or materially indefinite covariance inputs are refused without clipping eigenvalues or enlarging the ridge.
 
 ## Pretrend tests are unavailable
 
@@ -212,11 +212,11 @@ Match every setting, and compare point estimates, standard errors and aggregates
 
 | `control` entry | Default | Meaning |
 | --- | --- | --- |
-| `numeric_workspace_bytes` | 1073741824 (1 GiB) | Admission limit for the counted numeric workspace; work is split into chunks of `chunk_rows` rows, chosen automatically |
+| `numeric_workspace_bytes` | 1073741824 (1 GiB) | The workspace limit on the numeric arrays that `cdid` plans to allocate; work is split into chunks whose size is chosen from it unless `chunk_rows` is set |
 | `counted_work_limit` | `Inf` | No estimated work cap; a finite positive whole number opts in |
 | `workers` | 1 | Worker processes for multiplier draws; never raised automatically |
 
-A fit whose conservative payload or work estimate exceeds these limits is refused before the stage runs, and nothing is dropped or relaxed. The limits do not bound the memory of the R process or CPU time, and the package does not detect the memory or speed of your machine. A larger `numeric_workspace_bytes` admits a larger counted payload; whether the machine can hold it, plus memory the count omits, is yours to judge. A finite `counted_work_limit` should be a deliberate budget: the estimate is conservative, so a tight value can refuse fits your machine could complete. `fit$chained$public$counted_work_limit` and `fit$chained$public$work_cap` record the public cap and the internal ceiling.
+A fit whose counted workspace or work estimate exceeds these limits is refused, and nothing is dropped or relaxed; a restated error names the control that governs the failing check and states what that check counted, as described in [When a fit does not fit](#when-a-fit-does-not-fit). The workspace limit applies to the numerical arrays that `cdid` plans to allocate during a fit; it is not a limit on the memory of the R process, nor on CPU time, and the package does not detect the memory or speed of your machine. A larger `numeric_workspace_bytes` admits a larger counted workspace; whether the machine can hold it, together with the memory of the R session, is yours to judge. Changing `numeric_workspace_bytes` or `chunk_rows` can change multiplier bootstrap draws and last-digit rounding on fits with many stored dates and cohorts; to replicate results, keep them fixed ([Workspace limit and chunk size](../reference/options.md#workspace-limit-and-chunk-size), [Reproducing results](../reference/results.md#reproducing-results)). A finite `counted_work_limit` should be a deliberate choice: the estimate is conservative, so a tight value can refuse fits your machine could complete. `fit$chained$public$counted_work_limit` and `fit$chained$public$work_cap` record the public cap and the internal ceiling.
 
 Parallel multiplier draws need a matching declaration of workers:
 
@@ -227,6 +227,19 @@ fit <- cdid::att_gt(yname = "y", tname = "time", idname = "id", gname = "g",
 ```
 
 Estimation stays serial, results equal those of `cores = 1`, worker buffers count against the workspace, and later `aggte()` calls reuse the workers. `compute_inffunc = FALSE` returns the same point estimates without influence functions, standard errors, bands or pretrend test, and `aggte()` refuses such a fit.
+
+### When a fit does not fit
+
+| Error or warning | What it means | What to do |
+| --- | --- | --- |
+| "The call does not fit in the workspace limit. Check: ..." (`cdid_workspace_refusal`) | the arrays counted by one check exceed the workspace limit; the original diagnostic follows "Check:" | increase the workspace limit, `control = list(numeric_workspace_bytes = ...)`; the count in the error is what the failing check counted, not what the whole call needs, so no value is given as sufficient |
+| "The call exceeds the work limit. Check: ..." (`cdid_work_limit_refusal`) | a finite `counted_work_limit` is exceeded; the workspace limit does not change it | raise `counted_work_limit` or remove it (`Inf`, the default) |
+| "The call exceeds a size limit that no setting changes. Check: ..." (`cdid_size_limit_refusal`) | a fixed limit of R, such as the largest matrix dimension | reduce the number of units, dates or comparisons |
+| "The aggregation does not fit in the workspace limit of the fit. Check: ..." (from `aggte()`) | the aggregation does not fit in the workspace limit with which the fit was computed | rerun the fit with a larger workspace limit, then aggregate again |
+| another error of a bound, without these sentences | a check that does not record which control its bound comes from (for example a remainder of a limit); the message is the original one | see the classes below; such an error names no control |
+| warning of class `cdid_workspace_speed_warning` ("The influence functions of this fit are evaluated in passes of N units") | an augmented fit with time-varying covariates and an automatic chunk size makes many short passes over the data and may take a long time | a larger workspace limit allows longer passes; results can differ in the last digits and bootstrap draws can differ |
+
+A refused call stops at the first check that fails and signals at once; nothing is run again to explain the refusal. A restated error keeps the original diagnostic of its check after "Check:"; an error that is not restated is the original one. A refusal normally comes before estimation. On outcome-regression and doubly robust fits under `gmm_weighting = "within"`, or with static covariates under `"optimal"`, close to the limit, the copy of the results into the returned object is checked only after estimation, so the refusal can come after a long run; see [Resource errors](../reference/options.md#resource-errors).
 
 ---
 

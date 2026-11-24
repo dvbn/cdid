@@ -1725,7 +1725,7 @@ run_chained_cross_pair_fit <- function(
       cp04 = cp04, cp04_reader = cp04_reader, f_Z = f_Z, pm = pm,
       est_method = est_method, ctrl = ctrl, wt_mode = wt_mode,
       reduce_structural_redundancy = reduce_structural_redundancy,
-      compute_if = need_if, nuisance_sink = nz_sink
+      compute_if = need_if, nuisance_sink = nz_sink, defer_covariance = TRUE
     )
     active_xp_backend <- gen_mom$backend
     kept_idx <- gen_mom$kept_idx
@@ -1748,10 +1748,11 @@ run_chained_cross_pair_fit <- function(
 
     mhat_raw_used <- gen_mom$mhat_used
     mhat_used <- stats::setNames(as.double(mhat_raw_used), design_used$incidence$link_ids)
-    V_used <- gen_mom$V_used
-    dimnames(V_used) <- list(design_used$incidence$link_ids, design_used$incidence$link_ids)
-    phi_replay_mat <- if (isTRUE(compute_inffunc)) gen_mom$Phi_core else NULL
-    gen_mom$Phi_core <- NULL
+    # The retained covariance is formed after the solve's workspace preflight.
+    V_used <- NULL
+    phi_replay_mat <- NULL
+    phi_replay_rows <- if (isTRUE(compute_inffunc)) gen_mom$phi_rows else NULL
+    gen_mom$phi_rows <- NULL
     mean_phi_out <- gen_mom$mean_phi
     replay_n <- n_total
     replay_ids <- f_id
@@ -1797,6 +1798,7 @@ run_chained_cross_pair_fit <- function(
     V_used <- mom$V
     dimnames(V_used) <- list(design_used$incidence$link_ids, design_used$incidence$link_ids)
     phi_replay_mat <- if (isTRUE(compute_inffunc)) mom$Phi else NULL
+    phi_replay_rows <- NULL
     mom$Phi <- NULL
     mean_phi_out <- mom$mean_phi
     replay_n <- n_a_units
@@ -1853,12 +1855,16 @@ run_chained_cross_pair_fit <- function(
     scale_id = scale_id_str, nuisance_fit_id = nuis_id_str,
     reduction = red_spec
   )
-  if (wt_mode %in% c("optimal", "within") && !is.null(ctrl$gmm_accuracy$covariance_strategy)) {
-    prov_used$complete_unit_if_gram <- ipw_seal(
-      list(covariance = V_used, n_units = prov_used$n_units, nuisance_fit_id = prov_used$nuisance_fit_id),
-      "complete_unit_if_gram"
-    )
+  seal_cov_used <- function(prov) {
+    if (wt_mode %in% c("optimal", "within") && !is.null(ctrl$gmm_accuracy$covariance_strategy)) {
+      prov$complete_unit_if_gram <- ipw_seal(
+        list(covariance = V_used, n_units = prov$n_units, nuisance_fit_id = prov$nuisance_fit_id),
+        "complete_unit_if_gram"
+      )
+    }
+    prov
   }
+  if (!is.null(V_used)) prov_used <- seal_cov_used(prov_used)
 
   batch_cap <- max(1L, min(replay_n, as.integer(ctrl$gmm_bounds$max_batch_rows)))
   make_replay_cb <- function(link_ids_cb) {
@@ -1871,6 +1877,10 @@ run_chained_cross_pair_fit <- function(
         rr <- pos:end_pos
         phi_blk <- if (!is.null(phi_mat)) {
           phi_mat[rr, , drop = FALSE]
+        } else if (!is.null(phi_replay_rows)) {
+          blk <- phi_replay_rows(rr)
+          colnames(blk) <- link_ids_cb
+          blk
         } else {
           matrix(0.0, nrow = length(rr), ncol = length(link_ids_cb), dimnames = list(NULL, link_ids_cb))
         }
@@ -1900,6 +1910,22 @@ run_chained_cross_pair_fit <- function(
   # pre-treatment cells on `>= eff_pt_start`) live directly in `design_used` and
   # are solved in `gmm_fit` under the caller's exact `pt_assumption`.
   tgt_plan <- build_cross_pair_target_specs(design_used, ledger, pre_specs, include_pre = TRUE)
+
+  if (is.null(V_used)) {
+    # Streamed general route: run the solve's own pre-allocation workspace
+    # checks on the retained design before the covariance is accumulated, so
+    # a fit the retained solve cannot hold is refused before allocation.
+    gmm_core_workspace_preflight(
+      design = design_used, targets = tgt_plan$specs, weighting = wt_requested,
+      if_replay = if_replay_spec, accuracy = ctrl$gmm_accuracy, bounds = ctrl$gmm_bounds,
+      request_param_cov = FALSE, materialize_target_if = isTRUE(compute_inffunc),
+      reduction_spec = NULL, provenance_reduction = prov_used$reduction
+    )
+    V_used <- cross_pair_general_covariance(gen_mom$cov_source, ctrl$gmm_bounds$max_matrix_entries)
+    gen_mom$cov_source <- NULL
+    dimnames(V_used) <- list(design_used$incidence$link_ids, design_used$incidence$link_ids)
+    prov_used <- seal_cov_used(prov_used)
+  }
 
   if (!is.null(progress)) {
     progress("cross-pair GMM: solving ", L_used, " retained moment(s) with weighting = \"", wt_mode, "\"")
@@ -1955,6 +1981,7 @@ run_chained_cross_pair_fit <- function(
     }
   }
   phi_replay_mat <- NULL
+  phi_replay_rows <- NULL
 
   # Map post ledger support & IFs
   est_idx <- which(gmm_fit$targets$estimable)

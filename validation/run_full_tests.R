@@ -65,11 +65,22 @@ required_test_files <- c("test-cran-regression.R", "test-cran-regression-static.
                          "test-nuisance-models.R", "test-cross-pair-chaining.R",
                          "test-cohort-time-fe.R", "test-cohort-time-nuisance-scores.R",
                          "test-static-nuisance-capture.R",
-                         "test-chained-missing-reference.R")
-expected_test_count <- 191L
-if (length(test_files) != expected_test_count || !all(required_test_files %in% test_files)) {
-  stop(sprintf("Expected all %d packaged testthat files in '%s', found %d.",
-               expected_test_count, test_dir, length(test_files)))
+                         "test-chained-missing-reference.R",
+                         "test-chained-level-loading-stream.R",
+                         "test-chained-within-loading-oracle.R",
+                         "test-chained-within-memory-phases.R",
+                         "test-cp04-owner-storage-once.R",
+                         "test-cp04-plan-store-admission.R",
+                         "test-cp04-stream-plan-certificate.R",
+                         "test-public-copy-precheck.R",
+                         "test-resource-refusal.R",
+                         "test-workspace-limit-parity.R")
+expected_test_count <- 200L
+missing_required <- setdiff(required_test_files, test_files)
+if (length(test_files) != expected_test_count || length(missing_required)) {
+  stop(sprintf("Expected all %d packaged testthat files in '%s', found %d. Missing required files: %s.",
+               expected_test_count, test_dir, length(test_files),
+               if (length(missing_required)) paste(missing_required, collapse = ", ") else "none"))
 }
 stopifnot(native_file %in% test_files)
 if (native_only) test_files <- native_file

@@ -84,7 +84,9 @@ In this design, the untreated conditional mean change from $s$ to $t$ is $(t - s
 
 ## 3. Estimating and inspecting group-time effects
 
-We fit chained doubly robust estimation with `xformla = ~ x` and `selection = "none"`, combining the overlapping adjacent-period comparisons by feasible two-step GMM (`gmm_weighting = "optimal"`). Here we set `bstrap = FALSE` and `cband = FALSE` to compute fast analytical standard errors and pointwise normal confidence intervals; by default (`bstrap = TRUE, cband = TRUE`), `cdid` computes multiplier-bootstrap standard errors and simultaneous confidence bands.
+We fit chained doubly robust estimation with `xformla = ~ x` and `selection = "none"`. The default `gmm_weighting = "within"` combines the comparisons using the covariance of within-unit changes implied by uncorrelated level shocks. These weights account for shared dates without estimating every covariance from the sample. To reproduce the earlier two-step weighting, set `gmm_weighting = "optimal"`.
+
+Here we set `bstrap = FALSE` and `cband = FALSE` for analytical standard errors and pointwise normal confidence intervals. The default `bstrap = TRUE, cband = TRUE` gives multiplier-bootstrap standard errors and simultaneous bands. Both use the complete study-unit influence functions.
 
 ```{r fit-att-gt}
 fit <- cdid::att_gt(

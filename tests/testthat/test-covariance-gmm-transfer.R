@@ -3,9 +3,11 @@ v61_e <- new.env(parent = asNamespace("cdid"))
 for (x in parse(file = testthat::test_path("test-augmented-adjoint-replay.R")))
   if (is.call(x) && identical(x[[1L]], as.name("<-"))) eval(x, v61_e)
 
-v61_filled <- function() {
-  a <- v61_e$v57_aug$rap_case()
-  fit <- v61_e$v57_aug$rap_fit(a, imp = "separate", model = "pair_logit", mode = "pooled")
+v61_filled <- function(dated = FALSE) {
+  a <- if (dated) v61_e$v57_aug$rap_case(dated = TRUE, route_kind = "augmented") else
+    v61_e$v57_aug$rap_case()
+  fit <- v61_e$v57_aug$rap_fit(a, imp = "separate", model = "pair_logit",
+    mode = if (dated) "separate" else "pooled")
   links <- rev(seq_along(fit$links)); N <- nrow(a$Y)
   raw <- matrix(0, N, length(links))
   v61_ns("cp04_replay_links")(fit, links, function(b) raw[b$rows, ] <<- b$phi,
@@ -88,6 +90,34 @@ testthat::test_that("one covariance matrix serves original GMM chunks with no se
   testthat::expect_equal(record$gmm_chunk_rows, B, tolerance = 0)
   testthat::expect_identical(store$state, "released")
   testthat::expect_false(any(c("phi", "raw_ref", "backend_snapshot", "gmm_transfer") %in% ls(store)))
+})
+
+testthat::test_that("dated augmentation reuses folded original-unit rows across both GMM passes", {
+  z <- v61_filled(dated = TRUE)
+  on.exit(v61_ns("cp04_retained_if_release")(z$store), add = TRUE)
+  B <- z$point$chunk_rows
+  testthat::expect_gt(z$fit$layout$N_layout, nrow(z$raw))
+  testthat::expect_false(isTRUE(B == z$store$B))
+  inv <- v61_ns("cp04_retained_if_phase_inventory")("gmm", z$fit, z$covariance, z$point,
+    z$caller, z$caller, z$d5, length(z$links), length(z$fit$links))
+  store <- v61_ns("cp04_retained_if_covariance_to_gmm")(z$store, z$fit, z$links, B,
+    retained = inv$retained, work = 0, control = z$fit$control)
+  testthat::expect_identical(store, z$store)
+  for (pass in 1:2) {
+    rows <- integer()
+    phi <- matrix(NA_real_, nrow(z$raw), ncol(z$raw))
+    consume <- function(batch) {
+      testthat::expect_identical(batch$id, z$fit$layout$frame_id[batch$rows])
+      rows <<- c(rows, batch$rows)
+      phi[batch$rows, ] <<- batch$phi
+    }
+    v61_ns("cp04_replay_links")(v61_ns("cp04_retained_if_bind")(z$fit, store),
+      z$links, consume, scale = "core", chunk_rows = B)
+    testthat::expect_identical(rows, seq_len(nrow(phi)))
+    testthat::expect_equal(phi, z$raw, tolerance = 1e-12)
+  }
+  testthat::expect_identical(store$producer_passes, 1L)
+  testthat::expect_identical(store$slice_passes, 3L)
 })
 
 testthat::test_that("transferred covariance storage releases on an actual GMM slice callback error", {

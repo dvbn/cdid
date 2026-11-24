@@ -2465,7 +2465,7 @@ window.Quarto = {
 <section id="guide-1" class="level2">
 <h2 class="anchored" data-anchor-id="guide-1">1. Setup and How to Use This Notebook</h2>
 <p>This Quarto notebook is an interactive, editable tutorial for estimating group-time average treatment effects and event-study aggregations with <code>cdid</code> (implementing Bellégo, Benatia and Dortet-Bernadet 2025 and extending Callaway and Sant’Anna 2021). It also covers the static switching model (<code>dname</code>) and the cohort-by-date fixed-effects preset added in version 1.3.0.0. Every estimation call uses the public <code>cdid</code> interface directly so you can copy, modify, and run individual chunks in your own workflow. See <a href="https://github.com/dvbn/cdid/blob/main/docs/get-started.md">Get started</a> and the <a href="https://github.com/dvbn/cdid/blob/main/docs/README.md">User Guide home</a> for companion documentation.</p>
-<p>The notebook requires <code>cdid</code> 1.3.0.0 or later. The setup chunk stops if an older version is loaded. Until 1.3.0.0 is on CRAN, install it from GitHub with <code>remotes::install_github(&quot;dvbn/cdid&quot;)</code>, or from this checkout with <code>remotes::install_local(&quot;.&quot;)</code> run from the repository root. The optional <a href="https://github.com/dvbn/cdid/blob/main/validation/SETUP.md">pinned validation setup</a> installs exact dependency versions. Restart R after installing. Run setup and the DGP first, then work downward. Sections 17 and 18 draw their own data and depend only on the setup chunk.</p>
+<p>Use a <code>cdid</code> build with <code>gmm_weighting = &quot;within&quot;</code> as the built-in chained cohort default. Run <code>install.packages(&quot;cdid&quot;)</code> when that version is on CRAN or install the current GitHub version with <code>remotes::install_github(&quot;dvbn/cdid&quot;)</code>. To run this notebook against a development checkout, run <code>remotes::install_local(&quot;.&quot;)</code> from its root. Restart R after installing. Run setup and the data generator first, then work downward. <a href="https://github.com/dvbn/cdid/blob/main/validation/SETUP.md">Optional pinned validation setup</a> Sections 17 and 18 draw their own data and depend only on the setup chunk.</p>
 <ul>
 <li><strong>Fresh session after reinstall:</strong> If you reinstall <code>cdid</code>, <code>did</code>, or <code>DRDID</code>, restart R before rendering or running chunks interactively so that namespace bindings and compiled symbols are loaded cleanly.</li>
 <li><strong>Working directory &amp; fail-fast execution:</strong> You can run chunks from either the repository root or <code>notebooks/</code>. The setup chunk resolves <code>simulate_panel.R</code> via a relative path, prepends <code>validation/.lib</code> when present (else uses your normal R library), and <code>error: false</code> stops on the first unexpected error.</li>
@@ -2487,9 +2487,9 @@ Attaching package: &#39;did&#39;</code></pre>
 
     aggte, att_gt, conditional_did_pretest</code></pre>
 </div>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (utils<span class="sc">::</span><span class="fu">packageVersion</span>(<span class="st">&quot;cdid&quot;</span>) <span class="sc">&lt;</span> <span class="st">&quot;1.3.0.0&quot;</span> <span class="sc">||</span></span>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="sc">!</span><span class="fu">identical</span>(<span class="fu">formals</span>(cdid<span class="sc">::</span>att_gt)<span class="sc">$</span>gmm_weighting, <span class="st">&quot;within&quot;</span>) <span class="sc">||</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="sc">!</span><span class="st">&quot;missing_reference&quot;</span> <span class="sc">%in%</span> <span class="fu">names</span>(<span class="fu">formals</span>(cdid<span class="sc">::</span>att_gt))) {</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">stop</span>(<span class="st">&quot;Install the cdid development build from this checkout and restart R. Check validation/.lib if it is present.&quot;</span>)</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">stop</span>(<span class="st">&quot;Install a cdid version with within weighting as the cohort default, then restart R. Check validation/.lib if it is present.&quot;</span>)</span>
 <span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>}</span>
 <span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>pkg_info <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
@@ -2516,13 +2516,13 @@ Attaching package: &#39;did&#39;</code></pre>
 <tr class="odd">
 <td style="text-align: left;"></td>
 <td style="text-align: left;">R</td>
-<td style="text-align: left;">4.6.2</td>
-<td style="text-align: left;">Resources</td>
+<td style="text-align: left;">4.5.2</td>
+<td style="text-align: left;">R</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">cdid</td>
 <td style="text-align: left;">cdid</td>
-<td style="text-align: left;">1.3.0.0</td>
+<td style="text-align: left;">1.3.0.4</td>
 <td style="text-align: left;">cdid</td>
 </tr>
 <tr class="odd">
@@ -2534,19 +2534,19 @@ Attaching package: &#39;did&#39;</code></pre>
 <tr class="even">
 <td style="text-align: left;">DRDID</td>
 <td style="text-align: left;">DRDID</td>
-<td style="text-align: left;">1.4.1</td>
+<td style="text-align: left;">1.4.0</td>
 <td style="text-align: left;">DRDID</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">knitr</td>
 <td style="text-align: left;">knitr</td>
-<td style="text-align: left;">1.52</td>
+<td style="text-align: left;">1.51</td>
 <td style="text-align: left;">knitr</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">ggplot2</td>
 <td style="text-align: left;">ggplot2</td>
-<td style="text-align: left;">4.0.4</td>
+<td style="text-align: left;">4.0.2</td>
 <td style="text-align: left;">ggplot2</td>
 </tr>
 </tbody>
@@ -3299,7 +3299,7 @@ observed_dates
 <div class="cell-output cell-output-stdout">
 <pre><code>
 cdid chained difference-in-differences (chained doubly robust GMM): cdid_MP
-  cdid 1.3.0.0 result built on did 2.5.1 (tested: did 2.5.1); did&#39;s MP methods tabulate the estimates below.
+  cdid 1.3.0.4 result built on did 2.5.1 (tested: did 2.5.1); did&#39;s MP methods tabulate the estimates below.
   Chained estimators: Bellego C., Benatia D. and V. Dortet-Bernadet (2025). &quot;The Chained Difference-in-Differences.&quot; Journal of Econometrics 248, 105783. doi:10.1016/j.jeconom.2024.105783.
   Ordinary estimators: Callaway B. and P. H. C. Sant&#39;Anna (2021). &quot;Difference-in-Differences with Multiple Time Periods.&quot; Journal of Econometrics 225(2), 200-230. doi:10.1016/j.jeconom.2020.12.001.
 
@@ -3329,7 +3329,7 @@ Group-Time Average Treatment Effects:
 ---
 Signif. codes: `*&#39; confidence band does not cover 0
 
-P-value for pre-test of parallel trends assumption:  0.779585232829031
+P-value for pre-test of parallel trends assumption:  0.779585232829032
 Control Group:  Never Treated,  Anticipation Periods:  0
 Estimation Method:  Doubly Robust
 
@@ -3337,7 +3337,7 @@ Chained support: 15 of 15 requested cells available.
   Units: 2000 in the unit table, 2000 observed at all 6 dates, 2000 with at least two observed outcomes.
   Observation correction: none (selection = &quot;none&quot;).
   Parallel trends: PT-post; base_period = &quot;varying&quot;.
-  GMM weighting: optimal (two-step); covariance regularization: Tikhonov ridge applied with lambda = 0.00042 (moment covariance singular up to rounding).
+  GMM weighting: within (analytical unit-FE levels covariance); covariance regularization: not applied (moment covariance well conditioned).
   Inference: analytic standard errors, unit-level; pointwise intervals.
   Parallel-trends pre-test: W = 3.22915, df = 6, p = 0.7796 (Wald test of all 6 pretrend cells jointly).</code></pre>
 </div>
@@ -3647,7 +3647,7 @@ Chained support: 15 of 15 requested cells available.
 <div class="cell-output cell-output-stdout">
 <pre><code>
 cdid chained difference-in-differences (chained doubly robust GMM): cdid_AGGTEobj
-  cdid 1.3.0.0 result built on did 2.5.1 (tested: did 2.5.1); did&#39;s AGGTEobj methods tabulate the estimates below.
+  cdid 1.3.0.4 result built on did 2.5.1 (tested: did 2.5.1); did&#39;s AGGTEobj methods tabulate the estimates below.
   Chained estimators: Bellego C., Benatia D. and V. Dortet-Bernadet (2025). &quot;The Chained Difference-in-Differences.&quot; Journal of Econometrics 248, 105783. doi:10.1016/j.jeconom.2024.105783.
   Ordinary estimators: Callaway B. and P. H. C. Sant&#39;Anna (2021). &quot;Difference-in-Differences with Multiple Time Periods.&quot; Journal of Econometrics 225(2), 200-230. doi:10.1016/j.jeconom.2020.12.001.
 
@@ -3671,7 +3671,7 @@ Chained simple aggregation: 1 of 1 intended aggregate(s) available; na.rm = FALS
 <div class="cell-output cell-output-stdout">
 <pre><code>
 cdid chained difference-in-differences (chained doubly robust GMM): cdid_AGGTEobj
-  cdid 1.3.0.0 result built on did 2.5.1 (tested: did 2.5.1); did&#39;s AGGTEobj methods tabulate the estimates below.
+  cdid 1.3.0.4 result built on did 2.5.1 (tested: did 2.5.1); did&#39;s AGGTEobj methods tabulate the estimates below.
   Chained estimators: Bellego C., Benatia D. and V. Dortet-Bernadet (2025). &quot;The Chained Difference-in-Differences.&quot; Journal of Econometrics 248, 105783. doi:10.1016/j.jeconom.2024.105783.
   Ordinary estimators: Callaway B. and P. H. C. Sant&#39;Anna (2021). &quot;Difference-in-Differences with Multiple Time Periods.&quot; Journal of Econometrics 225(2), 200-230. doi:10.1016/j.jeconom.2020.12.001.
 
@@ -3715,7 +3715,7 @@ Chained group aggregation: 3 of 3 intended aggregate(s) available; na.rm = FALSE
 <div class="cell-output cell-output-stdout">
 <pre><code>
 cdid chained difference-in-differences (chained doubly robust GMM): cdid_AGGTEobj
-  cdid 1.3.0.0 result built on did 2.5.1 (tested: did 2.5.1); did&#39;s AGGTEobj methods tabulate the estimates below.
+  cdid 1.3.0.4 result built on did 2.5.1 (tested: did 2.5.1); did&#39;s AGGTEobj methods tabulate the estimates below.
   Chained estimators: Bellego C., Benatia D. and V. Dortet-Bernadet (2025). &quot;The Chained Difference-in-Differences.&quot; Journal of Econometrics 248, 105783. doi:10.1016/j.jeconom.2024.105783.
   Ordinary estimators: Callaway B. and P. H. C. Sant&#39;Anna (2021). &quot;Difference-in-Differences with Multiple Time Periods.&quot; Journal of Econometrics 225(2), 200-230. doi:10.1016/j.jeconom.2020.12.001.
 
@@ -3947,22 +3947,22 @@ Chained dynamic aggregation: 7 of 7 intended aggregate(s) available; na.rm = FAL
 <tbody>
 <tr class="odd">
 <td style="text-align: left;">none_invalid</td>
-<td style="text-align: right;">1.572698</td>
-<td style="text-align: right;">0.029198</td>
+<td style="text-align: right;">1.576988</td>
+<td style="text-align: right;">0.029465</td>
 <td style="text-align: right;">1.564173</td>
 <td style="text-align: right;">1.567787</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">pair_logit</td>
-<td style="text-align: right;">1.529448</td>
-<td style="text-align: right;">0.029191</td>
+<td style="text-align: right;">1.534790</td>
+<td style="text-align: right;">0.029438</td>
 <td style="text-align: right;">1.564173</td>
 <td style="text-align: right;">1.567787</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">date_logit</td>
-<td style="text-align: right;">1.530021</td>
-<td style="text-align: right;">0.029180</td>
+<td style="text-align: right;">1.535230</td>
+<td style="text-align: right;">0.029427</td>
 <td style="text-align: right;">1.564173</td>
 <td style="text-align: right;">1.567787</td>
 </tr>
@@ -4053,24 +4053,24 @@ Chained dynamic aggregation: 7 of 7 intended aggregate(s) available; na.rm = FAL
 <tr class="odd">
 <td style="text-align: left;">ipw</td>
 <td style="text-align: left;">chained IPW-GMM</td>
-<td style="text-align: right;">1.532415</td>
-<td style="text-align: right;">0.029236</td>
+<td style="text-align: right;">1.537428</td>
+<td style="text-align: right;">0.029492</td>
 <td style="text-align: right;">1.564173</td>
 <td style="text-align: right;">1.567787</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">reg</td>
 <td style="text-align: left;">chained outcome regression/control-mean GMM</td>
-<td style="text-align: right;">1.529086</td>
-<td style="text-align: right;">0.029196</td>
+<td style="text-align: right;">1.534116</td>
+<td style="text-align: right;">0.029437</td>
 <td style="text-align: right;">1.564173</td>
 <td style="text-align: right;">1.567787</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">dr</td>
 <td style="text-align: left;">chained doubly robust GMM</td>
-<td style="text-align: right;">1.530021</td>
-<td style="text-align: right;">0.029180</td>
+<td style="text-align: right;">1.535230</td>
+<td style="text-align: right;">0.029427</td>
 <td style="text-align: right;">1.564173</td>
 <td style="text-align: right;">1.567787</td>
 </tr>
@@ -4117,8 +4117,8 @@ Chained dynamic aggregation: 7 of 7 intended aggregate(s) available; na.rm = FAL
 <span id="cb35-26"><a href="#cb35-26" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>         outcome_pooling estimate  std.error
-separate        separate 1.529086 0.02919573
-pooled            pooled 1.530089 0.03078432</code></pre>
+separate        separate 1.534116 0.02943662
+pooled            pooled 1.532184 0.03097279</code></pre>
 </div>
 </div>
 <p>This is one draw, not a coverage study. Try the same calls on <code>missing_panel</code> to remove the added trend, or set <code>est_method = &quot;dr&quot;</code> to see how treatment adjustment changes the comparison. A failed separate regression is not replaced automatically by pooling: check the control sample and required covariate predictions before imposing shared coefficients.</p>
@@ -4173,20 +4173,20 @@ pooled            pooled 1.530089 0.03078432</code></pre>
 <tr class="odd">
 <td style="text-align: left;">separate</td>
 <td style="text-align: right;">24</td>
-<td style="text-align: right;">1.530021</td>
-<td style="text-align: right;">0.029180</td>
+<td style="text-align: right;">1.535230</td>
+<td style="text-align: right;">0.029427</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">within_cohort</td>
 <td style="text-align: right;">4</td>
-<td style="text-align: right;">1.530514</td>
-<td style="text-align: right;">0.029323</td>
+<td style="text-align: right;">1.534243</td>
+<td style="text-align: right;">0.029552</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">across_cohorts</td>
 <td style="text-align: right;">1</td>
-<td style="text-align: right;">1.530595</td>
-<td style="text-align: right;">0.029342</td>
+<td style="text-align: right;">1.534358</td>
+<td style="text-align: right;">0.029570</td>
 </tr>
 </tbody>
 </table>
@@ -4610,24 +4610,24 @@ $influence_dimensions
 <tr class="odd">
 <td style="text-align: left;">ipw</td>
 <td style="text-align: left;">chained doubly robust GMM</td>
-<td style="text-align: right;">1.530021</td>
-<td style="text-align: right;">0.029180</td>
+<td style="text-align: right;">1.535230</td>
+<td style="text-align: right;">0.029427</td>
 <td style="text-align: right;">1.564173</td>
 <td style="text-align: right;">1.567787</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">imputation</td>
 <td style="text-align: left;">chained doubly robust GMM (pure actual-change imputation)</td>
-<td style="text-align: right;">1.530125</td>
-<td style="text-align: right;">0.029058</td>
+<td style="text-align: right;">1.534656</td>
+<td style="text-align: right;">0.029294</td>
 <td style="text-align: right;">1.564173</td>
 <td style="text-align: right;">1.567787</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">dr</td>
 <td style="text-align: left;">chained doubly robust GMM (augmented observation correction)</td>
-<td style="text-align: right;">1.530590</td>
-<td style="text-align: right;">0.029082</td>
+<td style="text-align: right;">1.535106</td>
+<td style="text-align: right;">0.029321</td>
 <td style="text-align: right;">1.564173</td>
 <td style="text-align: right;">1.567787</td>
 </tr>
@@ -4779,22 +4779,22 @@ Accounts for the estimated repeat rates a_k, the imputation fits j and the obser
 <tr class="odd">
 <td style="text-align: left;">ipw</td>
 <td style="text-align: left;">propensity p</td>
-<td style="text-align: right;">1.534044</td>
-<td style="text-align: right;">0.029156</td>
+<td style="text-align: right;">1.538202</td>
+<td style="text-align: right;">0.029390</td>
 <td style="text-align: right;">1.564173</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">reg</td>
 <td style="text-align: left;">counterfactual regression m</td>
-<td style="text-align: right;">1.529978</td>
-<td style="text-align: right;">0.029091</td>
+<td style="text-align: right;">1.534306</td>
+<td style="text-align: right;">0.029327</td>
 <td style="text-align: right;">1.564173</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">dr</td>
 <td style="text-align: left;">p and m</td>
-<td style="text-align: right;">1.530590</td>
-<td style="text-align: right;">0.029082</td>
+<td style="text-align: right;">1.535106</td>
+<td style="text-align: right;">0.029321</td>
 <td style="text-align: right;">1.564173</td>
 </tr>
 </tbody>
@@ -4852,18 +4852,18 @@ Accounts for the estimated repeat rates a_k, the imputation fits j and the obser
 <tbody>
 <tr class="odd">
 <td style="text-align: left;">NT + PT-post + varying</td>
-<td style="text-align: right;">1.530021</td>
-<td style="text-align: right;">0.029180</td>
+<td style="text-align: right;">1.535230</td>
+<td style="text-align: right;">0.029427</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">NYT + PT-post + universal</td>
-<td style="text-align: right;">1.527271</td>
-<td style="text-align: right;">0.028668</td>
+<td style="text-align: right;">1.556084</td>
+<td style="text-align: right;">0.030783</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">NT + PT-all (pt_start=1) + varying</td>
-<td style="text-align: right;">1.534996</td>
-<td style="text-align: right;">0.025477</td>
+<td style="text-align: right;">1.527059</td>
+<td style="text-align: right;">0.027578</td>
 </tr>
 </tbody>
 </table>
@@ -4910,7 +4910,7 @@ Accounts for the estimated repeat rates a_k, the imputation fits j and the obser
 <div class="cell-output cell-output-stdout">
 <pre><code>Chained DiD Identification &amp; Moment Chain Report
 ================================================
-Mode: cross-pair | PT: post | GMM weighting: optimal | Moments: 8 | Overid df: 0
+Mode: cross-pair | PT: post | GMM weighting: within | Moments: 8 | Overid df: 0
 Selected cells: 1 (1 estimable, 1 chained-only without single-cohort span, 0 unavailable)
 
 [CHAINED] ATT(g=3,t=4) (ref=2, e=1): est = 3.5075 (SE = 0.0111)
@@ -5017,7 +5017,7 @@ Accounts for the estimated repeat rates a_k in its weights, and the imputation f
 <span id="cb53-18"><a href="#cb53-18" aria-hidden="true" tabindex="-1"></a>max_abs_diff_unadj <span class="ot">&lt;-</span> <span class="fu">max</span>(<span class="fu">abs</span>(unadj_comp<span class="sc">$</span>chained <span class="sc">-</span> unadj_comp<span class="sc">$</span>ordinary))</span>
 <span id="cb53-19"><a href="#cb53-19" aria-hidden="true" tabindex="-1"></a>max_abs_diff_unadj</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>[1] 3.463896e-14</code></pre>
+<pre><code>[1] 3.996803e-14</code></pre>
 </div>
 </div>
 <p><strong>What to inspect and try changing:</strong> - Read the printed <code>max_abs_diff_unadj</code> after matching cells by cohort and date: the telescoping reduction predicts agreement up to floating-point rounding, while both fits can share bias from omitting <span class="math inline">\(X_i\)</span>. Point-estimate agreement alone also says nothing about equality of standard errors or bands. - <strong>Try changing:</strong> Compare <code>fit_bal</code> (which uses <code>xformla = ~ x + z</code> and <code>est_method = &quot;dr&quot;</code>) against <code>mode = &quot;ordinary&quot;</code> with the same treatment method, formula, anticipation, and base period, matching cells by cohort and date. Compare both <code>outcome_pooling = &quot;separate&quot;</code> and <code>&quot;pooled&quot;</code>, keeping the other settings fixed. Differences can reflect coefficient restrictions or the moments combined by GMM.</p>
@@ -5406,8 +5406,8 @@ $record$covariance$rcond_cholesky
 
 
 $record$solve_residual
-[1] -1.387779e-17 -4.336809e-18  0.000000e+00  0.000000e+00 -5.204170e-18
-[6] -6.938894e-18
+[1]  6.938894e-18 -2.602085e-18 -4.987330e-18  3.469447e-18  3.035766e-18
+[6]  1.387779e-17
 
 $record$description
 [1] &quot;full declared nonreference pretrend Wald test under conventional computation; structural reference zeros excluded as identities&quot;
@@ -6027,53 +6027,103 @@ supply it on its unit-date row, with NA for a missing outcome.</code></pre>
 </section>
 <section id="guide-14" class="level2">
 <h2 class="anchored" data-anchor-id="guide-14">14. GMM Weighting, Diagnostics and Point-Only Fits</h2>
-<p><code>gmm_weighting = &quot;optimal&quot;</code> (also named <code>&quot;two_step&quot;</code>) requests feasible two-step GMM; the core used this default. <code>&quot;identity&quot;</code> explicitly requests the unweighted full-catalog criterion. Under optimal weighting, automatic Tikhonov regularization can stabilize a singular or poorly conditioned comparison covariance after exact structural reductions. It cannot supply missing ATT identification. Read the actual record rather than assuming regularization occurred.</p>
+<p>Built-in chained cohort fits default to <code>gmm_weighting = &quot;within&quot;</code>. The weights account for shared dates under a working model with uncorrelated level shocks. This gives the weighting in the matched fixed-effects regressions and avoids estimating a large covariance matrix from the same observations used to fit the effects. Set <code>gmm_weighting = &quot;optimal&quot;</code> (also <code>&quot;two_step&quot;</code>) for the earlier default. It estimates the covariance of comparison scores from the data. Switching fits, custom estimators, and propensity-weighted or doubly robust fits of the cohort fixed-effects preset default to <code>&quot;optimal&quot;</code>. <a href="https://github.com/dvbn/cdid/blob/main/docs/methods/gmm.md#why-within-is-the-cohort-default">Why within is the cohort default</a></p>
+<p>Compare the two weighting choices on the incomplete panel from Section 5. Keep the outcomes, controls, observation model and treatment adjustment fixed. Both fits report analytical standard errors based on the study-unit influence functions.</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb84"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb84-1"><a href="#cb84-1" aria-hidden="true" tabindex="-1"></a>workspace_bytes <span class="ot">&lt;-</span> <span class="dv">1073741824</span>  <span class="co"># Counted numeric-array workspace, 1 GiB.</span></span>
-<span id="cb84-2"><a href="#cb84-2" aria-hidden="true" tabindex="-1"></a>work_cap <span class="ot">&lt;-</span> <span class="cn">Inf</span>               <span class="co"># No estimated work cap; choose a finite whole number to opt in.</span></span>
-<span id="cb84-3"><a href="#cb84-3" aria-hidden="true" tabindex="-1"></a>fit_identity <span class="ot">&lt;-</span> cdid<span class="sc">::</span><span class="fu">att_gt</span>(</span>
-<span id="cb84-4"><a href="#cb84-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;time&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">gname =</span> <span class="st">&quot;g&quot;</span>,</span>
-<span id="cb84-5"><a href="#cb84-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">xformla =</span> <span class="sc">~</span> x <span class="sc">+</span> z, <span class="at">data =</span> balanced_panel, <span class="at">frame =</span> units,</span>
-<span id="cb84-6"><a href="#cb84-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">control_group =</span> <span class="st">&quot;nevertreated&quot;</span>, <span class="at">est_method =</span> <span class="st">&quot;dr&quot;</span>, <span class="at">selection =</span> <span class="st">&quot;none&quot;</span>,</span>
-<span id="cb84-7"><a href="#cb84-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">pt_assumption =</span> <span class="st">&quot;post&quot;</span>, <span class="at">bstrap =</span> <span class="cn">FALSE</span>, <span class="at">cband =</span> <span class="cn">FALSE</span>,</span>
-<span id="cb84-8"><a href="#cb84-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">gmm_weighting =</span> <span class="st">&quot;identity&quot;</span>, <span class="at">gmm_covariance =</span> <span class="st">&quot;tikhonov&quot;</span>,</span>
-<span id="cb84-9"><a href="#cb84-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">control =</span> <span class="fu">list</span>(<span class="at">numeric_workspace_bytes =</span> workspace_bytes, <span class="at">counted_work_limit =</span> work_cap)</span>
-<span id="cb84-10"><a href="#cb84-10" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb84-11"><a href="#cb84-11" aria-hidden="true" tabindex="-1"></a><span class="fu">list</span>(<span class="at">optimal =</span> fit_bal<span class="sc">$</span>chained<span class="sc">$</span>covariance_handling[<span class="fu">c</span>(<span class="st">&quot;weighting_requested&quot;</span>, <span class="st">&quot;weighting_canonical&quot;</span>,</span>
-<span id="cb84-12"><a href="#cb84-12" aria-hidden="true" tabindex="-1"></a>       <span class="st">&quot;handler_invoked&quot;</span>, <span class="st">&quot;handler_used&quot;</span>, <span class="st">&quot;trigger_reason&quot;</span>, <span class="st">&quot;lambda&quot;</span>)],</span>
-<span id="cb84-13"><a href="#cb84-13" aria-hidden="true" tabindex="-1"></a>     <span class="at">optimal_conditioning =</span> fit_bal<span class="sc">$</span>chained<span class="sc">$</span>covariance_handling<span class="sc">$</span>conditioning[<span class="fu">c</span>(<span class="st">&quot;rho&quot;</span>, <span class="st">&quot;d_min&quot;</span>, <span class="st">&quot;d_max&quot;</span>)],</span>
-<span id="cb84-14"><a href="#cb84-14" aria-hidden="true" tabindex="-1"></a>     <span class="at">identity =</span> fit_identity<span class="sc">$</span>chained<span class="sc">$</span>covariance_handling[<span class="fu">c</span>(<span class="st">&quot;weighting_requested&quot;</span>, <span class="st">&quot;weighting_canonical&quot;</span>,</span>
-<span id="cb84-15"><a href="#cb84-15" aria-hidden="true" tabindex="-1"></a>       <span class="st">&quot;handler_invoked&quot;</span>, <span class="st">&quot;handler_used&quot;</span>, <span class="st">&quot;trigger_reason&quot;</span>, <span class="st">&quot;lambda&quot;</span>)])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb84"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb84-1"><a href="#cb84-1" aria-hidden="true" tabindex="-1"></a>fit_miss_two_step <span class="ot">&lt;-</span> cdid<span class="sc">::</span><span class="fu">att_gt</span>(</span>
+<span id="cb84-2"><a href="#cb84-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;time&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">gname =</span> <span class="st">&quot;g&quot;</span>,</span>
+<span id="cb84-3"><a href="#cb84-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">xformla =</span> <span class="sc">~</span> x <span class="sc">+</span> z, <span class="at">selection_xformla =</span> <span class="sc">~</span> x, <span class="at">data =</span> missing_panel, <span class="at">frame =</span> units,</span>
+<span id="cb84-4"><a href="#cb84-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">control_group =</span> <span class="st">&quot;nevertreated&quot;</span>, <span class="at">est_method =</span> <span class="st">&quot;dr&quot;</span>,</span>
+<span id="cb84-5"><a href="#cb84-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">selection =</span> <span class="st">&quot;conditional_mtar&quot;</span>, <span class="at">selection_est_method =</span> <span class="st">&quot;ipw&quot;</span>,</span>
+<span id="cb84-6"><a href="#cb84-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">selection_model =</span> <span class="st">&quot;independent_period_logit&quot;</span>, <span class="at">selection_pooling =</span> <span class="st">&quot;separate&quot;</span>,</span>
+<span id="cb84-7"><a href="#cb84-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">selection_universe =</span> <span class="st">&quot;F&quot;</span>, <span class="at">pt_assumption =</span> <span class="st">&quot;post&quot;</span>, <span class="at">base_period =</span> <span class="st">&quot;varying&quot;</span>,</span>
+<span id="cb84-8"><a href="#cb84-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">bstrap =</span> <span class="cn">FALSE</span>, <span class="at">cband =</span> <span class="cn">FALSE</span>, <span class="at">gmm_weighting =</span> <span class="st">&quot;optimal&quot;</span></span>
+<span id="cb84-9"><a href="#cb84-9" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb84-10"><a href="#cb84-10" aria-hidden="true" tabindex="-1"></a>weight_summary <span class="ot">&lt;-</span> <span class="cf">function</span>(fit) {</span>
+<span id="cb84-11"><a href="#cb84-11" aria-hidden="true" tabindex="-1"></a>  avg <span class="ot">&lt;-</span> cdid<span class="sc">::</span><span class="fu">aggte</span>(fit, <span class="at">type =</span> <span class="st">&quot;simple&quot;</span>)</span>
+<span id="cb84-12"><a href="#cb84-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">data.frame</span>(</span>
+<span id="cb84-13"><a href="#cb84-13" aria-hidden="true" tabindex="-1"></a>    <span class="at">weighting =</span> fit<span class="sc">$</span>chained<span class="sc">$</span>covariance_handling<span class="sc">$</span>weighting_canonical,</span>
+<span id="cb84-14"><a href="#cb84-14" aria-hidden="true" tabindex="-1"></a>    <span class="at">estimate =</span> avg<span class="sc">$</span>overall.att,</span>
+<span id="cb84-15"><a href="#cb84-15" aria-hidden="true" tabindex="-1"></a>    <span class="at">std_error =</span> avg<span class="sc">$</span>overall.se</span>
+<span id="cb84-16"><a href="#cb84-16" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb84-17"><a href="#cb84-17" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb84-18"><a href="#cb84-18" aria-hidden="true" tabindex="-1"></a>knitr<span class="sc">::</span><span class="fu">kable</span>(</span>
+<span id="cb84-19"><a href="#cb84-19" aria-hidden="true" tabindex="-1"></a>  <span class="fu">rbind</span>(<span class="fu">weight_summary</span>(fit_miss_date), <span class="fu">weight_summary</span>(fit_miss_two_step)),</span>
+<span id="cb84-20"><a href="#cb84-20" aria-hidden="true" tabindex="-1"></a>  <span class="at">digits =</span> <span class="dv">5</span>, <span class="at">col.names =</span> <span class="fu">c</span>(<span class="st">&quot;Weighting&quot;</span>, <span class="st">&quot;Average effect&quot;</span>, <span class="st">&quot;Standard error&quot;</span>),</span>
+<span id="cb84-21"><a href="#cb84-21" aria-hidden="true" tabindex="-1"></a>  <span class="at">caption =</span> <span class="st">&quot;Two ways to combine the same comparisons in the incomplete panel&quot;</span></span>
+<span id="cb84-22"><a href="#cb84-22" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<caption>Two ways to combine the same comparisons in the incomplete panel</caption>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Weighting</th>
+<th style="text-align: right;">Average effect</th>
+<th style="text-align: right;">Standard error</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">within</td>
+<td style="text-align: right;">1.53523</td>
+<td style="text-align: right;">0.02943</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">optimal</td>
+<td style="text-align: right;">1.53002</td>
+<td style="text-align: right;">0.02918</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<p>A single draw shows the impact on this fit. To compare precision across draws, change the seed in Section 2 and refit both choices on each draw. Choose <code>gmm_weighting = &quot;identity&quot;</code> for an unweighted fit. The fitted diagnostics below report the active weights and whether Tikhonov regularization was used.</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb85"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb85-1"><a href="#cb85-1" aria-hidden="true" tabindex="-1"></a>workspace_bytes <span class="ot">&lt;-</span> <span class="dv">1073741824</span>  <span class="co"># Counted numeric-array workspace, 1 GiB.</span></span>
+<span id="cb85-2"><a href="#cb85-2" aria-hidden="true" tabindex="-1"></a>work_cap <span class="ot">&lt;-</span> <span class="cn">Inf</span>               <span class="co"># No estimated work cap; choose a finite whole number to opt in.</span></span>
+<span id="cb85-3"><a href="#cb85-3" aria-hidden="true" tabindex="-1"></a>fit_identity <span class="ot">&lt;-</span> cdid<span class="sc">::</span><span class="fu">att_gt</span>(</span>
+<span id="cb85-4"><a href="#cb85-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;time&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">gname =</span> <span class="st">&quot;g&quot;</span>,</span>
+<span id="cb85-5"><a href="#cb85-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">xformla =</span> <span class="sc">~</span> x <span class="sc">+</span> z, <span class="at">data =</span> balanced_panel, <span class="at">frame =</span> units,</span>
+<span id="cb85-6"><a href="#cb85-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">control_group =</span> <span class="st">&quot;nevertreated&quot;</span>, <span class="at">est_method =</span> <span class="st">&quot;dr&quot;</span>, <span class="at">selection =</span> <span class="st">&quot;none&quot;</span>,</span>
+<span id="cb85-7"><a href="#cb85-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">pt_assumption =</span> <span class="st">&quot;post&quot;</span>, <span class="at">bstrap =</span> <span class="cn">FALSE</span>, <span class="at">cband =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb85-8"><a href="#cb85-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">gmm_weighting =</span> <span class="st">&quot;identity&quot;</span>, <span class="at">gmm_covariance =</span> <span class="st">&quot;tikhonov&quot;</span>,</span>
+<span id="cb85-9"><a href="#cb85-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">control =</span> <span class="fu">list</span>(<span class="at">numeric_workspace_bytes =</span> workspace_bytes, <span class="at">counted_work_limit =</span> work_cap)</span>
+<span id="cb85-10"><a href="#cb85-10" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb85-11"><a href="#cb85-11" aria-hidden="true" tabindex="-1"></a><span class="fu">list</span>(<span class="at">within =</span> fit_bal<span class="sc">$</span>chained<span class="sc">$</span>covariance_handling[<span class="fu">c</span>(<span class="st">&quot;weighting_requested&quot;</span>, <span class="st">&quot;weighting_canonical&quot;</span>,</span>
+<span id="cb85-12"><a href="#cb85-12" aria-hidden="true" tabindex="-1"></a>       <span class="st">&quot;handler_invoked&quot;</span>, <span class="st">&quot;handler_used&quot;</span>, <span class="st">&quot;trigger_reason&quot;</span>, <span class="st">&quot;lambda&quot;</span>)],</span>
+<span id="cb85-13"><a href="#cb85-13" aria-hidden="true" tabindex="-1"></a>     <span class="at">within_conditioning =</span> fit_bal<span class="sc">$</span>chained<span class="sc">$</span>covariance_handling<span class="sc">$</span>conditioning[<span class="fu">c</span>(<span class="st">&quot;rho&quot;</span>, <span class="st">&quot;d_min&quot;</span>, <span class="st">&quot;d_max&quot;</span>)],</span>
+<span id="cb85-14"><a href="#cb85-14" aria-hidden="true" tabindex="-1"></a>     <span class="at">identity =</span> fit_identity<span class="sc">$</span>chained<span class="sc">$</span>covariance_handling[<span class="fu">c</span>(<span class="st">&quot;weighting_requested&quot;</span>, <span class="st">&quot;weighting_canonical&quot;</span>,</span>
+<span id="cb85-15"><a href="#cb85-15" aria-hidden="true" tabindex="-1"></a>       <span class="st">&quot;handler_invoked&quot;</span>, <span class="st">&quot;handler_used&quot;</span>, <span class="st">&quot;trigger_reason&quot;</span>, <span class="st">&quot;lambda&quot;</span>)])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>$optimal
-$optimal$weighting_requested
-[1] &quot;optimal&quot;
+<pre><code>$within
+$within$weighting_requested
+[1] &quot;within&quot;
 
-$optimal$weighting_canonical
-[1] &quot;optimal&quot;
+$within$weighting_canonical
+[1] &quot;within&quot;
 
-$optimal$handler_invoked
-[1] TRUE
+$within$handler_invoked
+[1] FALSE
 
-$optimal$handler_used
-[1] &quot;tikhonov&quot;
+$within$handler_used
+[1] &quot;none&quot;
 
-$optimal$trigger_reason
-[1] &quot;roundoff_negative_psd&quot;
+$within$trigger_reason
+[1] &quot;well_conditioned_pd&quot;
 
-$optimal$lambda
-[1] 0.0004199046
+$within$lambda
+[1] NA
 
 
-$optimal_conditioning
-$optimal_conditioning$rho
-[1] 0
+$within_conditioning
+$within_conditioning$rho
+[1] 0.8121013
 
-$optimal_conditioning$d_min
-[1] -2.29311e-14
+$within_conditioning$d_min
+[1] 42.44753
 
-$optimal_conditioning$d_max
-[1] 24.58412
+$within_conditioning$d_max
+[1] 52.26877
 
 
 $identity
@@ -6095,7 +6145,7 @@ $identity$trigger_reason
 $identity$lambda
 [1] NA</code></pre>
 </div>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb86"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb86-1"><a href="#cb86-1" aria-hidden="true" tabindex="-1"></a>fit_identity<span class="sc">$</span>chained<span class="sc">$</span>public[<span class="fu">c</span>(<span class="st">&quot;counted_work_limit&quot;</span>, <span class="st">&quot;work_cap&quot;</span>)]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb87"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb87-1"><a href="#cb87-1" aria-hidden="true" tabindex="-1"></a>fit_identity<span class="sc">$</span>chained<span class="sc">$</span>public[<span class="fu">c</span>(<span class="st">&quot;counted_work_limit&quot;</span>, <span class="st">&quot;work_cap&quot;</span>)]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>$counted_work_limit
 [1] Inf
@@ -6123,13 +6173,13 @@ $work_cap$meaning
 <p>Workspace and estimated work limits do not cap total process memory or elapsed time. <code>print_details = TRUE</code> provides progress messages; <code>chunk_rows</code> can be set in <code>control</code> when needed. Too little workspace or a binding work cap produces a refusal, with no automatic estimator substitution. Probability safeguards cap fitted treatment propensities at <code>1 - 1e-6</code> and floor inverse observation denominators at <code>1e-6</code>; they do not rescue separation, deficient rank, or unsupported predictions. See <a href="https://github.com/dvbn/cdid/blob/main/docs/help/troubleshooting.md">diagnosing failures</a> and <a href="https://github.com/dvbn/cdid/blob/main/docs/methods/gmm.md">GMM</a>.</p>
 <p>For point estimates alone, turn off influence-function computation. This fit has no standard errors, pretrend test, or subsequent aggregation (<a href="https://github.com/dvbn/cdid/blob/main/docs/reference/results.md#point-estimates-only">Point estimates only</a>).</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb88"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb88-1"><a href="#cb88-1" aria-hidden="true" tabindex="-1"></a>fit_point <span class="ot">&lt;-</span> cdid<span class="sc">::</span><span class="fu">att_gt</span>(</span>
-<span id="cb88-2"><a href="#cb88-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;time&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">gname =</span> <span class="st">&quot;g&quot;</span>,</span>
-<span id="cb88-3"><a href="#cb88-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">xformla =</span> <span class="sc">~</span> x <span class="sc">+</span> z, <span class="at">data =</span> balanced_panel, <span class="at">frame =</span> units,</span>
-<span id="cb88-4"><a href="#cb88-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">control_group =</span> <span class="st">&quot;nevertreated&quot;</span>, <span class="at">est_method =</span> <span class="st">&quot;dr&quot;</span>, <span class="at">selection =</span> <span class="st">&quot;none&quot;</span>,</span>
-<span id="cb88-5"><a href="#cb88-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">pt_assumption =</span> <span class="st">&quot;post&quot;</span>, <span class="at">compute_inffunc =</span> <span class="cn">FALSE</span>, <span class="at">bstrap =</span> <span class="cn">FALSE</span>, <span class="at">cband =</span> <span class="cn">FALSE</span></span>
-<span id="cb88-6"><a href="#cb88-6" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb88-7"><a href="#cb88-7" aria-hidden="true" tabindex="-1"></a>knitr<span class="sc">::</span><span class="fu">kable</span>(cdid<span class="sc">::</span><span class="fu">tidy</span>(fit_point)[, <span class="fu">c</span>(<span class="st">&quot;target.id&quot;</span>, <span class="st">&quot;estimate&quot;</span>, <span class="st">&quot;std.error&quot;</span>, <span class="st">&quot;available&quot;</span>)], <span class="at">digits =</span> <span class="dv">4</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb89"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb89-1"><a href="#cb89-1" aria-hidden="true" tabindex="-1"></a>fit_point <span class="ot">&lt;-</span> cdid<span class="sc">::</span><span class="fu">att_gt</span>(</span>
+<span id="cb89-2"><a href="#cb89-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;time&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">gname =</span> <span class="st">&quot;g&quot;</span>,</span>
+<span id="cb89-3"><a href="#cb89-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">xformla =</span> <span class="sc">~</span> x <span class="sc">+</span> z, <span class="at">data =</span> balanced_panel, <span class="at">frame =</span> units,</span>
+<span id="cb89-4"><a href="#cb89-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">control_group =</span> <span class="st">&quot;nevertreated&quot;</span>, <span class="at">est_method =</span> <span class="st">&quot;dr&quot;</span>, <span class="at">selection =</span> <span class="st">&quot;none&quot;</span>,</span>
+<span id="cb89-5"><a href="#cb89-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">pt_assumption =</span> <span class="st">&quot;post&quot;</span>, <span class="at">compute_inffunc =</span> <span class="cn">FALSE</span>, <span class="at">bstrap =</span> <span class="cn">FALSE</span>, <span class="at">cband =</span> <span class="cn">FALSE</span></span>
+<span id="cb89-6"><a href="#cb89-6" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb89-7"><a href="#cb89-7" aria-hidden="true" tabindex="-1"></a>knitr<span class="sc">::</span><span class="fu">kable</span>(cdid<span class="sc">::</span><span class="fu">tidy</span>(fit_point)[, <span class="fu">c</span>(<span class="st">&quot;target.id&quot;</span>, <span class="st">&quot;estimate&quot;</span>, <span class="st">&quot;std.error&quot;</span>, <span class="st">&quot;available&quot;</span>)], <span class="at">digits =</span> <span class="dv">4</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output-display">
 <table class="caption-top table table-sm table-striped small">
 <thead>
@@ -6234,14 +6284,14 @@ $work_cap$meaning
 </tbody>
 </table>
 </div>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb89"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb89-1"><a href="#cb89-1" aria-hidden="true" tabindex="-1"></a>fit_point<span class="sc">$</span>chained<span class="sc">$</span>inference<span class="sc">$</span>kind</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb90"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb90-1"><a href="#cb90-1" aria-hidden="true" tabindex="-1"></a>fit_point<span class="sc">$</span>chained<span class="sc">$</span>inference<span class="sc">$</span>kind</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>[1] &quot;not_computed&quot;</code></pre>
 </div>
 </div>
 <p>The next chunk is deliberately <strong>not run when rendering</strong>. Run it manually only to see the documented refusal: <code>aggte()</code> requires stored influence functions. It is an expected API restriction, not a catch-all for an unexpected fitting failure.</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb91"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb91-1"><a href="#cb91-1" aria-hidden="true" tabindex="-1"></a>cdid<span class="sc">::</span><span class="fu">aggte</span>(fit_point, <span class="at">type =</span> <span class="st">&quot;simple&quot;</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb92"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb92-1"><a href="#cb92-1" aria-hidden="true" tabindex="-1"></a>cdid<span class="sc">::</span><span class="fu">aggte</span>(fit_point, <span class="at">type =</span> <span class="st">&quot;simple&quot;</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p><strong>What to inspect and try changing:</strong> Compare <code>fit_point</code>’s estimates with <code>fit_bal</code> by cohort and date. Compare identity and optimal fits on the same observations without treating either as uniformly more efficient. Inspect support reasons (<a href="#fitted-support">Section 7</a>) separately from covariance regularization: the former concerns available effects, while the latter concerns the weighting of valid comparison moments.</p>
 </section>
@@ -6249,16 +6299,16 @@ $work_cap$meaning
 <h2 class="anchored" data-anchor-id="guide-15">15. Execution Options, Custom Estimators and Supported Limits</h2>
 <p>Keep ordinary exploration serial. If multiplier products become the expensive step, <code>pl = TRUE, cores = 2</code> requires the matching <code>control = list(workers = 2)</code>. Only the multiplier products run in parallel; estimation stays serial, and worker buffers count toward the same workspace. Signs are drawn in the calling session. This optional call is shown but excluded from rendering so the guide does not start worker processes automatically.</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb92"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb92-1"><a href="#cb92-1" aria-hidden="true" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">20261104</span>)</span>
-<span id="cb92-2"><a href="#cb92-2" aria-hidden="true" tabindex="-1"></a>fit_parallel <span class="ot">&lt;-</span> cdid<span class="sc">::</span><span class="fu">att_gt</span>(</span>
-<span id="cb92-3"><a href="#cb92-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;time&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">gname =</span> <span class="st">&quot;g&quot;</span>,</span>
-<span id="cb92-4"><a href="#cb92-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">xformla =</span> <span class="sc">~</span> x <span class="sc">+</span> z, <span class="at">data =</span> balanced_panel, <span class="at">frame =</span> units,</span>
-<span id="cb92-5"><a href="#cb92-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">control_group =</span> <span class="st">&quot;nevertreated&quot;</span>, <span class="at">est_method =</span> <span class="st">&quot;dr&quot;</span>, <span class="at">selection =</span> <span class="st">&quot;none&quot;</span>,</span>
-<span id="cb92-6"><a href="#cb92-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">pt_assumption =</span> <span class="st">&quot;post&quot;</span>, <span class="at">bstrap =</span> <span class="cn">TRUE</span>, <span class="at">cband =</span> <span class="cn">TRUE</span>, <span class="at">biters =</span> bootstrap_draws,</span>
-<span id="cb92-7"><a href="#cb92-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">pl =</span> <span class="cn">TRUE</span>, <span class="at">cores =</span> <span class="dv">2</span>L,</span>
-<span id="cb92-8"><a href="#cb92-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">control =</span> <span class="fu">list</span>(<span class="at">workers =</span> <span class="dv">2</span>L, <span class="at">numeric_workspace_bytes =</span> workspace_bytes)</span>
-<span id="cb92-9"><a href="#cb92-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb92-10"><a href="#cb92-10" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(fit_parallel)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb93"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb93-1"><a href="#cb93-1" aria-hidden="true" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">20261104</span>)</span>
+<span id="cb93-2"><a href="#cb93-2" aria-hidden="true" tabindex="-1"></a>fit_parallel <span class="ot">&lt;-</span> cdid<span class="sc">::</span><span class="fu">att_gt</span>(</span>
+<span id="cb93-3"><a href="#cb93-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;time&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">gname =</span> <span class="st">&quot;g&quot;</span>,</span>
+<span id="cb93-4"><a href="#cb93-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">xformla =</span> <span class="sc">~</span> x <span class="sc">+</span> z, <span class="at">data =</span> balanced_panel, <span class="at">frame =</span> units,</span>
+<span id="cb93-5"><a href="#cb93-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">control_group =</span> <span class="st">&quot;nevertreated&quot;</span>, <span class="at">est_method =</span> <span class="st">&quot;dr&quot;</span>, <span class="at">selection =</span> <span class="st">&quot;none&quot;</span>,</span>
+<span id="cb93-6"><a href="#cb93-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">pt_assumption =</span> <span class="st">&quot;post&quot;</span>, <span class="at">bstrap =</span> <span class="cn">TRUE</span>, <span class="at">cband =</span> <span class="cn">TRUE</span>, <span class="at">biters =</span> bootstrap_draws,</span>
+<span id="cb93-7"><a href="#cb93-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">pl =</span> <span class="cn">TRUE</span>, <span class="at">cores =</span> <span class="dv">2</span>L,</span>
+<span id="cb93-8"><a href="#cb93-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">control =</span> <span class="fu">list</span>(<span class="at">workers =</span> <span class="dv">2</span>L, <span class="at">numeric_workspace_bytes =</span> workspace_bytes)</span>
+<span id="cb93-9"><a href="#cb93-9" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb93-10"><a href="#cb93-10" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(fit_parallel)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>A custom <code>est_method</code> is a callable IPW implementation with the documented signature <code>f(y1, y0, D, covariates, i.weights, inffunc = TRUE, ...)</code>. It must return a finite scalar <code>ATT</code> and <code>att.inf.func</code> with one entry per supplied row, in order, including the correct nuisance-estimation contribution. The supplied weights already incorporate the route’s response-rate adjustment. Under conditional observation weighting, it must additionally provide <code>log_weight_gradient</code>, the derivative of ATT with respect to each supplied log weight. Shape checks do not establish that the mathematics is valid. This guide uses the built-in estimators; a full custom implementation is a separate development task, documented in <a href="https://github.com/dvbn/cdid/blob/main/docs/methods/treatment.md">Treatment adjustment</a>.</p>
 <table class="caption-top table">
@@ -6301,13 +6351,13 @@ $work_cap$meaning
 <h2 class="anchored" data-anchor-id="guide-16">16. Save Results and Choose Your Next Experiment</h2>
 <p>The following optional chunk writes only to the clearly named <code>guide-output/</code> folder under the project root: a cell table, dynamic table, plot, and serialized fit. It is excluded from automatic rendering; run it deliberately when you want files. <code>saveRDS()</code> preserves the fitted result for later <code>readRDS()</code> in a compatible package environment (<a href="https://github.com/dvbn/cdid/blob/main/docs/reference/results.md#saving-and-exporting">Saving and exporting</a>).</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb93"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb93-1"><a href="#cb93-1" aria-hidden="true" tabindex="-1"></a>output_dir <span class="ot">&lt;-</span> <span class="fu">file.path</span>(proj_root, <span class="st">&quot;guide-output&quot;</span>)</span>
-<span id="cb93-2"><a href="#cb93-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="sc">!</span><span class="fu">dir.exists</span>(output_dir)) <span class="fu">dir.create</span>(output_dir, <span class="at">recursive =</span> <span class="cn">TRUE</span>)</span>
-<span id="cb93-3"><a href="#cb93-3" aria-hidden="true" tabindex="-1"></a>utils<span class="sc">::</span><span class="fu">write.csv</span>(cdid<span class="sc">::</span><span class="fu">tidy</span>(fit_bal), <span class="fu">file.path</span>(output_dir, <span class="st">&quot;balanced-cells.csv&quot;</span>), <span class="at">row.names =</span> <span class="cn">FALSE</span>)</span>
-<span id="cb93-4"><a href="#cb93-4" aria-hidden="true" tabindex="-1"></a>utils<span class="sc">::</span><span class="fu">write.csv</span>(cdid<span class="sc">::</span><span class="fu">tidy</span>(agg_bal_dynamic), <span class="fu">file.path</span>(output_dir, <span class="st">&quot;balanced-dynamic.csv&quot;</span>), <span class="at">row.names =</span> <span class="cn">FALSE</span>)</span>
-<span id="cb93-5"><a href="#cb93-5" aria-hidden="true" tabindex="-1"></a>ggplot2<span class="sc">::</span><span class="fu">ggsave</span>(<span class="fu">file.path</span>(output_dir, <span class="st">&quot;balanced-dynamic.png&quot;</span>),</span>
-<span id="cb93-6"><a href="#cb93-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">plot =</span> cdid<span class="sc">::</span><span class="fu">ggdid</span>(agg_bal_dynamic), <span class="at">width =</span> <span class="dv">7</span>, <span class="at">height =</span> <span class="dv">4</span>, <span class="at">dpi =</span> <span class="dv">150</span>)</span>
-<span id="cb93-7"><a href="#cb93-7" aria-hidden="true" tabindex="-1"></a><span class="fu">saveRDS</span>(fit_bal, <span class="fu">file.path</span>(output_dir, <span class="st">&quot;balanced-fit.rds&quot;</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb94"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb94-1"><a href="#cb94-1" aria-hidden="true" tabindex="-1"></a>output_dir <span class="ot">&lt;-</span> <span class="fu">file.path</span>(proj_root, <span class="st">&quot;guide-output&quot;</span>)</span>
+<span id="cb94-2"><a href="#cb94-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="sc">!</span><span class="fu">dir.exists</span>(output_dir)) <span class="fu">dir.create</span>(output_dir, <span class="at">recursive =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb94-3"><a href="#cb94-3" aria-hidden="true" tabindex="-1"></a>utils<span class="sc">::</span><span class="fu">write.csv</span>(cdid<span class="sc">::</span><span class="fu">tidy</span>(fit_bal), <span class="fu">file.path</span>(output_dir, <span class="st">&quot;balanced-cells.csv&quot;</span>), <span class="at">row.names =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb94-4"><a href="#cb94-4" aria-hidden="true" tabindex="-1"></a>utils<span class="sc">::</span><span class="fu">write.csv</span>(cdid<span class="sc">::</span><span class="fu">tidy</span>(agg_bal_dynamic), <span class="fu">file.path</span>(output_dir, <span class="st">&quot;balanced-dynamic.csv&quot;</span>), <span class="at">row.names =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb94-5"><a href="#cb94-5" aria-hidden="true" tabindex="-1"></a>ggplot2<span class="sc">::</span><span class="fu">ggsave</span>(<span class="fu">file.path</span>(output_dir, <span class="st">&quot;balanced-dynamic.png&quot;</span>),</span>
+<span id="cb94-6"><a href="#cb94-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">plot =</span> cdid<span class="sc">::</span><span class="fu">ggdid</span>(agg_bal_dynamic), <span class="at">width =</span> <span class="dv">7</span>, <span class="at">height =</span> <span class="dv">4</span>, <span class="at">dpi =</span> <span class="dv">150</span>)</span>
+<span id="cb94-7"><a href="#cb94-7" aria-hidden="true" tabindex="-1"></a><span class="fu">saveRDS</span>(fit_bal, <span class="fu">file.path</span>(output_dir, <span class="st">&quot;balanced-fit.rds&quot;</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>Use this workflow for an experiment:</p>
 <ol type="1">
@@ -6323,74 +6373,74 @@ $work_cap$meaning
 <h2 class="anchored" data-anchor-id="guide-17">17. Binary Treatment That Can Stop and Restart (<code>dname</code>)</h2>
 <p>Sections 4 to 16 used the cohort route, where <code>gname</code> holds an adoption date and effects may evolve with time since adoption. This section changes the treatment design. Supply <code>dname</code> when the question is about switching treatment under a static model without carryover. The current treatment indicator must be known at every unit-date row, including rows with missing outcomes. An entry comparison uses units that stay untreated as controls. An exit comparison uses units that stay treated, and the effect is reported on the same treated-minus-untreated scale as entry. The aggregate weights effects by the number of switchers in each requested transition. It is available when all requested transition effects are identified. See <a href="https://github.com/dvbn/cdid/blob/main/docs/methods/static-entry-exit.md">When treatment can stop and restart</a>.</p>
 <p>The following draw has a true contemporaneous effect of 1.5. Both fits start from the same panel. The second masks outcomes with a probability that depends on <code>x</code> and adjusts for the missing changes. Change <code>treatment_method</code> to compare IPW, OR and DR. Use <code>missing_adjustment</code> to choose the observation correction, and <code>probability_model</code> to change how observation probabilities are fitted. For direct pair weighting, you can also change <code>observation_sample</code> to fit among repeat- or ever-observed units. The simulation provides the transport ratio for those examples.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb94"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb94-1"><a href="#cb94-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="st">&quot;dname&quot;</span> <span class="sc">%in%</span> <span class="fu">names</span>(<span class="fu">formals</span>(cdid<span class="sc">::</span>att_gt))) {</span>
-<span id="cb94-2"><a href="#cb94-2" aria-hidden="true" tabindex="-1"></a>  static_example <span class="ot">&lt;-</span> <span class="fu">local</span>({</span>
-<span id="cb94-3"><a href="#cb94-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">set.seed</span>(<span class="dv">20261106</span>)</span>
-<span id="cb94-4"><a href="#cb94-4" aria-hidden="true" tabindex="-1"></a>    n_units <span class="ot">&lt;-</span> <span class="dv">400</span>L</span>
-<span id="cb94-5"><a href="#cb94-5" aria-hidden="true" tabindex="-1"></a>    tau <span class="ot">&lt;-</span> <span class="fl">1.5</span></span>
-<span id="cb94-6"><a href="#cb94-6" aria-hidden="true" tabindex="-1"></a>    treatment_method <span class="ot">&lt;-</span> <span class="st">&quot;dr&quot;</span>  <span class="co"># &quot;ipw&quot;, &quot;reg&quot;, or &quot;dr&quot;</span></span>
-<span id="cb94-7"><a href="#cb94-7" aria-hidden="true" tabindex="-1"></a>    missing_adjustment <span class="ot">&lt;-</span> <span class="st">&quot;dr&quot;</span>  <span class="co"># &quot;none&quot;, &quot;ipw&quot;, &quot;imputation&quot;, or &quot;dr&quot;</span></span>
-<span id="cb94-8"><a href="#cb94-8" aria-hidden="true" tabindex="-1"></a>    probability_model <span class="ot">&lt;-</span> <span class="st">&quot;pair_logit&quot;</span>  <span class="co"># or &quot;independent_period_logit&quot;</span></span>
-<span id="cb94-9"><a href="#cb94-9" aria-hidden="true" tabindex="-1"></a>    observation_sample <span class="ot">&lt;-</span> <span class="st">&quot;F&quot;</span>  <span class="co"># &quot;A&quot; or &quot;B&quot; with &quot;ipw&quot; and &quot;pair_logit&quot;</span></span>
-<span id="cb94-10"><a href="#cb94-10" aria-hidden="true" tabindex="-1"></a>    show_models <span class="ot">&lt;-</span> <span class="cn">TRUE</span></span>
-<span id="cb94-11"><a href="#cb94-11" aria-hidden="true" tabindex="-1"></a>    <span class="fu">stopifnot</span>(observation_sample <span class="sc">==</span> <span class="st">&quot;F&quot;</span> <span class="sc">||</span></span>
-<span id="cb94-12"><a href="#cb94-12" aria-hidden="true" tabindex="-1"></a>      (missing_adjustment <span class="sc">==</span> <span class="st">&quot;ipw&quot;</span> <span class="sc">&amp;&amp;</span> probability_model <span class="sc">==</span> <span class="st">&quot;pair_logit&quot;</span>))</span>
-<span id="cb94-13"><a href="#cb94-13" aria-hidden="true" tabindex="-1"></a>    dates <span class="ot">&lt;-</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span></span>
-<span id="cb94-14"><a href="#cb94-14" aria-hidden="true" tabindex="-1"></a>    paths <span class="ot">&lt;-</span> <span class="fu">rbind</span>(<span class="fu">c</span>(<span class="dv">0</span>L, <span class="dv">0</span>L, <span class="dv">0</span>L, <span class="dv">0</span>L), <span class="fu">c</span>(<span class="dv">0</span>L, <span class="dv">1</span>L, <span class="dv">1</span>L, <span class="dv">0</span>L),</span>
-<span id="cb94-15"><a href="#cb94-15" aria-hidden="true" tabindex="-1"></a>      <span class="fu">c</span>(<span class="dv">1</span>L, <span class="dv">1</span>L, <span class="dv">0</span>L, <span class="dv">1</span>L), <span class="fu">c</span>(<span class="dv">1</span>L, <span class="dv">0</span>L, <span class="dv">0</span>L, <span class="dv">1</span>L), <span class="fu">c</span>(<span class="dv">1</span>L, <span class="dv">1</span>L, <span class="dv">1</span>L, <span class="dv">1</span>L))</span>
-<span id="cb94-16"><a href="#cb94-16" aria-hidden="true" tabindex="-1"></a>    x <span class="ot">&lt;-</span> <span class="fu">rbinom</span>(n_units, <span class="dv">1</span>L, <span class="fl">0.5</span>)</span>
-<span id="cb94-17"><a href="#cb94-17" aria-hidden="true" tabindex="-1"></a>    alpha <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(n_units, <span class="at">sd =</span> <span class="fl">0.5</span>)</span>
-<span id="cb94-18"><a href="#cb94-18" aria-hidden="true" tabindex="-1"></a>    path <span class="ot">&lt;-</span> <span class="fu">sample.int</span>(<span class="fu">nrow</span>(paths), n_units, <span class="at">replace =</span> <span class="cn">TRUE</span>)</span>
-<span id="cb94-19"><a href="#cb94-19" aria-hidden="true" tabindex="-1"></a>    complete <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">id =</span> <span class="fu">rep</span>(<span class="fu">seq_len</span>(n_units), <span class="at">each =</span> <span class="fu">length</span>(dates)),</span>
-<span id="cb94-20"><a href="#cb94-20" aria-hidden="true" tabindex="-1"></a>      <span class="at">time =</span> <span class="fu">rep</span>(dates, <span class="at">times =</span> n_units), <span class="at">x =</span> <span class="fu">rep</span>(x, <span class="at">each =</span> <span class="fu">length</span>(dates)),</span>
-<span id="cb94-21"><a href="#cb94-21" aria-hidden="true" tabindex="-1"></a>      <span class="at">d =</span> <span class="fu">as.integer</span>(<span class="fu">t</span>(paths[path, ])))</span>
-<span id="cb94-22"><a href="#cb94-22" aria-hidden="true" tabindex="-1"></a>    complete<span class="sc">$</span>y <span class="ot">&lt;-</span> <span class="fu">rep</span>(alpha, <span class="at">each =</span> <span class="fu">length</span>(dates)) <span class="sc">+</span></span>
-<span id="cb94-23"><a href="#cb94-23" aria-hidden="true" tabindex="-1"></a>      (<span class="fl">0.3</span> <span class="sc">+</span> <span class="fl">0.2</span> <span class="sc">*</span> complete<span class="sc">$</span>x) <span class="sc">*</span> complete<span class="sc">$</span>time <span class="sc">+</span> tau <span class="sc">*</span> complete<span class="sc">$</span>d <span class="sc">+</span></span>
-<span id="cb94-24"><a href="#cb94-24" aria-hidden="true" tabindex="-1"></a>      <span class="fu">rnorm</span>(<span class="fu">nrow</span>(complete), <span class="at">sd =</span> <span class="fl">0.4</span>)</span>
-<span id="cb94-25"><a href="#cb94-25" aria-hidden="true" tabindex="-1"></a>    missing <span class="ot">&lt;-</span> complete</span>
-<span id="cb94-26"><a href="#cb94-26" aria-hidden="true" tabindex="-1"></a>    p <span class="ot">&lt;-</span> <span class="fu">plogis</span>(<span class="fl">0.8</span> <span class="sc">+</span> <span class="fl">0.4</span> <span class="sc">*</span> missing<span class="sc">$</span>x)</span>
-<span id="cb94-27"><a href="#cb94-27" aria-hidden="true" tabindex="-1"></a>    observed <span class="ot">&lt;-</span> <span class="fu">runif</span>(<span class="fu">nrow</span>(missing)) <span class="sc">&lt;</span> p</span>
-<span id="cb94-28"><a href="#cb94-28" aria-hidden="true" tabindex="-1"></a>    missing<span class="sc">$</span>y[<span class="sc">!</span>observed] <span class="ot">&lt;-</span> <span class="cn">NA_real_</span></span>
-<span id="cb94-29"><a href="#cb94-29" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb94-30"><a href="#cb94-30" aria-hidden="true" tabindex="-1"></a>    model <span class="ot">&lt;-</span> <span class="fu">list</span>(<span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;time&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">dname =</span> <span class="st">&quot;d&quot;</span>,</span>
-<span id="cb94-31"><a href="#cb94-31" aria-hidden="true" tabindex="-1"></a>      <span class="at">xformla =</span> <span class="sc">~</span> x, <span class="at">est_method =</span> treatment_method, <span class="at">bstrap =</span> <span class="cn">FALSE</span>, <span class="at">cband =</span> <span class="cn">FALSE</span>)</span>
-<span id="cb94-32"><a href="#cb94-32" aria-hidden="true" tabindex="-1"></a>    balanced <span class="ot">&lt;-</span> <span class="fu">do.call</span>(cdid<span class="sc">::</span>att_gt, <span class="fu">c</span>(model, <span class="fu">list</span>(<span class="at">data =</span> complete)))</span>
-<span id="cb94-33"><a href="#cb94-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (missing_adjustment <span class="sc">!=</span> <span class="st">&quot;none&quot;</span>) {</span>
-<span id="cb94-34"><a href="#cb94-34" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>selection <span class="ot">&lt;-</span> <span class="st">&quot;conditional_mtar&quot;</span></span>
-<span id="cb94-35"><a href="#cb94-35" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>selection_est_method <span class="ot">&lt;-</span> missing_adjustment</span>
-<span id="cb94-36"><a href="#cb94-36" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb94-37"><a href="#cb94-37" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (missing_adjustment <span class="sc">%in%</span> <span class="fu">c</span>(<span class="st">&quot;ipw&quot;</span>, <span class="st">&quot;dr&quot;</span>)) {</span>
-<span id="cb94-38"><a href="#cb94-38" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>selection_model <span class="ot">&lt;-</span> probability_model</span>
-<span id="cb94-39"><a href="#cb94-39" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>selection_xformla <span class="ot">&lt;-</span> <span class="er">~</span> x</span>
-<span id="cb94-40"><a href="#cb94-40" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>selection_pooling <span class="ot">&lt;-</span> <span class="st">&quot;within_group&quot;</span></span>
-<span id="cb94-41"><a href="#cb94-41" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (observation_sample <span class="sc">!=</span> <span class="st">&quot;F&quot;</span>) {</span>
-<span id="cb94-42"><a href="#cb94-42" aria-hidden="true" tabindex="-1"></a>        cutoff <span class="ot">&lt;-</span> <span class="cf">if</span> (observation_sample <span class="sc">==</span> <span class="st">&quot;A&quot;</span>) <span class="dv">1</span>L <span class="cf">else</span> <span class="dv">0</span>L</span>
-<span id="cb94-43"><a href="#cb94-43" aria-hidden="true" tabindex="-1"></a>        eligible_prob <span class="ot">&lt;-</span> <span class="cf">function</span>(pr) <span class="fu">pbinom</span>(cutoff, <span class="fu">length</span>(dates), pr, <span class="at">lower.tail =</span> <span class="cn">FALSE</span>)</span>
-<span id="cb94-44"><a href="#cb94-44" aria-hidden="true" tabindex="-1"></a>        missing<span class="sc">$</span>rho <span class="ot">&lt;-</span> <span class="fu">eligible_prob</span>(p) <span class="sc">/</span> <span class="fu">mean</span>(<span class="fu">eligible_prob</span>(<span class="fu">plogis</span>(<span class="fl">0.8</span> <span class="sc">+</span> <span class="fl">0.4</span> <span class="sc">*</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>))))</span>
-<span id="cb94-45"><a href="#cb94-45" aria-hidden="true" tabindex="-1"></a>        model<span class="sc">$</span>selection_universe <span class="ot">&lt;-</span> observation_sample</span>
-<span id="cb94-46"><a href="#cb94-46" aria-hidden="true" tabindex="-1"></a>        model<span class="sc">$</span>selection_rho <span class="ot">&lt;-</span> <span class="st">&quot;rho&quot;</span></span>
-<span id="cb94-47"><a href="#cb94-47" aria-hidden="true" tabindex="-1"></a>        model<span class="sc">$</span>selection_justification <span class="ot">&lt;-</span> <span class="st">&quot;Known probability from the simulated design, shared across transition roles.&quot;</span></span>
-<span id="cb94-48"><a href="#cb94-48" aria-hidden="true" tabindex="-1"></a>      }</span>
-<span id="cb94-49"><a href="#cb94-49" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb94-50"><a href="#cb94-50" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (missing_adjustment <span class="sc">%in%</span> <span class="fu">c</span>(<span class="st">&quot;imputation&quot;</span>, <span class="st">&quot;dr&quot;</span>)) {</span>
-<span id="cb94-51"><a href="#cb94-51" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>imputation_pooling <span class="ot">&lt;-</span> <span class="st">&quot;within_group&quot;</span></span>
-<span id="cb94-52"><a href="#cb94-52" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb94-53"><a href="#cb94-53" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (show_models) model<span class="sc">$</span>control <span class="ot">&lt;-</span> <span class="fu">list</span>(<span class="at">keep_nuisance =</span> <span class="cn">TRUE</span>)</span>
-<span id="cb94-54"><a href="#cb94-54" aria-hidden="true" tabindex="-1"></a>    chained <span class="ot">&lt;-</span> <span class="fu">do.call</span>(cdid<span class="sc">::</span>att_gt, <span class="fu">c</span>(model, <span class="fu">list</span>(<span class="at">data =</span> missing)))</span>
-<span id="cb94-55"><a href="#cb94-55" aria-hidden="true" tabindex="-1"></a>    <span class="fu">list</span>(<span class="at">balanced =</span> balanced, <span class="at">chained =</span> chained, <span class="at">true_effect =</span> tau, <span class="at">show_models =</span> show_models)</span>
-<span id="cb94-56"><a href="#cb94-56" aria-hidden="true" tabindex="-1"></a>  })</span>
-<span id="cb94-57"><a href="#cb94-57" aria-hidden="true" tabindex="-1"></a>  fits <span class="ot">&lt;-</span> static_example[<span class="fu">c</span>(<span class="st">&quot;balanced&quot;</span>, <span class="st">&quot;chained&quot;</span>)]</span>
-<span id="cb94-58"><a href="#cb94-58" aria-hidden="true" tabindex="-1"></a>  stat_table <span class="ot">&lt;-</span> <span class="fu">do.call</span>(rbind, <span class="fu">lapply</span>(fits, <span class="cf">function</span>(fit) {</span>
-<span id="cb94-59"><a href="#cb94-59" aria-hidden="true" tabindex="-1"></a>    <span class="fu">data.frame</span>(<span class="at">estimate =</span> fit<span class="sc">$</span>aggregate<span class="sc">$</span>estimate, <span class="at">std.error =</span> fit<span class="sc">$</span>aggregate<span class="sc">$</span>se,</span>
-<span id="cb94-60"><a href="#cb94-60" aria-hidden="true" tabindex="-1"></a>      <span class="at">true_effect =</span> static_example<span class="sc">$</span>true_effect, <span class="at">study_units =</span> fit<span class="sc">$</span>n,</span>
-<span id="cb94-61"><a href="#cb94-61" aria-hidden="true" tabindex="-1"></a>      <span class="at">available_transitions =</span> <span class="fu">sum</span>(fit<span class="sc">$</span>available))</span>
-<span id="cb94-62"><a href="#cb94-62" aria-hidden="true" tabindex="-1"></a>  }))</span>
-<span id="cb94-63"><a href="#cb94-63" aria-hidden="true" tabindex="-1"></a>  <span class="fu">print</span>(knitr<span class="sc">::</span><span class="fu">kable</span>(stat_table, <span class="at">digits =</span> <span class="dv">4</span>, <span class="at">caption =</span> <span class="st">&quot;Static switcher-weighted effects&quot;</span>))</span>
-<span id="cb94-64"><a href="#cb94-64" aria-hidden="true" tabindex="-1"></a>  knitr<span class="sc">::</span><span class="fu">kable</span>(cdid<span class="sc">::</span><span class="fu">tidy</span>(static_example<span class="sc">$</span>chained)[, <span class="fu">c</span>(<span class="st">&quot;time&quot;</span>, <span class="st">&quot;direction&quot;</span>, <span class="st">&quot;estimate&quot;</span>, <span class="st">&quot;std.error&quot;</span>, <span class="st">&quot;available&quot;</span>)],</span>
-<span id="cb94-65"><a href="#cb94-65" aria-hidden="true" tabindex="-1"></a>    <span class="at">digits =</span> <span class="dv">4</span>, <span class="at">caption =</span> <span class="st">&quot;Chained STAT by transition date and direction&quot;</span>)</span>
-<span id="cb94-66"><a href="#cb94-66" aria-hidden="true" tabindex="-1"></a>} <span class="cf">else</span> {</span>
-<span id="cb94-67"><a href="#cb94-67" aria-hidden="true" tabindex="-1"></a>  <span class="fu">cat</span>(<span class="st">&quot;This example requires a cdid build with att_gt(dname = ...).</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
-<span id="cb94-68"><a href="#cb94-68" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb95"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb95-1"><a href="#cb95-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="st">&quot;dname&quot;</span> <span class="sc">%in%</span> <span class="fu">names</span>(<span class="fu">formals</span>(cdid<span class="sc">::</span>att_gt))) {</span>
+<span id="cb95-2"><a href="#cb95-2" aria-hidden="true" tabindex="-1"></a>  static_example <span class="ot">&lt;-</span> <span class="fu">local</span>({</span>
+<span id="cb95-3"><a href="#cb95-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">set.seed</span>(<span class="dv">20261106</span>)</span>
+<span id="cb95-4"><a href="#cb95-4" aria-hidden="true" tabindex="-1"></a>    n_units <span class="ot">&lt;-</span> <span class="dv">400</span>L</span>
+<span id="cb95-5"><a href="#cb95-5" aria-hidden="true" tabindex="-1"></a>    tau <span class="ot">&lt;-</span> <span class="fl">1.5</span></span>
+<span id="cb95-6"><a href="#cb95-6" aria-hidden="true" tabindex="-1"></a>    treatment_method <span class="ot">&lt;-</span> <span class="st">&quot;dr&quot;</span>  <span class="co"># &quot;ipw&quot;, &quot;reg&quot;, or &quot;dr&quot;</span></span>
+<span id="cb95-7"><a href="#cb95-7" aria-hidden="true" tabindex="-1"></a>    missing_adjustment <span class="ot">&lt;-</span> <span class="st">&quot;dr&quot;</span>  <span class="co"># &quot;none&quot;, &quot;ipw&quot;, &quot;imputation&quot;, or &quot;dr&quot;</span></span>
+<span id="cb95-8"><a href="#cb95-8" aria-hidden="true" tabindex="-1"></a>    probability_model <span class="ot">&lt;-</span> <span class="st">&quot;pair_logit&quot;</span>  <span class="co"># or &quot;independent_period_logit&quot;</span></span>
+<span id="cb95-9"><a href="#cb95-9" aria-hidden="true" tabindex="-1"></a>    observation_sample <span class="ot">&lt;-</span> <span class="st">&quot;F&quot;</span>  <span class="co"># &quot;A&quot; or &quot;B&quot; with &quot;ipw&quot; and &quot;pair_logit&quot;</span></span>
+<span id="cb95-10"><a href="#cb95-10" aria-hidden="true" tabindex="-1"></a>    show_models <span class="ot">&lt;-</span> <span class="cn">TRUE</span></span>
+<span id="cb95-11"><a href="#cb95-11" aria-hidden="true" tabindex="-1"></a>    <span class="fu">stopifnot</span>(observation_sample <span class="sc">==</span> <span class="st">&quot;F&quot;</span> <span class="sc">||</span></span>
+<span id="cb95-12"><a href="#cb95-12" aria-hidden="true" tabindex="-1"></a>      (missing_adjustment <span class="sc">==</span> <span class="st">&quot;ipw&quot;</span> <span class="sc">&amp;&amp;</span> probability_model <span class="sc">==</span> <span class="st">&quot;pair_logit&quot;</span>))</span>
+<span id="cb95-13"><a href="#cb95-13" aria-hidden="true" tabindex="-1"></a>    dates <span class="ot">&lt;-</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span></span>
+<span id="cb95-14"><a href="#cb95-14" aria-hidden="true" tabindex="-1"></a>    paths <span class="ot">&lt;-</span> <span class="fu">rbind</span>(<span class="fu">c</span>(<span class="dv">0</span>L, <span class="dv">0</span>L, <span class="dv">0</span>L, <span class="dv">0</span>L), <span class="fu">c</span>(<span class="dv">0</span>L, <span class="dv">1</span>L, <span class="dv">1</span>L, <span class="dv">0</span>L),</span>
+<span id="cb95-15"><a href="#cb95-15" aria-hidden="true" tabindex="-1"></a>      <span class="fu">c</span>(<span class="dv">1</span>L, <span class="dv">1</span>L, <span class="dv">0</span>L, <span class="dv">1</span>L), <span class="fu">c</span>(<span class="dv">1</span>L, <span class="dv">0</span>L, <span class="dv">0</span>L, <span class="dv">1</span>L), <span class="fu">c</span>(<span class="dv">1</span>L, <span class="dv">1</span>L, <span class="dv">1</span>L, <span class="dv">1</span>L))</span>
+<span id="cb95-16"><a href="#cb95-16" aria-hidden="true" tabindex="-1"></a>    x <span class="ot">&lt;-</span> <span class="fu">rbinom</span>(n_units, <span class="dv">1</span>L, <span class="fl">0.5</span>)</span>
+<span id="cb95-17"><a href="#cb95-17" aria-hidden="true" tabindex="-1"></a>    alpha <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(n_units, <span class="at">sd =</span> <span class="fl">0.5</span>)</span>
+<span id="cb95-18"><a href="#cb95-18" aria-hidden="true" tabindex="-1"></a>    path <span class="ot">&lt;-</span> <span class="fu">sample.int</span>(<span class="fu">nrow</span>(paths), n_units, <span class="at">replace =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb95-19"><a href="#cb95-19" aria-hidden="true" tabindex="-1"></a>    complete <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">id =</span> <span class="fu">rep</span>(<span class="fu">seq_len</span>(n_units), <span class="at">each =</span> <span class="fu">length</span>(dates)),</span>
+<span id="cb95-20"><a href="#cb95-20" aria-hidden="true" tabindex="-1"></a>      <span class="at">time =</span> <span class="fu">rep</span>(dates, <span class="at">times =</span> n_units), <span class="at">x =</span> <span class="fu">rep</span>(x, <span class="at">each =</span> <span class="fu">length</span>(dates)),</span>
+<span id="cb95-21"><a href="#cb95-21" aria-hidden="true" tabindex="-1"></a>      <span class="at">d =</span> <span class="fu">as.integer</span>(<span class="fu">t</span>(paths[path, ])))</span>
+<span id="cb95-22"><a href="#cb95-22" aria-hidden="true" tabindex="-1"></a>    complete<span class="sc">$</span>y <span class="ot">&lt;-</span> <span class="fu">rep</span>(alpha, <span class="at">each =</span> <span class="fu">length</span>(dates)) <span class="sc">+</span></span>
+<span id="cb95-23"><a href="#cb95-23" aria-hidden="true" tabindex="-1"></a>      (<span class="fl">0.3</span> <span class="sc">+</span> <span class="fl">0.2</span> <span class="sc">*</span> complete<span class="sc">$</span>x) <span class="sc">*</span> complete<span class="sc">$</span>time <span class="sc">+</span> tau <span class="sc">*</span> complete<span class="sc">$</span>d <span class="sc">+</span></span>
+<span id="cb95-24"><a href="#cb95-24" aria-hidden="true" tabindex="-1"></a>      <span class="fu">rnorm</span>(<span class="fu">nrow</span>(complete), <span class="at">sd =</span> <span class="fl">0.4</span>)</span>
+<span id="cb95-25"><a href="#cb95-25" aria-hidden="true" tabindex="-1"></a>    missing <span class="ot">&lt;-</span> complete</span>
+<span id="cb95-26"><a href="#cb95-26" aria-hidden="true" tabindex="-1"></a>    p <span class="ot">&lt;-</span> <span class="fu">plogis</span>(<span class="fl">0.8</span> <span class="sc">+</span> <span class="fl">0.4</span> <span class="sc">*</span> missing<span class="sc">$</span>x)</span>
+<span id="cb95-27"><a href="#cb95-27" aria-hidden="true" tabindex="-1"></a>    observed <span class="ot">&lt;-</span> <span class="fu">runif</span>(<span class="fu">nrow</span>(missing)) <span class="sc">&lt;</span> p</span>
+<span id="cb95-28"><a href="#cb95-28" aria-hidden="true" tabindex="-1"></a>    missing<span class="sc">$</span>y[<span class="sc">!</span>observed] <span class="ot">&lt;-</span> <span class="cn">NA_real_</span></span>
+<span id="cb95-29"><a href="#cb95-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb95-30"><a href="#cb95-30" aria-hidden="true" tabindex="-1"></a>    model <span class="ot">&lt;-</span> <span class="fu">list</span>(<span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;time&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">dname =</span> <span class="st">&quot;d&quot;</span>,</span>
+<span id="cb95-31"><a href="#cb95-31" aria-hidden="true" tabindex="-1"></a>      <span class="at">xformla =</span> <span class="sc">~</span> x, <span class="at">est_method =</span> treatment_method, <span class="at">bstrap =</span> <span class="cn">FALSE</span>, <span class="at">cband =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb95-32"><a href="#cb95-32" aria-hidden="true" tabindex="-1"></a>    balanced <span class="ot">&lt;-</span> <span class="fu">do.call</span>(cdid<span class="sc">::</span>att_gt, <span class="fu">c</span>(model, <span class="fu">list</span>(<span class="at">data =</span> complete)))</span>
+<span id="cb95-33"><a href="#cb95-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (missing_adjustment <span class="sc">!=</span> <span class="st">&quot;none&quot;</span>) {</span>
+<span id="cb95-34"><a href="#cb95-34" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>selection <span class="ot">&lt;-</span> <span class="st">&quot;conditional_mtar&quot;</span></span>
+<span id="cb95-35"><a href="#cb95-35" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>selection_est_method <span class="ot">&lt;-</span> missing_adjustment</span>
+<span id="cb95-36"><a href="#cb95-36" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb95-37"><a href="#cb95-37" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (missing_adjustment <span class="sc">%in%</span> <span class="fu">c</span>(<span class="st">&quot;ipw&quot;</span>, <span class="st">&quot;dr&quot;</span>)) {</span>
+<span id="cb95-38"><a href="#cb95-38" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>selection_model <span class="ot">&lt;-</span> probability_model</span>
+<span id="cb95-39"><a href="#cb95-39" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>selection_xformla <span class="ot">&lt;-</span> <span class="er">~</span> x</span>
+<span id="cb95-40"><a href="#cb95-40" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>selection_pooling <span class="ot">&lt;-</span> <span class="st">&quot;within_group&quot;</span></span>
+<span id="cb95-41"><a href="#cb95-41" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (observation_sample <span class="sc">!=</span> <span class="st">&quot;F&quot;</span>) {</span>
+<span id="cb95-42"><a href="#cb95-42" aria-hidden="true" tabindex="-1"></a>        cutoff <span class="ot">&lt;-</span> <span class="cf">if</span> (observation_sample <span class="sc">==</span> <span class="st">&quot;A&quot;</span>) <span class="dv">1</span>L <span class="cf">else</span> <span class="dv">0</span>L</span>
+<span id="cb95-43"><a href="#cb95-43" aria-hidden="true" tabindex="-1"></a>        eligible_prob <span class="ot">&lt;-</span> <span class="cf">function</span>(pr) <span class="fu">pbinom</span>(cutoff, <span class="fu">length</span>(dates), pr, <span class="at">lower.tail =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb95-44"><a href="#cb95-44" aria-hidden="true" tabindex="-1"></a>        missing<span class="sc">$</span>rho <span class="ot">&lt;-</span> <span class="fu">eligible_prob</span>(p) <span class="sc">/</span> <span class="fu">mean</span>(<span class="fu">eligible_prob</span>(<span class="fu">plogis</span>(<span class="fl">0.8</span> <span class="sc">+</span> <span class="fl">0.4</span> <span class="sc">*</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>))))</span>
+<span id="cb95-45"><a href="#cb95-45" aria-hidden="true" tabindex="-1"></a>        model<span class="sc">$</span>selection_universe <span class="ot">&lt;-</span> observation_sample</span>
+<span id="cb95-46"><a href="#cb95-46" aria-hidden="true" tabindex="-1"></a>        model<span class="sc">$</span>selection_rho <span class="ot">&lt;-</span> <span class="st">&quot;rho&quot;</span></span>
+<span id="cb95-47"><a href="#cb95-47" aria-hidden="true" tabindex="-1"></a>        model<span class="sc">$</span>selection_justification <span class="ot">&lt;-</span> <span class="st">&quot;Known probability from the simulated design, shared across transition roles.&quot;</span></span>
+<span id="cb95-48"><a href="#cb95-48" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb95-49"><a href="#cb95-49" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb95-50"><a href="#cb95-50" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (missing_adjustment <span class="sc">%in%</span> <span class="fu">c</span>(<span class="st">&quot;imputation&quot;</span>, <span class="st">&quot;dr&quot;</span>)) {</span>
+<span id="cb95-51"><a href="#cb95-51" aria-hidden="true" tabindex="-1"></a>      model<span class="sc">$</span>imputation_pooling <span class="ot">&lt;-</span> <span class="st">&quot;within_group&quot;</span></span>
+<span id="cb95-52"><a href="#cb95-52" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb95-53"><a href="#cb95-53" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (show_models) model<span class="sc">$</span>control <span class="ot">&lt;-</span> <span class="fu">list</span>(<span class="at">keep_nuisance =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb95-54"><a href="#cb95-54" aria-hidden="true" tabindex="-1"></a>    chained <span class="ot">&lt;-</span> <span class="fu">do.call</span>(cdid<span class="sc">::</span>att_gt, <span class="fu">c</span>(model, <span class="fu">list</span>(<span class="at">data =</span> missing)))</span>
+<span id="cb95-55"><a href="#cb95-55" aria-hidden="true" tabindex="-1"></a>    <span class="fu">list</span>(<span class="at">balanced =</span> balanced, <span class="at">chained =</span> chained, <span class="at">true_effect =</span> tau, <span class="at">show_models =</span> show_models)</span>
+<span id="cb95-56"><a href="#cb95-56" aria-hidden="true" tabindex="-1"></a>  })</span>
+<span id="cb95-57"><a href="#cb95-57" aria-hidden="true" tabindex="-1"></a>  fits <span class="ot">&lt;-</span> static_example[<span class="fu">c</span>(<span class="st">&quot;balanced&quot;</span>, <span class="st">&quot;chained&quot;</span>)]</span>
+<span id="cb95-58"><a href="#cb95-58" aria-hidden="true" tabindex="-1"></a>  stat_table <span class="ot">&lt;-</span> <span class="fu">do.call</span>(rbind, <span class="fu">lapply</span>(fits, <span class="cf">function</span>(fit) {</span>
+<span id="cb95-59"><a href="#cb95-59" aria-hidden="true" tabindex="-1"></a>    <span class="fu">data.frame</span>(<span class="at">estimate =</span> fit<span class="sc">$</span>aggregate<span class="sc">$</span>estimate, <span class="at">std.error =</span> fit<span class="sc">$</span>aggregate<span class="sc">$</span>se,</span>
+<span id="cb95-60"><a href="#cb95-60" aria-hidden="true" tabindex="-1"></a>      <span class="at">true_effect =</span> static_example<span class="sc">$</span>true_effect, <span class="at">study_units =</span> fit<span class="sc">$</span>n,</span>
+<span id="cb95-61"><a href="#cb95-61" aria-hidden="true" tabindex="-1"></a>      <span class="at">available_transitions =</span> <span class="fu">sum</span>(fit<span class="sc">$</span>available))</span>
+<span id="cb95-62"><a href="#cb95-62" aria-hidden="true" tabindex="-1"></a>  }))</span>
+<span id="cb95-63"><a href="#cb95-63" aria-hidden="true" tabindex="-1"></a>  <span class="fu">print</span>(knitr<span class="sc">::</span><span class="fu">kable</span>(stat_table, <span class="at">digits =</span> <span class="dv">4</span>, <span class="at">caption =</span> <span class="st">&quot;Static switcher-weighted effects&quot;</span>))</span>
+<span id="cb95-64"><a href="#cb95-64" aria-hidden="true" tabindex="-1"></a>  knitr<span class="sc">::</span><span class="fu">kable</span>(cdid<span class="sc">::</span><span class="fu">tidy</span>(static_example<span class="sc">$</span>chained)[, <span class="fu">c</span>(<span class="st">&quot;time&quot;</span>, <span class="st">&quot;direction&quot;</span>, <span class="st">&quot;estimate&quot;</span>, <span class="st">&quot;std.error&quot;</span>, <span class="st">&quot;available&quot;</span>)],</span>
+<span id="cb95-65"><a href="#cb95-65" aria-hidden="true" tabindex="-1"></a>    <span class="at">digits =</span> <span class="dv">4</span>, <span class="at">caption =</span> <span class="st">&quot;Chained STAT by transition date and direction&quot;</span>)</span>
+<span id="cb95-66"><a href="#cb95-66" aria-hidden="true" tabindex="-1"></a>} <span class="cf">else</span> {</span>
+<span id="cb95-67"><a href="#cb95-67" aria-hidden="true" tabindex="-1"></a>  <span class="fu">cat</span>(<span class="st">&quot;This example requires a cdid build with att_gt(dname = ...).</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb95-68"><a href="#cb95-68" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <table class="caption-top table">
 <caption>Static switcher-weighted effects</caption>
 <colgroup>
@@ -6482,9 +6532,9 @@ $work_cap$meaning
 <p>The independent-period logit uses the additional assumption that observation at the two dates is conditionally independent given the predictors and transition role. This example draws the missing indicators independently. To focus on one direction, set <code>switchers = &quot;entry&quot;</code> or <code>&quot;exit&quot;</code>. To restrict the transition dates, supply <code>switch_times</code>. Use <code>fit$aggregate</code> for the static aggregate and <code>tidy(fit)</code> for the transition effects, availability and uncertainty.</p>
 <p>Use <code>nuisance_models(static_example$chained)</code> to list the fitted models. Select a component and block to see its equation, fitting sample, coefficients and uncertainty.</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb95"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb95-1"><a href="#cb95-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="fu">exists</span>(<span class="st">&quot;static_example&quot;</span>) <span class="sc">&amp;&amp;</span> static_example<span class="sc">$</span>show_models) {</span>
-<span id="cb95-2"><a href="#cb95-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">nuisance_models</span>(static_example<span class="sc">$</span>chained)</span>
-<span id="cb95-3"><a href="#cb95-3" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb96"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb96-1"><a href="#cb96-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="fu">exists</span>(<span class="st">&quot;static_example&quot;</span>) <span class="sc">&amp;&amp;</span> static_example<span class="sc">$</span>show_models) {</span>
+<span id="cb96-2"><a href="#cb96-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">nuisance_models</span>(static_example<span class="sc">$</span>chained)</span>
+<span id="cb96-3"><a href="#cb96-3" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>Nuisance models captured from att_gt() [est_method = &quot;dr&quot;, selection_est_method = &quot;dr&quot;]
 
@@ -6571,63 +6621,63 @@ Coefficient tables: nuisance_models(fit, &quot;selection&quot;) or nuisance_mode
 <section id="guide-18" class="level2">
 <h2 class="anchored" data-anchor-id="guide-18">18. Cohort-by-Date Fixed Effects (<code>preset = &quot;cohort_time_fe&quot;</code>)</h2>
 <p>This section returns to an absorbing treatment supplied through <code>gname</code>, but fits a linear cohort-by-date fixed-effects specification with a common untreated time path, requested with <code>control = list(preset = &quot;cohort_time_fe&quot;)</code> (<a href="https://github.com/dvbn/cdid/blob/main/docs/methods/cohort-time-fe.md">Cohort-by-date fixed effects</a>). Edit the number of units, missing-outcome share, comparison group or covariate adjustment in the first lines. The regression lets the common calendar path and effects vary with the time-invariant covariate. Treatment IPW reweights clean comparisons to each cohort’s covariate mix. DR combines that weighting with a common untreated change model. All three examples target the full study cohort. Edit <code>observation_correction</code> for the incomplete panel. In the augmented case, the DR fit uses a treatment logit, a calendar change regression, an observation logit and an actual-change imputation regression.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb97"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb97-1"><a href="#cb97-1" aria-hidden="true" tabindex="-1"></a>cohort_time_example <span class="ot">&lt;-</span> <span class="fu">local</span>({</span>
-<span id="cb97-2"><a href="#cb97-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">set.seed</span>(<span class="dv">1314</span>)</span>
-<span id="cb97-3"><a href="#cb97-3" aria-hidden="true" tabindex="-1"></a>  n_units <span class="ot">&lt;-</span> <span class="dv">240</span>L</span>
-<span id="cb97-4"><a href="#cb97-4" aria-hidden="true" tabindex="-1"></a>  missing_share <span class="ot">&lt;-</span> <span class="fl">0.35</span></span>
-<span id="cb97-5"><a href="#cb97-5" aria-hidden="true" tabindex="-1"></a>  controls <span class="ot">&lt;-</span> <span class="st">&quot;nevertreated&quot;</span>  <span class="co"># or &quot;notyettreated&quot;</span></span>
-<span id="cb97-6"><a href="#cb97-6" aria-hidden="true" tabindex="-1"></a>  adjust_covariates <span class="ot">&lt;-</span> <span class="cn">TRUE</span></span>
-<span id="cb97-7"><a href="#cb97-7" aria-hidden="true" tabindex="-1"></a>  treatment_methods <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">&quot;reg&quot;</span>, <span class="st">&quot;ipw&quot;</span>, <span class="st">&quot;dr&quot;</span>)</span>
-<span id="cb97-8"><a href="#cb97-8" aria-hidden="true" tabindex="-1"></a>  observation_correction <span class="ot">&lt;-</span> <span class="st">&quot;dr&quot;</span>  <span class="co"># &quot;none&quot;, &quot;ipw&quot;, &quot;imputation&quot;, or &quot;dr&quot;</span></span>
-<span id="cb97-9"><a href="#cb97-9" aria-hidden="true" tabindex="-1"></a>  probability_model <span class="ot">&lt;-</span> <span class="st">&quot;pair_logit&quot;</span>  <span class="co"># or &quot;independent_period_logit&quot;</span></span>
-<span id="cb97-10"><a href="#cb97-10" aria-hidden="true" tabindex="-1"></a>  show_models <span class="ot">&lt;-</span> <span class="cn">TRUE</span></span>
-<span id="cb97-11"><a href="#cb97-11" aria-hidden="true" tabindex="-1"></a>  dates <span class="ot">&lt;-</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">6</span></span>
-<span id="cb97-12"><a href="#cb97-12" aria-hidden="true" tabindex="-1"></a>  panel <span class="ot">&lt;-</span> <span class="fu">expand.grid</span>(<span class="at">t =</span> dates, <span class="at">id =</span> <span class="fu">seq_len</span>(n_units))</span>
-<span id="cb97-13"><a href="#cb97-13" aria-hidden="true" tabindex="-1"></a>  panel<span class="sc">$</span>g <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">0</span>L, <span class="dv">3</span>L, <span class="dv">5</span>L)[(panel<span class="sc">$</span>id <span class="sc">-</span> <span class="dv">1</span>L) <span class="sc">%%</span> <span class="dv">3</span>L <span class="sc">+</span> <span class="dv">1</span>L]</span>
-<span id="cb97-14"><a href="#cb97-14" aria-hidden="true" tabindex="-1"></a>  panel<span class="sc">$</span>x <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(n_units)[panel<span class="sc">$</span>id] <span class="sc">+</span> <span class="fl">0.12</span> <span class="sc">*</span> panel<span class="sc">$</span>g</span>
-<span id="cb97-15"><a href="#cb97-15" aria-hidden="true" tabindex="-1"></a>  panel<span class="sc">$</span>z <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(n_units)[panel<span class="sc">$</span>id]</span>
-<span id="cb97-16"><a href="#cb97-16" aria-hidden="true" tabindex="-1"></a>  panel<span class="sc">$</span>y <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(n_units)[panel<span class="sc">$</span>id] <span class="sc">+</span> <span class="fu">sin</span>(panel<span class="sc">$</span>t) <span class="sc">+</span> (panel<span class="sc">$</span>t <span class="sc">/</span> <span class="dv">5</span>) <span class="sc">*</span> panel<span class="sc">$</span>x <span class="sc">+</span></span>
-<span id="cb97-17"><a href="#cb97-17" aria-hidden="true" tabindex="-1"></a>    <span class="fu">ifelse</span>(panel<span class="sc">$</span>g <span class="sc">&gt;</span> <span class="dv">0</span>L <span class="sc">&amp;</span> panel<span class="sc">$</span>t <span class="sc">&gt;=</span> panel<span class="sc">$</span>g,</span>
-<span id="cb97-18"><a href="#cb97-18" aria-hidden="true" tabindex="-1"></a>           <span class="dv">1</span> <span class="sc">+</span> <span class="fl">0.2</span> <span class="sc">*</span> (panel<span class="sc">$</span>t <span class="sc">-</span> panel<span class="sc">$</span>g) <span class="sc">+</span> <span class="fl">0.15</span> <span class="sc">*</span> panel<span class="sc">$</span>x, <span class="dv">0</span>) <span class="sc">+</span></span>
-<span id="cb97-19"><a href="#cb97-19" aria-hidden="true" tabindex="-1"></a>    <span class="fu">rnorm</span>(<span class="fu">nrow</span>(panel), <span class="at">sd =</span> <span class="fl">0.5</span>)</span>
-<span id="cb97-20"><a href="#cb97-20" aria-hidden="true" tabindex="-1"></a>  missing <span class="ot">&lt;-</span> panel</span>
-<span id="cb97-21"><a href="#cb97-21" aria-hidden="true" tabindex="-1"></a>  missing_probability <span class="ot">&lt;-</span> <span class="fu">plogis</span>(<span class="fu">qlogis</span>(missing_share) <span class="sc">+</span> <span class="fl">0.5</span> <span class="sc">*</span> missing<span class="sc">$</span>z)</span>
-<span id="cb97-22"><a href="#cb97-22" aria-hidden="true" tabindex="-1"></a>  missing<span class="sc">$</span>y[<span class="fu">runif</span>(<span class="fu">nrow</span>(missing)) <span class="sc">&lt;</span> missing_probability] <span class="ot">&lt;-</span> <span class="cn">NA_real_</span></span>
-<span id="cb97-23"><a href="#cb97-23" aria-hidden="true" tabindex="-1"></a>  fit <span class="ot">&lt;-</span> <span class="cf">function</span>(d, method, correction) {</span>
-<span id="cb97-24"><a href="#cb97-24" aria-hidden="true" tabindex="-1"></a>    adjusted <span class="ot">&lt;-</span> correction <span class="sc">!=</span> <span class="st">&quot;none&quot;</span></span>
-<span id="cb97-25"><a href="#cb97-25" aria-hidden="true" tabindex="-1"></a>    cdid<span class="sc">::</span><span class="fu">att_gt</span>(</span>
-<span id="cb97-26"><a href="#cb97-26" aria-hidden="true" tabindex="-1"></a>      <span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;t&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">gname =</span> <span class="st">&quot;g&quot;</span>, <span class="at">data =</span> d,</span>
-<span id="cb97-27"><a href="#cb97-27" aria-hidden="true" tabindex="-1"></a>      <span class="at">xformla =</span> <span class="cf">if</span> (adjust_covariates) <span class="sc">~</span>x <span class="cf">else</span> <span class="sc">~</span><span class="dv">1</span>,</span>
-<span id="cb97-28"><a href="#cb97-28" aria-hidden="true" tabindex="-1"></a>      <span class="at">control_group =</span> controls, <span class="at">est_method =</span> method, <span class="at">base_period =</span> <span class="st">&quot;universal&quot;</span>,</span>
-<span id="cb97-29"><a href="#cb97-29" aria-hidden="true" tabindex="-1"></a>      <span class="at">pt_assumption =</span> <span class="cf">if</span> (controls <span class="sc">==</span> <span class="st">&quot;notyettreated&quot;</span>) <span class="st">&quot;all&quot;</span> <span class="cf">else</span> <span class="st">&quot;post&quot;</span>,</span>
-<span id="cb97-30"><a href="#cb97-30" aria-hidden="true" tabindex="-1"></a>      <span class="at">pt_start =</span> <span class="cf">if</span> (controls <span class="sc">==</span> <span class="st">&quot;notyettreated&quot;</span>) <span class="fu">min</span>(d<span class="sc">$</span>t) <span class="cf">else</span> <span class="cn">NULL</span>,</span>
-<span id="cb97-31"><a href="#cb97-31" aria-hidden="true" tabindex="-1"></a>      <span class="at">selection =</span> <span class="cf">if</span> (adjusted) <span class="st">&quot;conditional_mtar&quot;</span> <span class="cf">else</span> <span class="st">&quot;none&quot;</span>,</span>
-<span id="cb97-32"><a href="#cb97-32" aria-hidden="true" tabindex="-1"></a>      <span class="at">selection_est_method =</span> <span class="cf">if</span> (adjusted) correction <span class="cf">else</span> <span class="st">&quot;ipw&quot;</span>,</span>
-<span id="cb97-33"><a href="#cb97-33" aria-hidden="true" tabindex="-1"></a>      <span class="at">selection_model =</span> <span class="cf">if</span> (correction <span class="sc">%in%</span> <span class="fu">c</span>(<span class="st">&quot;ipw&quot;</span>, <span class="st">&quot;dr&quot;</span>)) probability_model <span class="cf">else</span> <span class="st">&quot;pair_logit&quot;</span>,</span>
-<span id="cb97-34"><a href="#cb97-34" aria-hidden="true" tabindex="-1"></a>      <span class="at">selection_xformla =</span> <span class="cf">if</span> (correction <span class="sc">%in%</span> <span class="fu">c</span>(<span class="st">&quot;ipw&quot;</span>, <span class="st">&quot;dr&quot;</span>)) <span class="sc">~</span>z <span class="cf">else</span> <span class="cn">NULL</span>,</span>
-<span id="cb97-35"><a href="#cb97-35" aria-hidden="true" tabindex="-1"></a>      <span class="at">bstrap =</span> <span class="cn">FALSE</span>, <span class="at">cband =</span> <span class="cn">FALSE</span>,</span>
-<span id="cb97-36"><a href="#cb97-36" aria-hidden="true" tabindex="-1"></a>      <span class="at">control =</span> <span class="fu">list</span>(<span class="at">preset =</span> <span class="st">&quot;cohort_time_fe&quot;</span>, <span class="at">keep_nuisance =</span> show_models <span class="sc">&amp;&amp;</span> adjusted)</span>
-<span id="cb97-37"><a href="#cb97-37" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb97-38"><a href="#cb97-38" aria-hidden="true" tabindex="-1"></a>  }</span>
-<span id="cb97-39"><a href="#cb97-39" aria-hidden="true" tabindex="-1"></a>  <span class="fu">list</span>(</span>
-<span id="cb97-40"><a href="#cb97-40" aria-hidden="true" tabindex="-1"></a>    <span class="at">complete =</span> <span class="fu">setNames</span>(<span class="fu">lapply</span>(treatment_methods, <span class="cf">function</span>(m) <span class="fu">fit</span>(panel, m, <span class="st">&quot;none&quot;</span>)), treatment_methods),</span>
-<span id="cb97-41"><a href="#cb97-41" aria-hidden="true" tabindex="-1"></a>    <span class="at">incomplete =</span> <span class="fu">setNames</span>(<span class="fu">lapply</span>(treatment_methods, <span class="cf">function</span>(m) <span class="fu">fit</span>(missing, m, observation_correction)),</span>
-<span id="cb97-42"><a href="#cb97-42" aria-hidden="true" tabindex="-1"></a>                          treatment_methods),</span>
-<span id="cb97-43"><a href="#cb97-43" aria-hidden="true" tabindex="-1"></a>    <span class="at">show_models =</span> show_models <span class="sc">&amp;&amp;</span> observation_correction <span class="sc">!=</span> <span class="st">&quot;none&quot;</span></span>
-<span id="cb97-44"><a href="#cb97-44" aria-hidden="true" tabindex="-1"></a>  )</span>
-<span id="cb97-45"><a href="#cb97-45" aria-hidden="true" tabindex="-1"></a>})</span>
-<span id="cb97-46"><a href="#cb97-46" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb97-47"><a href="#cb97-47" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (shape <span class="cf">in</span> <span class="fu">c</span>(<span class="st">&quot;complete&quot;</span>, <span class="st">&quot;incomplete&quot;</span>)) {</span>
-<span id="cb97-48"><a href="#cb97-48" aria-hidden="true" tabindex="-1"></a>  fits <span class="ot">&lt;-</span> cohort_time_example[[shape]]</span>
-<span id="cb97-49"><a href="#cb97-49" aria-hidden="true" tabindex="-1"></a>  columns <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">&quot;method&quot;</span>, <span class="st">&quot;group&quot;</span>, <span class="st">&quot;time&quot;</span>, <span class="st">&quot;estimate&quot;</span>, <span class="st">&quot;std.error&quot;</span>, <span class="st">&quot;available&quot;</span>)</span>
-<span id="cb97-50"><a href="#cb97-50" aria-hidden="true" tabindex="-1"></a>  effects <span class="ot">&lt;-</span> <span class="fu">do.call</span>(rbind, <span class="fu">lapply</span>(<span class="fu">names</span>(fits), <span class="cf">function</span>(method) {</span>
-<span id="cb97-51"><a href="#cb97-51" aria-hidden="true" tabindex="-1"></a>    table <span class="ot">&lt;-</span> cdid<span class="sc">::</span><span class="fu">tidy</span>(fits[[method]])</span>
-<span id="cb97-52"><a href="#cb97-52" aria-hidden="true" tabindex="-1"></a>    table<span class="sc">$</span>method <span class="ot">&lt;-</span> method</span>
-<span id="cb97-53"><a href="#cb97-53" aria-hidden="true" tabindex="-1"></a>    table[table<span class="sc">$</span>role <span class="sc">==</span> <span class="st">&quot;post&quot;</span>, columns]</span>
-<span id="cb97-54"><a href="#cb97-54" aria-hidden="true" tabindex="-1"></a>  }))</span>
-<span id="cb97-55"><a href="#cb97-55" aria-hidden="true" tabindex="-1"></a>  <span class="fu">print</span>(knitr<span class="sc">::</span><span class="fu">kable</span>(effects, <span class="at">digits =</span> <span class="dv">4</span>,</span>
-<span id="cb97-56"><a href="#cb97-56" aria-hidden="true" tabindex="-1"></a>    <span class="at">caption =</span> <span class="fu">paste</span>(<span class="st">&quot;Cohort-by-date effects on the&quot;</span>, shape, <span class="st">&quot;panel&quot;</span>)))</span>
-<span id="cb97-57"><a href="#cb97-57" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb98"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb98-1"><a href="#cb98-1" aria-hidden="true" tabindex="-1"></a>cohort_time_example <span class="ot">&lt;-</span> <span class="fu">local</span>({</span>
+<span id="cb98-2"><a href="#cb98-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">set.seed</span>(<span class="dv">1314</span>)</span>
+<span id="cb98-3"><a href="#cb98-3" aria-hidden="true" tabindex="-1"></a>  n_units <span class="ot">&lt;-</span> <span class="dv">240</span>L</span>
+<span id="cb98-4"><a href="#cb98-4" aria-hidden="true" tabindex="-1"></a>  missing_share <span class="ot">&lt;-</span> <span class="fl">0.35</span></span>
+<span id="cb98-5"><a href="#cb98-5" aria-hidden="true" tabindex="-1"></a>  controls <span class="ot">&lt;-</span> <span class="st">&quot;nevertreated&quot;</span>  <span class="co"># or &quot;notyettreated&quot;</span></span>
+<span id="cb98-6"><a href="#cb98-6" aria-hidden="true" tabindex="-1"></a>  adjust_covariates <span class="ot">&lt;-</span> <span class="cn">TRUE</span></span>
+<span id="cb98-7"><a href="#cb98-7" aria-hidden="true" tabindex="-1"></a>  treatment_methods <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">&quot;reg&quot;</span>, <span class="st">&quot;ipw&quot;</span>, <span class="st">&quot;dr&quot;</span>)</span>
+<span id="cb98-8"><a href="#cb98-8" aria-hidden="true" tabindex="-1"></a>  observation_correction <span class="ot">&lt;-</span> <span class="st">&quot;dr&quot;</span>  <span class="co"># &quot;none&quot;, &quot;ipw&quot;, &quot;imputation&quot;, or &quot;dr&quot;</span></span>
+<span id="cb98-9"><a href="#cb98-9" aria-hidden="true" tabindex="-1"></a>  probability_model <span class="ot">&lt;-</span> <span class="st">&quot;pair_logit&quot;</span>  <span class="co"># or &quot;independent_period_logit&quot;</span></span>
+<span id="cb98-10"><a href="#cb98-10" aria-hidden="true" tabindex="-1"></a>  show_models <span class="ot">&lt;-</span> <span class="cn">TRUE</span></span>
+<span id="cb98-11"><a href="#cb98-11" aria-hidden="true" tabindex="-1"></a>  dates <span class="ot">&lt;-</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">6</span></span>
+<span id="cb98-12"><a href="#cb98-12" aria-hidden="true" tabindex="-1"></a>  panel <span class="ot">&lt;-</span> <span class="fu">expand.grid</span>(<span class="at">t =</span> dates, <span class="at">id =</span> <span class="fu">seq_len</span>(n_units))</span>
+<span id="cb98-13"><a href="#cb98-13" aria-hidden="true" tabindex="-1"></a>  panel<span class="sc">$</span>g <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">0</span>L, <span class="dv">3</span>L, <span class="dv">5</span>L)[(panel<span class="sc">$</span>id <span class="sc">-</span> <span class="dv">1</span>L) <span class="sc">%%</span> <span class="dv">3</span>L <span class="sc">+</span> <span class="dv">1</span>L]</span>
+<span id="cb98-14"><a href="#cb98-14" aria-hidden="true" tabindex="-1"></a>  panel<span class="sc">$</span>x <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(n_units)[panel<span class="sc">$</span>id] <span class="sc">+</span> <span class="fl">0.12</span> <span class="sc">*</span> panel<span class="sc">$</span>g</span>
+<span id="cb98-15"><a href="#cb98-15" aria-hidden="true" tabindex="-1"></a>  panel<span class="sc">$</span>z <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(n_units)[panel<span class="sc">$</span>id]</span>
+<span id="cb98-16"><a href="#cb98-16" aria-hidden="true" tabindex="-1"></a>  panel<span class="sc">$</span>y <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(n_units)[panel<span class="sc">$</span>id] <span class="sc">+</span> <span class="fu">sin</span>(panel<span class="sc">$</span>t) <span class="sc">+</span> (panel<span class="sc">$</span>t <span class="sc">/</span> <span class="dv">5</span>) <span class="sc">*</span> panel<span class="sc">$</span>x <span class="sc">+</span></span>
+<span id="cb98-17"><a href="#cb98-17" aria-hidden="true" tabindex="-1"></a>    <span class="fu">ifelse</span>(panel<span class="sc">$</span>g <span class="sc">&gt;</span> <span class="dv">0</span>L <span class="sc">&amp;</span> panel<span class="sc">$</span>t <span class="sc">&gt;=</span> panel<span class="sc">$</span>g,</span>
+<span id="cb98-18"><a href="#cb98-18" aria-hidden="true" tabindex="-1"></a>           <span class="dv">1</span> <span class="sc">+</span> <span class="fl">0.2</span> <span class="sc">*</span> (panel<span class="sc">$</span>t <span class="sc">-</span> panel<span class="sc">$</span>g) <span class="sc">+</span> <span class="fl">0.15</span> <span class="sc">*</span> panel<span class="sc">$</span>x, <span class="dv">0</span>) <span class="sc">+</span></span>
+<span id="cb98-19"><a href="#cb98-19" aria-hidden="true" tabindex="-1"></a>    <span class="fu">rnorm</span>(<span class="fu">nrow</span>(panel), <span class="at">sd =</span> <span class="fl">0.5</span>)</span>
+<span id="cb98-20"><a href="#cb98-20" aria-hidden="true" tabindex="-1"></a>  missing <span class="ot">&lt;-</span> panel</span>
+<span id="cb98-21"><a href="#cb98-21" aria-hidden="true" tabindex="-1"></a>  missing_probability <span class="ot">&lt;-</span> <span class="fu">plogis</span>(<span class="fu">qlogis</span>(missing_share) <span class="sc">+</span> <span class="fl">0.5</span> <span class="sc">*</span> missing<span class="sc">$</span>z)</span>
+<span id="cb98-22"><a href="#cb98-22" aria-hidden="true" tabindex="-1"></a>  missing<span class="sc">$</span>y[<span class="fu">runif</span>(<span class="fu">nrow</span>(missing)) <span class="sc">&lt;</span> missing_probability] <span class="ot">&lt;-</span> <span class="cn">NA_real_</span></span>
+<span id="cb98-23"><a href="#cb98-23" aria-hidden="true" tabindex="-1"></a>  fit <span class="ot">&lt;-</span> <span class="cf">function</span>(d, method, correction) {</span>
+<span id="cb98-24"><a href="#cb98-24" aria-hidden="true" tabindex="-1"></a>    adjusted <span class="ot">&lt;-</span> correction <span class="sc">!=</span> <span class="st">&quot;none&quot;</span></span>
+<span id="cb98-25"><a href="#cb98-25" aria-hidden="true" tabindex="-1"></a>    cdid<span class="sc">::</span><span class="fu">att_gt</span>(</span>
+<span id="cb98-26"><a href="#cb98-26" aria-hidden="true" tabindex="-1"></a>      <span class="at">yname =</span> <span class="st">&quot;y&quot;</span>, <span class="at">tname =</span> <span class="st">&quot;t&quot;</span>, <span class="at">idname =</span> <span class="st">&quot;id&quot;</span>, <span class="at">gname =</span> <span class="st">&quot;g&quot;</span>, <span class="at">data =</span> d,</span>
+<span id="cb98-27"><a href="#cb98-27" aria-hidden="true" tabindex="-1"></a>      <span class="at">xformla =</span> <span class="cf">if</span> (adjust_covariates) <span class="sc">~</span>x <span class="cf">else</span> <span class="sc">~</span><span class="dv">1</span>,</span>
+<span id="cb98-28"><a href="#cb98-28" aria-hidden="true" tabindex="-1"></a>      <span class="at">control_group =</span> controls, <span class="at">est_method =</span> method, <span class="at">base_period =</span> <span class="st">&quot;universal&quot;</span>,</span>
+<span id="cb98-29"><a href="#cb98-29" aria-hidden="true" tabindex="-1"></a>      <span class="at">pt_assumption =</span> <span class="cf">if</span> (controls <span class="sc">==</span> <span class="st">&quot;notyettreated&quot;</span>) <span class="st">&quot;all&quot;</span> <span class="cf">else</span> <span class="st">&quot;post&quot;</span>,</span>
+<span id="cb98-30"><a href="#cb98-30" aria-hidden="true" tabindex="-1"></a>      <span class="at">pt_start =</span> <span class="cf">if</span> (controls <span class="sc">==</span> <span class="st">&quot;notyettreated&quot;</span>) <span class="fu">min</span>(d<span class="sc">$</span>t) <span class="cf">else</span> <span class="cn">NULL</span>,</span>
+<span id="cb98-31"><a href="#cb98-31" aria-hidden="true" tabindex="-1"></a>      <span class="at">selection =</span> <span class="cf">if</span> (adjusted) <span class="st">&quot;conditional_mtar&quot;</span> <span class="cf">else</span> <span class="st">&quot;none&quot;</span>,</span>
+<span id="cb98-32"><a href="#cb98-32" aria-hidden="true" tabindex="-1"></a>      <span class="at">selection_est_method =</span> <span class="cf">if</span> (adjusted) correction <span class="cf">else</span> <span class="st">&quot;ipw&quot;</span>,</span>
+<span id="cb98-33"><a href="#cb98-33" aria-hidden="true" tabindex="-1"></a>      <span class="at">selection_model =</span> <span class="cf">if</span> (correction <span class="sc">%in%</span> <span class="fu">c</span>(<span class="st">&quot;ipw&quot;</span>, <span class="st">&quot;dr&quot;</span>)) probability_model <span class="cf">else</span> <span class="st">&quot;pair_logit&quot;</span>,</span>
+<span id="cb98-34"><a href="#cb98-34" aria-hidden="true" tabindex="-1"></a>      <span class="at">selection_xformla =</span> <span class="cf">if</span> (correction <span class="sc">%in%</span> <span class="fu">c</span>(<span class="st">&quot;ipw&quot;</span>, <span class="st">&quot;dr&quot;</span>)) <span class="sc">~</span>z <span class="cf">else</span> <span class="cn">NULL</span>,</span>
+<span id="cb98-35"><a href="#cb98-35" aria-hidden="true" tabindex="-1"></a>      <span class="at">bstrap =</span> <span class="cn">FALSE</span>, <span class="at">cband =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb98-36"><a href="#cb98-36" aria-hidden="true" tabindex="-1"></a>      <span class="at">control =</span> <span class="fu">list</span>(<span class="at">preset =</span> <span class="st">&quot;cohort_time_fe&quot;</span>, <span class="at">keep_nuisance =</span> show_models <span class="sc">&amp;&amp;</span> adjusted)</span>
+<span id="cb98-37"><a href="#cb98-37" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb98-38"><a href="#cb98-38" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb98-39"><a href="#cb98-39" aria-hidden="true" tabindex="-1"></a>  <span class="fu">list</span>(</span>
+<span id="cb98-40"><a href="#cb98-40" aria-hidden="true" tabindex="-1"></a>    <span class="at">complete =</span> <span class="fu">setNames</span>(<span class="fu">lapply</span>(treatment_methods, <span class="cf">function</span>(m) <span class="fu">fit</span>(panel, m, <span class="st">&quot;none&quot;</span>)), treatment_methods),</span>
+<span id="cb98-41"><a href="#cb98-41" aria-hidden="true" tabindex="-1"></a>    <span class="at">incomplete =</span> <span class="fu">setNames</span>(<span class="fu">lapply</span>(treatment_methods, <span class="cf">function</span>(m) <span class="fu">fit</span>(missing, m, observation_correction)),</span>
+<span id="cb98-42"><a href="#cb98-42" aria-hidden="true" tabindex="-1"></a>                          treatment_methods),</span>
+<span id="cb98-43"><a href="#cb98-43" aria-hidden="true" tabindex="-1"></a>    <span class="at">show_models =</span> show_models <span class="sc">&amp;&amp;</span> observation_correction <span class="sc">!=</span> <span class="st">&quot;none&quot;</span></span>
+<span id="cb98-44"><a href="#cb98-44" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb98-45"><a href="#cb98-45" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb98-46"><a href="#cb98-46" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb98-47"><a href="#cb98-47" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (shape <span class="cf">in</span> <span class="fu">c</span>(<span class="st">&quot;complete&quot;</span>, <span class="st">&quot;incomplete&quot;</span>)) {</span>
+<span id="cb98-48"><a href="#cb98-48" aria-hidden="true" tabindex="-1"></a>  fits <span class="ot">&lt;-</span> cohort_time_example[[shape]]</span>
+<span id="cb98-49"><a href="#cb98-49" aria-hidden="true" tabindex="-1"></a>  columns <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">&quot;method&quot;</span>, <span class="st">&quot;group&quot;</span>, <span class="st">&quot;time&quot;</span>, <span class="st">&quot;estimate&quot;</span>, <span class="st">&quot;std.error&quot;</span>, <span class="st">&quot;available&quot;</span>)</span>
+<span id="cb98-50"><a href="#cb98-50" aria-hidden="true" tabindex="-1"></a>  effects <span class="ot">&lt;-</span> <span class="fu">do.call</span>(rbind, <span class="fu">lapply</span>(<span class="fu">names</span>(fits), <span class="cf">function</span>(method) {</span>
+<span id="cb98-51"><a href="#cb98-51" aria-hidden="true" tabindex="-1"></a>    table <span class="ot">&lt;-</span> cdid<span class="sc">::</span><span class="fu">tidy</span>(fits[[method]])</span>
+<span id="cb98-52"><a href="#cb98-52" aria-hidden="true" tabindex="-1"></a>    table<span class="sc">$</span>method <span class="ot">&lt;-</span> method</span>
+<span id="cb98-53"><a href="#cb98-53" aria-hidden="true" tabindex="-1"></a>    table[table<span class="sc">$</span>role <span class="sc">==</span> <span class="st">&quot;post&quot;</span>, columns]</span>
+<span id="cb98-54"><a href="#cb98-54" aria-hidden="true" tabindex="-1"></a>  }))</span>
+<span id="cb98-55"><a href="#cb98-55" aria-hidden="true" tabindex="-1"></a>  <span class="fu">print</span>(knitr<span class="sc">::</span><span class="fu">kable</span>(effects, <span class="at">digits =</span> <span class="dv">4</span>,</span>
+<span id="cb98-56"><a href="#cb98-56" aria-hidden="true" tabindex="-1"></a>    <span class="at">caption =</span> <span class="fu">paste</span>(<span class="st">&quot;Cohort-by-date effects on the&quot;</span>, shape, <span class="st">&quot;panel&quot;</span>)))</span>
+<span id="cb98-57"><a href="#cb98-57" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <table class="caption-top table">
 <caption>Cohort-by-date effects on the complete panel</caption>
 <thead>
@@ -6986,13 +7036,13 @@ Coefficient tables: nuisance_models(fit, &quot;selection&quot;) or nuisance_mode
 </table>
 <p>With never-treated controls, the model estimates separate pre-treatment deviations, relative to each cohort’s last pre-treatment date. With not-yet-treated controls, the model assumes a common untreated time path from the first date and estimates post-treatment effects. For the regression fit, the <a href="https://github.com/dvbn/cdid/blob/main/docs/methods/cohort-time-fe.md#match-r-etwfe-and-stata-jwdid">matched commands</a> show the corresponding R and Stata calls and their covariance conventions.</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb98"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb98-1"><a href="#cb98-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (cohort_time_example<span class="sc">$</span>show_models <span class="sc">&amp;&amp;</span> <span class="st">&quot;dr&quot;</span> <span class="sc">%in%</span> <span class="fu">names</span>(cohort_time_example<span class="sc">$</span>incomplete)) {</span>
-<span id="cb98-2"><a href="#cb98-2" aria-hidden="true" tabindex="-1"></a>  fit_models <span class="ot">&lt;-</span> cohort_time_example<span class="sc">$</span>incomplete<span class="sc">$</span>dr</span>
-<span id="cb98-3"><a href="#cb98-3" aria-hidden="true" tabindex="-1"></a>  model_index <span class="ot">&lt;-</span> <span class="fu">nuisance_models</span>(fit_models)</span>
-<span id="cb98-4"><a href="#cb98-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (component <span class="cf">in</span> model_index<span class="sc">$</span>components<span class="sc">$</span>component[model_index<span class="sc">$</span>components<span class="sc">$</span>status <span class="sc">==</span> <span class="st">&quot;available&quot;</span>]) {</span>
-<span id="cb98-5"><a href="#cb98-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">print</span>(<span class="fu">nuisance_models</span>(fit_models, component, <span class="at">block =</span> <span class="dv">1</span>L))</span>
-<span id="cb98-6"><a href="#cb98-6" aria-hidden="true" tabindex="-1"></a>  }</span>
-<span id="cb98-7"><a href="#cb98-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb99"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb99-1"><a href="#cb99-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (cohort_time_example<span class="sc">$</span>show_models <span class="sc">&amp;&amp;</span> <span class="st">&quot;dr&quot;</span> <span class="sc">%in%</span> <span class="fu">names</span>(cohort_time_example<span class="sc">$</span>incomplete)) {</span>
+<span id="cb99-2"><a href="#cb99-2" aria-hidden="true" tabindex="-1"></a>  fit_models <span class="ot">&lt;-</span> cohort_time_example<span class="sc">$</span>incomplete<span class="sc">$</span>dr</span>
+<span id="cb99-3"><a href="#cb99-3" aria-hidden="true" tabindex="-1"></a>  model_index <span class="ot">&lt;-</span> <span class="fu">nuisance_models</span>(fit_models)</span>
+<span id="cb99-4"><a href="#cb99-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (component <span class="cf">in</span> model_index<span class="sc">$</span>components<span class="sc">$</span>component[model_index<span class="sc">$</span>components<span class="sc">$</span>status <span class="sc">==</span> <span class="st">&quot;available&quot;</span>]) {</span>
+<span id="cb99-5"><a href="#cb99-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">print</span>(<span class="fu">nuisance_models</span>(fit_models, component, <span class="at">block =</span> <span class="dv">1</span>L))</span>
+<span id="cb99-6"><a href="#cb99-6" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb99-7"><a href="#cb99-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>Selection block selection_1: pair[g=0,(1,2)]  (pair_logit, separate)
   logit Pr(S_i(1,2) = 1 | X_i, G_i = 0, U_i = 1) = a + b1*z

@@ -212,8 +212,7 @@ imputation_public_diagnostics <- function(res, control, public_object = NULL) {
   bound <- if (cp04_field_diagnostics(b))
     cp04_public_diagnostic_admit(res, control, public_object, "Imputation public diagnostic copy") else {
     bound <- 4 * b$accounting$owned_entries + 4096
-    cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
-      res$resource_accounting$initial_envelope_entries)), bound),
+    cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
       4 * bound, 8 * bound, bound, "Imputation public diagnostic copy")
     bound
   }

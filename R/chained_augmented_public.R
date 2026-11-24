@@ -265,11 +265,10 @@ augmented_public_selection_record <- function(cp04, backend = NULL, reader = NUL
 
 augmented_public_diagnostics <- function(res, control, public_object = NULL) {
   b <- res$nuisance_registry$cp04
-  bound <- if (cp04_field_diagnostics(b))
+  bound <- if (cp04_diagnostic_copy_by_field(b))
     cp04_public_diagnostic_admit(res, control, public_object, "Augmented public diagnostic copy") else {
     bound <- 4 * b$accounting$owned_entries + 4096
-    cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
-      res$resource_accounting$initial_envelope_entries)), bound),
+    cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
       4 * bound, 8 * bound, bound, "Augmented public diagnostic copy")
     bound
   }

@@ -144,15 +144,15 @@ Check that the fitting data support the predictions you need. A factor level fou
 
 ### 3. Covariance regularization versus ATT identification
 
-In feasible two step GMM (`gmm_weighting = "optimal"`, the default), comparison moments can have singular or nearly singular covariance. Exact structural equivalence reductions come first. The default `gmm_covariance = "tikhonov"` handles the remaining covariance problem using the recorded conditioning and rank rules, including `control$condition_trigger` (`1e-10` by default). Exactly zero covariance follows the existing full-catalog least-squares convention with zero sandwich variance.
+In feasible two step GMM (`gmm_weighting = "optimal"`), comparison moments can have singular or nearly singular covariance. Exact structural equivalence reductions come first. The default `gmm_covariance = "tikhonov"` handles the remaining covariance problem using the recorded conditioning and rank rules, including `control$condition_trigger` (`1e-10` by default). Exactly zero covariance follows the existing full-catalog least-squares convention with zero sandwich variance.
 
 Covariance regularization only stabilizes the weighting matrix used to combine already identified comparison moments; it **cannot** create ATT identification when date links, cohort support, or identifying assumptions are missing. Furthermore, analytical and multiplier bootstrap standard errors use the estimated sandwich covariance built from the complete influence functions, never the inverse of the regularized weighting matrix (see [Results and uncertainty](../reference/results.md)).
 
 ## Resource and workspace controls (`control`)
 
-Chained mode accepts an optional named `control` list for internal numeric workspace and preflight work limits (see [Option reference](../reference/options.md)):
-- **Configurable numeric workspace (`numeric_workspace_bytes`):** Defaults to `1073741824` (1 GiB) of counted numeric array payload, with automatic memory aware chunking controlled by `chunk_rows`.
-- **Opt in estimated work cap (`counted_work_limit`):** Defaults to `Inf` (no estimated work cap). You can opt in by setting `counted_work_limit` to a finite positive whole number (such as `1e12`), which refuses a stage before it runs if its conservative preflight work estimate exceeds your budget.
+Chained mode accepts an optional named `control` list for the workspace limit and the work limit (see [Option reference](../reference/options.md)):
+- **Workspace limit (`numeric_workspace_bytes`):** Defaults to `1073741824` (1 GiB) of counted numeric arrays. The chunk size is derived from it unless `chunk_rows` is set; see [Workspace limit and chunk size](../reference/options.md#workspace-limit-and-chunk-size).
+- **Opt in estimated work cap (`counted_work_limit`):** Defaults to `Inf` (no estimated work cap). You can opt in by setting `counted_work_limit` to a finite positive whole number (such as `1e12`), which refuses a stage before it runs if its conservative work estimate exceeds that limit.
 - **Parallel multiplier bootstrap workers (`workers`):** Defaults to `1`. To run multiplier bootstrap draws in parallel with `pl = TRUE, cores = k`, you must also declare `control = list(workers = k)`, and all worker buffers count against `numeric_workspace_bytes`.
 - **Scope of resource controls:** `numeric_workspace_bytes` and `counted_work_limit` track internal numeric array allocations and conservative preflight operation counts; they do not cap total R process resident memory (RSS), R heap usage, or wall clock CPU time, and `cdid` does not automatically detect machine RAM.
 

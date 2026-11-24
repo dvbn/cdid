@@ -21,9 +21,10 @@ aggte <- function(MP,
   # inspecting its class here changes nothing for ordinary did results, which
   # are still aggregated by did itself, unchanged and lazily forwarded.
   if (!arg_missing("MP", environment()) && inherits(MP, "cdid_MP")) {
-    return(chained_aggte_request(MP, type = type, balance_e = balance_e, min_e = min_e, max_e = max_e,
+    # Aggregation uses the workspace limit of the fit (`resource_guard_fitted()`).
+    return(resource_guard_fitted(chained_aggte_request(MP, type = type, balance_e = balance_e, min_e = min_e, max_e = max_e,
                                  na.rm = na.rm, bstrap = bstrap, biters = biters, cband = cband, alp = alp,
-                                 clustervars = clustervars, call = sys.call()))
+                                 clustervars = clustervars, call = sys.call()), MP))
   }
   forward_call(quote(did::aggte), upstream_aggte_formals, environment(),
                dots = FALSE)

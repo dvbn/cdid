@@ -3870,9 +3870,9 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
       backend_ids <- vapply(points[q_requested], `[[`, integer(1), "cp04_index")
       if (length(backend_ids)) {
         preflight <- cp04_preflight_links(aux_backend, unique(backend_ids),
-          cp04_registry_retained_entries(registry,
+          cp04_composed_retained_entries(registry,
             retained_pipeline_entries + 8 * n_total * (length(requested) + nrow(ledger))))
-        ipw_owner_safe_sum(c(cp04_registry_retained_entries(registry, retained_pipeline_entries), preflight$peak_concurrent_entries,
+        ipw_owner_safe_sum(c(cp04_composed_retained_entries(registry, retained_pipeline_entries), preflight$peak_concurrent_entries,
           8 * n_total * (length(requested) + nrow(ledger))), aux_backend$control$max_matrix_entries,
           "CP04 auxiliary producer and requested reporting outputs")
       }
@@ -3942,7 +3942,7 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
     # replays only the unmatched columns, in their original order, through the
     # ordinary producer under the planner's own partition with the store
     # charged. Without an extension the original replay runs unchanged.
-    aux_retained <- cp04_registry_retained_entries(registry,
+    aux_retained <- cp04_composed_retained_entries(registry,
       retained_pipeline_entries + 8 * n_total * (length(requested) + nrow(ledger)))
     service <- cp04_retained_if_auxiliary_service(retained_store, registry$cp04, backend_ids, aux_retained)
     if (is.null(service)) {
@@ -4003,7 +4003,7 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
         ids_stream <- unique(backend_ids[streamed])
         pre_stream <- cp04_preflight_links(registry$cp04, ids_stream, aux_retained + retained_store$entries,
           chunk_rows = service$chunk_rows)
-        ipw_owner_safe_sum(c(cp04_registry_retained_entries(registry, retained_pipeline_entries), pre_stream$peak_concurrent_entries,
+        ipw_owner_safe_sum(c(cp04_composed_retained_entries(registry, retained_pipeline_entries), pre_stream$peak_concurrent_entries,
           8 * n_total * (length(requested) + nrow(ledger)), retained_store$entries),
           control$owner_control$max_matrix_entries,
           "CP04 auxiliary producer, retained moment IF and requested reporting outputs")
@@ -4030,7 +4030,8 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
     } else {
       NULL
     }
-    aux_retained <- retained_pipeline_entries + 8 * n_total * (length(requested) + nrow(ledger))
+    aux_retained <- cp04_composed_retained_entries(registry,
+      retained_pipeline_entries + 8 * n_total * (length(requested) + nrow(ledger)))
     service <- cp04_retained_if_auxiliary_service(retained_store, registry$raw_ipw, backend_ids, aux_retained)
     A_req <- matrix(0.0, nrow = n_a, ncol = length(active_columns))
     if (is.null(service)) {
@@ -4088,7 +4089,7 @@ build_ipw_auxiliary_reporting <- function(ledger, calendar, cohorts, anticipatio
         ids_stream <- unique(backend_ids[streamed])
         pre_stream <- cp04_preflight_links(registry$raw_ipw, ids_stream, aux_retained + retained_store$entries,
           chunk_rows = service$chunk_rows)
-        ipw_owner_safe_sum(c(retained_pipeline_entries, pre_stream$peak_concurrent_entries,
+        ipw_owner_safe_sum(c(cp04_composed_retained_entries(registry, retained_pipeline_entries), pre_stream$peak_concurrent_entries,
           8 * n_total * (length(requested) + nrow(ledger)), retained_store$entries),
           registry$raw_ipw$control$max_matrix_entries,
           "CP04 auxiliary producer, retained moment IF and requested reporting outputs")
@@ -4405,7 +4406,9 @@ compute_chained_ipw_inference <- function(
   infer_entries <- if (is.null(enclosure)) 4.0*n*J + 4.0*G*J + 4.0*J*J else 12.0*n*J + 12.0*G*J + 8.0*J*J
   if (n > mb$max_units || G > mb$max_clusters || J > mb$max_targets ||
       infer_entries > mb$max_workspace_cells || 8.0*infer_entries > mb$max_workspace_bytes) {
-    cdid_ipw_pipeline_abort("Inference producer/interval/consumer storage exceeds the explicit multiplier budget.", "cdid_ipw_pipeline_bound_error")
+    cdid_ipw_pipeline_abort("Inference producer/interval/consumer storage exceeds the explicit multiplier budget.", "cdid_ipw_pipeline_bound_error",
+      diagnostics = list(label = "inference producer, interval and consumer storage", requested = infer_entries, bound = mb$max_workspace_cells,
+        limit_kind = "workspace"))
   }
   if (is.null(cluster_full) && typeof(Psi) == "double" && !is.object(Psi)) {
     raw_cluster_sums <- matrix(0.0 + as.double(Psi), n, J)
@@ -4460,7 +4463,9 @@ compute_chained_ipw_inference <- function(
                 (if (is.null(fixed_signs)) 0.0 else length(fixed_signs)) +
                 multiplier_parallel_cells(multiplier_budget_workers(mb), G, length(pos), br)
     if (br < 1L || ir < 1L || producer > mb$max_workspace_cells || 8.0*producer > mb$max_workspace_bytes) {
-      cdid_ipw_pipeline_abort("Simultaneous IF/sign/interval/bootstrap producer and consumer payload exceeds caller limits.", "cdid_ipw_pipeline_bound_error")
+      cdid_ipw_pipeline_abort("Simultaneous IF/sign/interval/bootstrap producer and consumer payload exceeds caller limits.", "cdid_ipw_pipeline_bound_error",
+        diagnostics = list(label = "multiplier bootstrap producer and consumer storage", requested = producer, bound = mb$max_workspace_cells,
+          limit_kind = "workspace"))
     }
     if (!is.null(fixed_signs)) {
       if (!is.matrix(fixed_signs) || !is.numeric(fixed_signs) ||
@@ -5350,6 +5355,8 @@ run_chained_ipw_pipeline <- function(
   conditional_pretest = FALSE,
   prepared = NULL
 ) {
+  cp04_plan_scope_prev <- cp04_plan_scope_enter()
+  on.exit(cp04_plan_scope_exit(cp04_plan_scope_prev), add = TRUE)
   if (!gmm_scalar_logical(compute_inffunc) || !gmm_scalar_logical(print_details) ||
       !gmm_scalar_logical(conditional_pretest)) {
     cdid_ipw_pipeline_abort("`compute_inffunc`, `print_details` and `conditional_pretest` must be scalar logicals.",
@@ -6057,7 +6064,9 @@ run_chained_ipw_pipeline <- function(
   compact_res <- NULL
   M_cov <- if (early_reduction || cpt_mode) 0.0 else M_rows
   memory_phase_route <- cp04_pipeline_phase_eligible(cp04, transfer_requested, cpt_mode,
-    imputation, augmented, custom_est_method, wt_mode, ctrl$gmm_accuracy$covariance_strategy)
+    imputation, augmented, custom_est_method, wt_mode, ctrl$gmm_accuracy$covariance_strategy) ||
+    ipw_raw_phase_eligible(use_raw_ipw, transfer_requested, cpt_mode, custom_est_method, wt_mode,
+      ctrl$gmm_accuracy$covariance_strategy)
   combined_initial <- ipw_owner_safe_sum(c(
     owners_live, aux_env$retained_entries,
     4.0*as.double(nrow(data))*(length(data)+p_bound),
@@ -6086,6 +6095,10 @@ run_chained_ipw_pipeline <- function(
   # retained by every nuisance fit. Keep actual persistent input/model metadata
   # here; each covariance/GMM/reporting allocation rejoins its own phase below.
   initial_envelope_estimate <- combined_initial
+  # Entries added to the persistent prefix only on the memory-phase route
+  # (within reduction Gram and working covariance); the reported whole-path
+  # envelope excludes them.
+  phase_prefix_entries <- 0
   memory_phase <- if (memory_phase_route) cp04_pipeline_phase_start(combined_initial,
     (if (transfer_requested) 64.0 else 16.0) * M_cov * M_cov,
     (if (cpt_mode) 0.0 else (if (transfer_requested) 128.0 else 32.0) * n_total * J_bound),
@@ -6135,6 +6148,10 @@ run_chained_ipw_pipeline <- function(
     combined_initial <- ipw_owner_safe_sum(c(combined_initial,
       nuis_res$cp04$accounting$owned_entries, cp04_reader$accounting$owned_entries),
       min(ctrl$owner_control$max_retained_entries, ctrl$owner_control$max_matrix_entries), "CP04 combined retained pipeline")
+    # The prefix now holds the backend's and reader's storage; later
+    # compositions that add the backend's owned + borrowed entries count it once.
+    nuis_res$prefix_owner_storage <- cp04_owner_overlap_record(nuis_res, combined_initial, frame_owner, panel_owner,
+      owners_live - or_preprocess_entries)
     # CP08/D78 work ownership: the registry composes this pipeline prefix exactly
     # once (cp04_registry_work_accounting). Baseline OR/DR report CUMULATIVE
     # bounds that already contain `combined_work` plus the registry's
@@ -6187,6 +6204,8 @@ run_chained_ipw_pipeline <- function(
       min(ctrl$owner_control$max_retained_entries, ctrl$owner_control$max_matrix_entries),
       "pipeline envelope plus compact raw-IPW backend"
     )
+    nuis_res$prefix_owner_storage <- cp04_owner_overlap_record(nuis_res, combined_initial, frame_owner, panel_owner,
+      owners_live - or_preprocess_entries)
     combined_work <- ipw_owner_safe_sum(
       nuis_res$raw_work_accounting$composed_total,
       ctrl$owner_control$max_work_ops,
@@ -6250,6 +6269,7 @@ run_chained_ipw_pipeline <- function(
   class_cert <- NULL
   sf_within_gram <- NULL
   same_pair_within_bundle <- NULL
+  within_phase_record <- list()
   batch_facts <- batch_fit_trace <- point_plan <- point_general <- point_custom <- NULL
   if (use_raw_ipw) {
     point_links_all <- nuis_res$point_links
@@ -6264,11 +6284,17 @@ run_chained_ipw_pipeline <- function(
       progress("structural certificate: ", length(kept_idx), " of ", M_all, " comparisons retained (",
         structural_preflight$mask_evidence, ")")
       L_cov <- as.double(length(kept_idx))
-      combined_initial <- ipw_owner_safe_sum(c(combined_initial,
-        (if (transfer_requested) 64.0 else 16.0)*L_cov*L_cov,
-        32.0*ctrl$owner_control$max_chunk_rows*(L_cov+p_bound+1.0)),
-        min(ctrl$owner_control$max_retained_entries,ctrl$owner_control$max_matrix_entries),
-        "pipeline envelope plus retained structural-basis covariance/GMM/replay buffers, certificate and expansion records")
+      basis_cov <- (if (transfer_requested) 64.0 else 16.0)*L_cov*L_cov
+      basis_replay <- 32.0*ctrl$owner_control$max_chunk_rows*(L_cov+p_bound+1.0)
+      if (is.null(memory_phase)) {
+        combined_initial <- ipw_owner_safe_sum(c(combined_initial, basis_cov, basis_replay),
+          min(ctrl$owner_control$max_retained_entries,ctrl$owner_control$max_matrix_entries),
+          "pipeline envelope plus retained structural-basis covariance/GMM/replay buffers, certificate and expansion records")
+      } else {
+        # Memory-phase route: the retained-basis covariance and replay buffers
+        # are charged in the covariance and GMM phases, like the catalog terms.
+        memory_phase <- ipw_raw_phase_defer(memory_phase, basis_cov, basis_replay)
+      }
       combined_work <- ipw_owner_safe_sum(c(combined_work,
         (if (transfer_requested) 128.0 else 32.0)*n_total*L_cov*L_cov),
         ctrl$owner_control$max_work_ops, "pipeline work plus retained structural-basis covariance accumulation")
@@ -6372,6 +6398,19 @@ run_chained_ipw_pipeline <- function(
     need_general_within <- !is.null(cp04) && identical(wt_mode, "within") &&
       (!is.null(cp04$reference_source) || identical(cp04$outcome_pooling, "pooled") ||
          !is.null(cp04$selection_est_method) || identical(cp04$canonical_assumption, "conditional_mtar"))
+    within_log_limit <- Inf
+    if (need_general_within && !is.null(memory_phase)) {
+      # Memory-phase route: the loading phase is charged before the producers
+      # run; the loading log then receives the workspace that remains.
+      M_union <- max(M_all, length(nuis_res$cp04_points))
+      bundle_total <- ipw_pipeline_within_phase_check(nuis_res, combined_initial,
+        cp04_pipeline_within_bundle_entries(M_all, M_union, frame_owner$n_a_units,
+          length(panel_owner$all_times), length(unique(as.double(frame_owner$a_g))),
+          max(ncol(f_Z), ncol(frame_owner$Z_a))),
+        "CP04 within loading phase simultaneous entries")
+      within_log_limit <- nuis_res$cp04$control$max_matrix_entries - bundle_total
+      within_phase_record$loading_entries <- bundle_total
+    }
     if (need_general_within) {
       same_pair_within_bundle <- compute_same_pair_within_bundle(
         design_links = metadata_obj$design_links,
@@ -6383,8 +6422,10 @@ run_chained_ipw_pipeline <- function(
         nuis_res = nuis_res,
         f_Z = f_Z,
         ctrl = ctrl,
-        reduce_structural_redundancy = is.null(class_cert) && isTRUE(reduce_structural_redundancy)
+        reduce_structural_redundancy = is.null(class_cert) && isTRUE(reduce_structural_redundancy),
+        within_log_limit = within_log_limit
       )
+      if (!is.null(memory_phase)) within_phase_record$loading_log_entries <- same_pair_within_bundle$U_log$entries
     }
 
     if (!is.null(class_cert) && wt_mode %in% c("optimal", "within") && isTRUE(reduce_structural_redundancy)) {
@@ -6394,12 +6435,31 @@ run_chained_ipw_pipeline <- function(
       kept_idx <- same_pair_within_bundle$kept_idx
       dropped_idx <- same_pair_within_bundle$dropped_idx
       if (length(kept_idx) < M_all) sf_within_gram <- same_pair_within_bundle$G
+      # The retained reduction Gram and index vectors persist through every
+      # later phase of the memory-phase route.
+      if (!is.null(memory_phase)) phase_prefix_entries <- phase_prefix_entries + as.double(length(kept_idx))^2 + M_all
+      if (!is.null(memory_phase)) combined_initial <- ipw_owner_safe_sum(
+        c(combined_initial, as.double(length(kept_idx))^2, M_all),
+        min(ctrl$owner_control$max_retained_entries, ctrl$owner_control$max_matrix_entries),
+        "pipeline envelope plus within structural reduction Gram")
     } else if (is.null(class_cert) && identical(wt_mode, "within") && isTRUE(reduce_structural_redundancy) &&
                (is.null(cp04) || (is.null(cp04$reference_source) && !identical(cp04$outcome_pooling, "pooled")))) {
+      if (!is.null(memory_phase)) within_phase_record$reduction_entries <- ipw_pipeline_within_phase_check(
+        nuis_res, combined_initial,
+        cp04_pipeline_within_forest_entries(M_all, frame_owner$n_a_units, length(panel_owner$all_times)),
+        "CP04 within reduction phase simultaneous entries")
       sf_within <- within_mask_spanning_forest(metadata_obj$design_links, panel_owner, frame_owner)
       kept_idx <- sf_within$kept_idx
       dropped_idx <- sf_within$dropped_idx
       if (length(kept_idx) < M_all) sf_within_gram <- sf_within$G
+      # The retained reduction Gram and index vectors persist through every
+      # later phase of the memory-phase route.
+      if (!is.null(memory_phase)) phase_prefix_entries <- phase_prefix_entries + as.double(length(kept_idx))^2 + M_all
+      if (!is.null(memory_phase)) combined_initial <- ipw_owner_safe_sum(
+        c(combined_initial, as.double(length(kept_idx))^2, M_all),
+        min(ctrl$owner_control$max_retained_entries, ctrl$owner_control$max_matrix_entries),
+        "pipeline envelope plus within structural reduction Gram")
+      sf_within <- NULL
     } else {
       kept_idx <- seq_len(M_all)
       dropped_idx <- integer(0L)
@@ -6432,6 +6492,28 @@ run_chained_ipw_pipeline <- function(
   oo <- order(design_order)
   kept_idx <- kept_idx[oo]; point_links_used <- point_links_used[oo]
   if (!is.null(sf_within_gram)) sf_within_gram <- sf_within_gram[oo, oo, drop = FALSE]
+  # Memory-phase route with streamed loadings: the working covariance is formed
+  # here, while only the persistent prefix, the backend and the loading log
+  # are live, and the log is released once it is formed. The covariance then
+  # persists through every later phase. Its values do not depend on the order.
+  V_within_early <- NULL
+  if (!is.null(memory_phase) && identical(wt_mode, "within") && !is.null(same_pair_within_bundle)) {
+    sp_log <- same_pair_within_bundle$U_log
+    L_sp <- length(kept_idx)
+    sp_rows <- stream_block_rows(sp_log$n_a, 4.0 * L_sp, ctrl$gmm_bounds$max_matrix_entries,
+      sp_log$entries + 5.0 * as.double(L_sp) * L_sp)
+    within_phase_record$covariance_entries <- ipw_pipeline_within_phase_check(nuis_res, combined_initial,
+      c(sp_log$entries, cp04_pipeline_within_stream_entries(L_sp, sp_rows, sp_log$n_a, M_all)),
+      "CP04 within covariance phase simultaneous entries")
+    V_within_early <- within_cov_stream(sp_log, kept_idx, design_used$links$g, same_pair_within_bundle$scale_by_g,
+      sp_rows)
+    same_pair_within_bundle$U_log <- NULL
+    sp_log <- NULL
+    phase_prefix_entries <- phase_prefix_entries + as.double(L_sp)^2
+    combined_initial <- ipw_owner_safe_sum(c(combined_initial, as.double(L_sp)^2),
+      min(ctrl$owner_control$max_retained_entries, ctrl$owner_control$max_matrix_entries),
+      "pipeline envelope plus within working covariance")
+  }
 
   # 6. Ledger alignment with the (possibly reduced) design and the post-contrast basis.
   #    The proved lossless reduction preserves component connectivity; any change
@@ -6530,11 +6612,19 @@ run_chained_ipw_pipeline <- function(
   # retain the original initial and persistent envelope records unchanged.
   cp04_memory_overlap <- combined_initial - cp04_registry_retained_entries(nuis_res, combined_initial)
   if (cp04_auto_plan || use_raw_ipw)
-    cp04_planner_retained <- cp04_registry_retained_entries(nuis_res, cp04_planner_retained)
+    cp04_planner_retained <- cp04_composed_retained_entries(nuis_res, cp04_planner_retained)
   if (cp04_auto_plan) {
     point_preflight <- cp04_preflight_links(nuis_res$cp04, cp04_used, cp04_planner_retained)
+    # Augmented fits with dated inputs and an automatic chunk size only: an
+    # explicit `chunk_rows` sets the passes whatever the workspace limit.
+    if (inherits(nuis_res$cp04, "cdid_augmented_backend") && !is.null(nuis_res$cp04$reference_ref) &&
+        isTRUE(cp04$automatic_chunk_rows) && point_preflight$chunk_rows < 16 && n_total > point_preflight$chunk_rows)
+      resource_speed_warning_rows(point_preflight$chunk_rows, n_total)
   }
-  combined_live <- ipw_owner_safe_sum(c(cp04_registry_retained_entries(nuis_res, combined_initial),
+  # The producer workspace carries the backend's owned + borrowed entries.
+  cp04_owner_overlap_live <- if (is.null(point_preflight$producer_workspace_entries)) 0 else
+    cp04_owner_overlap_entries(nuis_res)
+  combined_live <- ipw_owner_safe_sum(c(cp04_registry_retained_entries(nuis_res, combined_initial) - cp04_owner_overlap_live,
     point_preflight$producer_workspace_entries,gmm_preflight$total_payload_entries,
     d5_arrays$ledger_if_entries, d5_arrays$basis_if_entries, d5_arrays$ledger_enclosure_entries, d5_arrays$basis_enclosure_entries,
     d5_arrays$retained_diagnostic_entries, if (is.null(point_plan)) 0 else point_plan$batch$additional_live_entries,
@@ -6563,8 +6653,8 @@ run_chained_ipw_pipeline <- function(
     memory_phase$deferred_auxiliary_entries),
     min(ctrl$owner_control$max_retained_entries, ctrl$owner_control$max_matrix_entries),
     "baseline reporting phase with retained GMM results and output/draw buffers")
-  cp04_reporting_retained <- cp04_registry_retained_entries(nuis_res, reporting_retained)
-  cp04_retained_with_diagnostics <- cp04_registry_retained_entries(nuis_res, retained_with_diagnostics)
+  cp04_reporting_retained <- cp04_composed_retained_entries(nuis_res, reporting_retained)
+  cp04_retained_with_diagnostics <- cp04_composed_retained_entries(nuis_res, retained_with_diagnostics)
   cp04_retained <- NULL
   cp04_cov_retained <- NULL
   cp04_gmm_retained <- NULL
@@ -6726,6 +6816,7 @@ run_chained_ipw_pipeline <- function(
         ctrl$owner_control$max_work_ops,
         "D90 general point-IF sparse replay state construction, slicing and check work"
       )
+      cp04_plan_memo_clear()
       point_general_state <- ipw_point_if_general_state_build(
         point_general_state_res,
         point_general,
@@ -6735,6 +6826,10 @@ run_chained_ipw_pipeline <- function(
     }
     point_general_state_res <- NULL
   }
+  # The copy into the returned object, charged before estimation on the route
+  # where its terms are already final (static OR/DR without memory phases).
+  if (is.null(memory_phase) && !is.null(nuis_res$cp04))
+    cp04_public_copy_precheck(nuis_res$cp04, ctrl$owner_control, frame_owner, combined_live, combined_initial)
   # The one producer handed to the covariance stream and both GMM projection
   # passes: the sealed backend, or the backend bound to its retained store.
   cp04_producer <- if (is.null(active_backend)) NULL else if (!is.null(cp04_retained))
@@ -6743,7 +6838,14 @@ run_chained_ipw_pipeline <- function(
   # 7. Stream two-pass centered point moment covariance on `point_links_used`
   progress("streaming the ", L_used, "-moment covariance from complete unit link influence functions")
   cov_stream_used <- if (!is.null(active_backend)) {
-    cov_out <- cp04_stream_covariance(cp04_producer, cp04_used, cp04_retained_with_diagnostics)
+    cov_out <- if (identical(wt_mode, "within") && !is.null(V_within_early) &&
+                   inherits(active_backend, "cdid_augmented_backend") &&
+                   !is.null(active_backend$reference_ref)) {
+      cp04_stream_covariance(cp04_producer, cp04_used, cp04_retained_with_diagnostics,
+        empirical = FALSE)
+    } else {
+      cp04_stream_covariance(cp04_producer, cp04_used, cp04_retained_with_diagnostics)
+    }
     # Optional transition: retain the already filled matrix for GMM slices
     # only after funding that phase without its unused raw producer scratch.
     # A decline keeps the original covariance release and GMM-only admission.
@@ -6753,9 +6855,10 @@ run_chained_ipw_pipeline <- function(
       replay_peak_entries <- max(replay_peak_entries, cp04_cov_retained$producer_cell_peak)
       transition_inv <- cp04_retained_if_phase_inventory("gmm", active_backend, cp04_work, point_preflight,
         cp04_retained_with_diagnostics, cp04_planner_retained, d5_arrays, L_used, M_all)
-      transferred <- cp04_retained_if_covariance_to_gmm(cp04_cov_retained, active_backend, cp04_used,
-        point_preflight$chunk_rows, retained = transition_inv$retained,
-        work = combined_work, control = active_backend$control)
+      transferred <- if (is.null(active_backend$layout) || identical(wt_mode, "within"))
+        cp04_retained_if_covariance_to_gmm(cp04_cov_retained, active_backend, cp04_used,
+          point_preflight$chunk_rows, retained = transition_inv$retained,
+          work = combined_work, control = active_backend$control)
       transition_inv <- NULL
       if (!is.null(transferred)) {
         cp04_retained <- transferred
@@ -6807,15 +6910,31 @@ run_chained_ipw_pipeline <- function(
   }
   mhat_used <- stats::setNames(as.double(cov_stream_used$estimates), design_used$incidence$link_ids)
   V_used <- if (identical(wt_mode, "within")) {
-    if (!is.null(same_pair_within_bundle)) {
-      U_used <- lapply(same_pair_within_bundle$U_list_all, function(U_t) U_t[, kept_idx, drop = FALSE])
-      within_cov_from_level_loadings(U_used, design_used$links$g)
+    if (!is.null(V_within_early)) {
+      V_within_early
+    } else if (!is.null(same_pair_within_bundle)) {
+      sp_log <- same_pair_within_bundle$U_log
+      L_sp <- length(kept_idx)
+      within_cov_stream(sp_log, kept_idx, design_used$links$g, same_pair_within_bundle$scale_by_g,
+        stream_block_rows(sp_log$n_a, 4.0 * L_sp, ctrl$gmm_bounds$max_matrix_entries,
+          sp_log$entries + 5.0 * as.double(L_sp) * L_sp))
     } else {
+      # Memory-phase route: the persistent prefix, the backend, any retained
+      # moment IF store and the empirical covariance stream stay live while
+      # the working covariance is constructed.
+      if (!is.null(memory_phase)) within_phase_record$covariance_entries <- ipw_pipeline_within_phase_check(
+        nuis_res, cp04_retained_with_diagnostics,
+        c(unname(cp04_payload(cov_stream_used)["entries"]),
+          if (is.null(cp04_retained)) 0 else cp04_retained$entries,
+          cp04_pipeline_within_covariance_entries(L_used, frame_owner$n_a_units,
+            length(panel_owner$all_times), ncol(frame_owner$Z_a))),
+        "CP04 within covariance phase simultaneous entries", registry_prefix = FALSE)
       compute_pipeline_within_covariance(design_used, panel_owner, frame_owner, cp04, ctrl$glm_control)
     }
   } else {
     cov_stream_used$covariance
   }
+  V_within_early <- NULL
   dimnames(V_used) <- list(design_used$incidence$link_ids, design_used$incidence$link_ids)
 
   # Verify `apply_ipw_reduction_map` expansion back to all original links when `class_cert` is present
@@ -7297,13 +7416,15 @@ run_chained_ipw_pipeline <- function(
         population_claim = "none: catalog-relative support only; unavailable cells are not population non-identification claims",
         maps = list(ledger_to_core_target_row = ledger$core_target_row, ledger_to_loading_column = ledger$loading_column,
           basis_to_loading_column = basis$loading_column, core_target_to_loading_column = core_targets$loading_column)),
-      resource_accounting = c(list(initial_envelope_entries=if (is.null(memory_phase)) combined_initial else initial_envelope_estimate,
+      resource_accounting = c(list(initial_envelope_entries=ipw_pipeline_reported_envelope(memory_phase, wt_mode, cp04,
+          combined_initial, initial_envelope_estimate, phase_prefix_entries),
         memory_phases=memory_phase,
         simultaneous_entries=combined_live,historical_replay_peak_entries=max(combined_live,replay_peak_entries),
         downstream_work_ops=combined_work,point_producer=point_preflight,
         complete_raw_capacity=complete_raw_capacity,
         memory_prefix_composition = list(embedded_external_entries = cp04_memory_overlap,
-          simultaneous_entries_before_prefix_dedup = ipw_owner_safe_sum(c(combined_live, cp04_memory_overlap)),
+          simultaneous_entries_before_prefix_dedup = ipw_owner_safe_sum(c(combined_live, cp04_memory_overlap,
+            cp04_owner_overlap_live)),
           rule = "same registry/backend: embedded external prefix charged once; reader/backend/owner reservations retained"),
         final_diagnostic_copy_entries=final_diagnostic_copy_entries, auxiliary_plan=aux_record,
         mask_registry=if (is.null(nuis_res$construction_work)) NULL else nuis_res$construction_work[
@@ -7313,6 +7434,7 @@ run_chained_ipw_pipeline <- function(
         lifetimes="Owners, registry, all original moments, the full ledger/basis arrays and accumulated outputs persist; producer chunks/cache and GMM consumer are reserved concurrently; interval readers/buffers only when requested."),
         # CP08/D78: ownership of the CP04 fit's work composition (prefix charged once).
         if (is.null(nuis_res$cp04_work_accounting)) list() else list(cp04_work_composition = nuis_res$cp04_work_accounting),
+        if (length(within_phase_record)) list(within_phases = within_phase_record) else list(),
         if (early_reduction) list(early_structural = structural_preflight) else list(),
         # CP08 missing-panel IPW: the general route's one normalization record
         # (header and verification charges; the record itself is not retained).
@@ -7477,6 +7599,28 @@ within_mask_spanning_forest <- function(design_links, panel_owner, frame_owner) 
   }
 
   build_mask_forest_and_gram(design_links$s, design_links$t, exact_keys)
+}
+
+# The reported whole-path envelope (`resource_accounting$initial_envelope_entries`).
+# Without a phase record it is the envelope itself. The static baseline
+# OR/DR `optimal` phase route reports its initial estimate, as before. Every
+# other phase route reports the envelope the whole-path route would have
+# composed: the persistent prefix plus the deferred terms, without the
+# entries that only the phase route adds to the prefix.
+ipw_pipeline_reported_envelope <- function(phase, weighting, cp04, prefix, initial_estimate, phase_prefix) {
+  if (is.null(phase)) return(prefix)
+  if (identical(weighting, "optimal") && !is.null(cp04)) return(initial_estimate)
+  ipw_owner_safe_sum(c(prefix - phase_prefix - phase$persistent_entries, phase$whole_path_estimate))
+}
+
+# Memory-phase admission of one `within` phase: the persistent prefix (with
+# the registry's embedded X removed once), the fitted backend and the phase's
+# own arrays must fit the backend's explicit matrix bound before allocation.
+ipw_pipeline_within_phase_check <- function(nuis_res, retained, phase_entries, label, registry_prefix = TRUE) {
+  b <- if (!is.null(nuis_res$cp04)) nuis_res$cp04 else nuis_res$raw_ipw
+  if (registry_prefix) retained <- cp04_composed_retained_entries(nuis_res, retained)
+  ipw_owner_safe_sum(c(retained, b$accounting$owned_entries, b$accounting$borrowed_entries, phase_entries),
+    b$control$max_matrix_entries, label)
 }
 
 compute_pipeline_within_covariance <- function(design_used, panel_owner, frame_owner, cp04, glm_control) {

@@ -176,13 +176,28 @@ The overall summaries of the group, dynamic and calendar types always have point
 
 The multiplier bootstrap reuses the estimated influence functions; it does not refit the estimator. Each draw multiplies the influence function rows of each unit, or the row sums of each cluster, by a random sign of plus or minus one (Rademacher multipliers). A multiplier standard error is the interquartile range of the draws divided by the interquartile range of the standard normal distribution, on the scale of the estimate. A simultaneous critical value is the `1 - alp` empirical quantile of the largest absolute standardized draw across the covered estimates, and the band is the estimate plus or minus that value times the standard error. In the `bstrap = FALSE, cband = TRUE` case of the aggregate bins, the draws are standardized by their own interquartile range scale and the resulting critical value is applied to the analytical standard errors. Pointwise intervals use the normal critical value.
 
-The signs come from your session's random number stream, so `set.seed()` before `att_gt()` or `aggte()` reproduces the draws; there is no fixed seed. Parallel workers only multiply the signs drawn in your session, so the results equal those of `cores = 1`.
+The signs come from your session's random number stream, so `set.seed()` before `att_gt()` or `aggte()` reproduces the draws when everything listed in [Reproducing results](#reproducing-results) is also held fixed; there is no fixed seed. Parallel workers only multiply the signs drawn in your session, so the results equal those of `cores = 1`.
+
+The signs are drawn in batches. A batch has as many draws as the chunk size of the fit or as `biters`, whichever is smaller, and its signs are filled column by column, one column per unit or cluster. The chunk size is chosen automatically from `control$numeric_workspace_bytes` (see [Workspace limit and chunk size](options.md#workspace-limit-and-chunk-size)), so two fits with the same seed but different chunk sizes use different signs. Their standard errors, critical values and bands then differ by Monte Carlo noise, as between two seeds; both are valid. Point estimates, influence functions and analytical standard errors can differ in the last digits. This concerns only fits whose automatic chunk size is below both the number of units and 256, that is, fits with many stored dates and cohorts; on other fits the chunk size, and hence the draws, do not depend on the workspace limit. On cohort fits, `fit$chained$inference$rng$batch_rows` records the batch size used when draws were made.
 
 ### Analytical standard errors and clustering
 
 Analytical standard errors come from the complete influence functions, with one row for every unit of the unit table, including units without an observed change. They account for the estimation of the treatment, outcome, observation and imputation models, the response rates and the cohort shares used by the chosen method.
 
 With `clustervars`, influence function rows are summed within clusters, including clusters without any unit that contributes a change, and the multiplier signs are drawn by cluster. Clustering changes the standard errors and bands; the point estimates stay the same, because the GMM weights are based on units. A cluster scheme that `aggte()` cannot honor is refused.
+
+### Reproducing results
+
+To reproduce a chained fit exactly, including its multiplier bootstrap standard errors, critical values and bands, hold fixed:
+
+- the package version;
+- the data, in the same row order (reordering the rows leaves the point estimates unchanged up to rounding but can change the multiplier draws);
+- the arguments of the call, including `biters`, `clustervars` and `alp`;
+- the seed, set with `set.seed()` immediately before `att_gt()`, `aggte()` or `conditional_did_pretest()`, and the random number generator kind (`RNGkind()`);
+- `control$numeric_workspace_bytes`, and `control$chunk_rows` if you set it, because they determine the chunk size and therefore the batches in which the signs are drawn;
+- `control$workers`, `pl` and `cores`, which must be declared consistently for the call to be admitted; they do not change the draws.
+
+Cohort (`gname`) fits record the values used in `fit$chained$public$profile$numeric_workspace_bytes`, `fit$chained$public$chunk_rows` and, when multiplier draws were made, `fit$chained$inference$rng$batch_rows`. Switching-model (`dname`) fits record the first two in `fit$request$control$profile$numeric_workspace_bytes` and `fit$request$control$chunk_rows`, and their draws depend on the workspace limit in the same way. Fits with the cohort-by-date preset record only the batch size; their chunk size, and hence their draws, do not depend on the workspace limit; see [Workspace limit and chunk size](options.md#workspace-limit-and-chunk-size). With a different workspace limit or chunk size, the multiplier draws can change and the point estimates, influence functions and analytical standard errors can differ in the last digits. Whether such differences matter depends on the use; to replay a result, hold the settings above fixed.
 
 ### What the uncertainty assumes
 

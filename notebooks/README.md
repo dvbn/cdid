@@ -13,7 +13,7 @@ Download the HTML file and open it in a browser. R and Quarto are not needed to 
 
 Open [cdid_practical_guide.qmd](cdid_practical_guide.qmd) in Positron or another Quarto-capable editor.
 
-**Version.** The notebook requires `cdid` 1.3.0.0 or later, and its setup chunk stops with an older version. Until 1.3.0.0 is on CRAN, install it from GitHub with `remotes::install_github("dvbn/cdid")`, or from this checkout with `remotes::install_local(".")` run from the repository root. The optional [pinned validation setup](../validation/SETUP.md) installs exact dependency versions. Start a fresh R session after reinstalling `cdid`, `did` or `DRDID`.
+**Version.** The notebook uses the built-in chained cohort default `gmm_weighting = "within"`. Check that your installed version has that default. Install the current release from CRAN when available or use `remotes::install_github("dvbn/cdid")`. To test a development checkout, run `remotes::install_local(".")` from its root. The optional [pinned validation setup](../validation/SETUP.md) installs exact dependency versions. Start a fresh R session after reinstalling `cdid`, `did` or `DRDID`.
 
 **Packages.** Required packages are `cdid`, `did`, `DRDID`, `knitr` and `ggplot2`. Rendering also requires `rmarkdown` and Quarto. The setup chunk installs nothing. Install the tutorial packages once if needed:
 
@@ -32,7 +32,7 @@ install.packages(c("knitr", "rmarkdown", "ggplot2"))
 | 5 to 8 | Missing outcomes | Why `selection = "none"` lacks its assumption in this design, observation models, treatment IPW, OR and DR, slope pooling, rotating panels, fitted support, change imputation, and the augmented correction with its model reports. |
 | 9 | Comparisons and trends | Not-yet-treated controls, `base_period`, PT-all, cross-pair chains on disjoint windows and ordinary `did` delegation. |
 | 10 to 12 | Inference and robustness | Multiplier bands, clustering, both pretrend tests, and treatment-DR correctness cases. |
-| 13 and 14 | Inputs and weighting | Dated covariates, weight anchors, known reference covariate rows, GMM weighting, resource controls and point-only fits. |
+| 13 and 14 | Inputs and weighting | Dated covariates, weight anchors, a comparison of within and two-step GMM on the same incomplete panel, resource controls and point-only fits. |
 | 15 and 16 | Tools | Parallel multiplier draws, the custom estimator contract, supported limits, exports and an experiment workflow. |
 | 17 and 18 | Other treatment designs | Binary treatment that can stop and restart with `dname`, and the cohort-by-date fixed-effects preset. |
 

@@ -552,7 +552,7 @@ test_that("weighted 2-period balanced panel matches upstream DRDID across IPW, O
 })
 
 # ------------------------------------------------------------------------------
-# 3. GMM weighting ("identity", default "optimal" two-step, active Tikhonov)
+# 3. GMM weighting ("identity", "optimal" two-step, active Tikhonov)
 #    and PT-all vs PT-post with zero-outcome and singleton units
 # ------------------------------------------------------------------------------
 
@@ -597,11 +597,13 @@ test_that("GMM weighting, active Tikhonov ridge, PT-all, and singleton/frame-onl
   mp10 <- cdid::att_gt(
     yname = "y", tname = "t", idname = "id", gname = "g",
     data = panel10, frame = frame10, est_method = "ipw",
+    gmm_weighting = "optimal",
     pt_assumption = "all", pt_start = 2, bstrap = FALSE, cband = FALSE
   )
   mp10_cl <- cdid::att_gt(
     yname = "y", tname = "t", idname = "id", gname = "g",
     data = panel10, frame = frame10, clustervars = "cluster", est_method = "ipw",
+    gmm_weighting = "optimal",
     pt_assumption = "all", pt_start = 2, bstrap = FALSE, cband = FALSE
   )
   expect_identical(mp10$n, 10L)

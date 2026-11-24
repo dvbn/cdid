@@ -111,11 +111,14 @@ fit <- cdid::att_gt(
   control_group = "nevertreated",
   est_method = "ipw",
   mode = "chained",
-  pt_assumption = "post"
+  pt_assumption = "post",
+  gmm_weighting = "optimal"
 )
 ```
 
 Calls are qualified with `cdid::` so that loading `did` later in the session cannot change which function runs. `mode = "chained"` is already the default for panel data; it is written here so that the comparison with `did` at the end of this article is easy to read. `est_method = "ipw"` selects treatment weighting (the package default is `"dr"`). Without covariates, the treatment propensity model contains only an intercept. `pt_assumption = "post"` is the default and is written for clarity.
+
+The recorded example used two-step weighting. The call requests it explicitly so that it uses the same weighting on newer versions of `cdid`. In a new analysis, omit `gmm_weighting` to use the current built-in cohort default, `"within"`. [Why within is the default](methods/gmm.md#why-within-is-the-cohort-default)
 
 The inference settings keep their defaults: `bstrap = TRUE`, `cband = TRUE`, `biters = 1000` and `alp = 0.05`. The standard errors therefore come from 1000 multiplier bootstrap draws, and the band is a 95% simultaneous band over the reported cells. The draws use your session's random number stream, so `set.seed(1)` makes them reproducible.
 
@@ -128,6 +131,7 @@ The inference settings keep their defaults: `bstrap = TRUE`, `cband = TRUE`, `bi
 | `est_method` | `"ipw"` | [Treatment adjustment](reference/options.md#treatment-adjustment) |
 | `mode` | `"chained"` | [Chained arguments](reference/options.md#chained-arguments) |
 | `pt_assumption` | `"post"` | [Parallel trends and reporting](reference/options.md#parallel-trends-and-reporting) |
+| `gmm_weighting` | `"optimal"` | [GMM weighting](methods/gmm.md#public-weighting-and-covariance-options) |
 | `bstrap`, `cband`, `biters`, `alp` | defaults | [Inference and computation](reference/options.md#inference-and-computation) |
 
 The result records these choices: `fit$DIDparams` holds the familiar `did` settings (for example `fit$DIDparams$est_method` and `fit$DIDparams$control_group`), `fit$chained$pt` holds the parallel trends choice and `fit$chained$inference` describes the uncertainty calculation that was actually performed.

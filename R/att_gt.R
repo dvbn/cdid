@@ -51,7 +51,7 @@ att_gt <- function(yname,
                    selection_universe = "F", selection_rho = NULL, selection_justification = NULL,
                    selection_est_method = "ipw",
                    imputation_pooling = "separate",
-                   gmm_weighting = c("optimal", "identity", "within"),
+                   gmm_weighting = "within",
                    gmm_covariance = "tikhonov",
                    pt_assumption = c("post", "all", "ctrl"),
                    pt_start = NULL,
@@ -99,7 +99,8 @@ att_gt <- function(yname,
         c("cdid_static_routing_error", "cdid_chained_request_missing_reference_error", "cdid_chained_request_input_error")
       )
     }
-    return(static_public_att_gt(
+    # A resource refusal is restated once, without evaluating anything again.
+    return(resource_guard(static_public_att_gt(
       yname = yname, tname = tname, idname = idname, dname = dname_val,
       xformla = xformla, data = data, panel = panel,
       allow_unbalanced_panel = allow_unbalanced_panel,
@@ -121,7 +122,8 @@ att_gt <- function(yname,
       selection_justification = selection_justification,
       selection_est_method = selection_est_method,
       imputation_pooling = imputation_pooling,
-      gmm_weighting = gmm_weighting, gmm_covariance = gmm_covariance,
+      gmm_weighting = if (missing(gmm_weighting)) "optimal" else gmm_weighting,
+      gmm_covariance = gmm_covariance,
       pt_assumption = pt_assumption, pt_start = pt_start,
       cross_pair = cross_pair,
       control = control,
@@ -130,7 +132,7 @@ att_gt <- function(yname,
       switchers = switchers,
       switch_times = switch_times,
       env = env, call = sys.call()
-    ))
+    ), control))
   }
 
   if (is.null(mode)) {
@@ -172,7 +174,9 @@ att_gt <- function(yname,
   # "imputation" never evaluates selection_model/selection_pooling/
   # selection_xformla; "dr" (augmented correction, est_method = "dr", "ipw" or
   # "reg") evaluates both groups. All stay lazy promises here.
-  chained_public_att_gt(
+  # A resource refusal is restated once, without evaluating anything again
+  # (`resource_guard()`).
+  resource_guard(chained_public_att_gt(
     yname = yname, tname = tname, idname = idname, gname = gname, xformla = xformla, data = data,
     panel = panel, allow_unbalanced_panel = allow_unbalanced_panel, control_group = control_group,
     anticipation = anticipation, weightsname = weightsname, fix_weights = fix_weights, alp = alp,
@@ -183,10 +187,14 @@ att_gt <- function(yname,
     selection = selection, selection_model = selection_model, selection_pooling = selection_pooling,
     selection_xformla = selection_xformla,
     selection_universe = selection_universe, selection_rho = selection_rho, selection_justification = selection_justification,
-    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling, gmm_weighting = gmm_weighting,
+    selection_est_method = selection_est_method, imputation_pooling = imputation_pooling, outcome_pooling = outcome_pooling,
+    gmm_weighting = if (missing(gmm_weighting) && (is.function(est_method) ||
+      (is.list(control) && identical(control[["preset", exact = TRUE]], "cohort_time_fe")))) {
+      c("optimal", "identity", "within")
+    } else gmm_weighting,
     gmm_covariance = gmm_covariance, pt_assumption = pt_assumption, pt_start = pt_start, cross_pair = cross_pair, control = control,
     missing_reference = missing_reference, missing_reference_supplied = !missing(missing_reference),
-    call = sys.call())
+    call = sys.call()), control)
 }
 
 check_mode <- function(mode) {

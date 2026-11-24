@@ -829,7 +829,7 @@ cp04_backend_domain <- function(backend) {
 # Only the public automatic Corollary 1 OR route may reduce its row batch.
 # The existing affine charges determine admission before any IF is evaluated;
 # explicit public/private chunk sizes and the link blocks remain fixed.
-cp04_plan_rows <- function(backend, link_sets, retained = 0, chunk_rows = NULL) {
+cp04_plan_rows <- function(backend, link_sets, retained = 0, chunk_rows = NULL, memo = NULL) {
   st <- cp04_backend_domain(backend); ctrl <- backend$control
   if (!is.null(chunk_rows)) {
     chunk_rows <- ipw_owner_int_bound(chunk_rows, "chunk_rows")
@@ -844,18 +844,36 @@ cp04_plan_rows <- function(backend, link_sets, retained = 0, chunk_rows = NULL) 
     if (inherits(backend, "cdid_imputation_backend")) imputation_if_envelope else
     if (inherits(backend, "cdid_dr_corollary1")) dr_corollary1_if_envelope else
     if (inherits(backend, "cdid_dr_baseline")) dr_baseline_if_envelope else or_corollary1_if_envelope
+  # The automatic row rule extrapolates its first two charges. Use the
+  # original affine envelope here so tightening a fixed batch's peak cannot
+  # change the unit partition and hence the bootstrap sequence.
+  if (inherits(backend, "cdid_augmented_backend") && !is.null(backend$layout) &&
+      reconstruction_separate(backend$shared_or)) {
+    env_fn <- function(b, rows, links) {
+      validate_augmented_backend(b)
+      reconstruction_if_envelope(b, rows, links, FALSE, augmented = TRUE, plan_rows = TRUE)
+    }
+  }
   own <- backend$accounting$owned_entries + backend$accounting$borrowed_entries
   use_fast_env <- identical(env_fn, dr_baseline_if_envelope) &&
     exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
     identical(environment(sys.function()), environment(cdid_fast_kernel))
   for (links in link_sets) {
-    if (use_fast_env) {
+    if (!is.null(memo) && !is.na(memo$env$one_output[memo$k])) {
+      # Envelope values of this exact link set, kept by the covariance plan.
+      one <- list(output = memo$env$one_output[memo$k], scratch = memo$env$one_scratch[memo$k])
+      two <- list(output = memo$env$two_output[memo$k], scratch = memo$env$two_scratch[memo$k])
+    } else if (use_fast_env) {
       env12 <- cdid_fast_if_budget(backend, 0L, links, "dr_env12")
       one <- env12$one
       two <- env12$two
     } else {
       one <- env_fn(backend, 1, links)
       two <- env_fn(backend, 2, links)
+    }
+    if (!is.null(memo)) {
+      cp04_plan_memo_set(memo$env, memo$k, one_output = one$output, one_scratch = one$scratch,
+        two_output = two$output, two_scratch = two$scratch)
     }
     slope <- two$output + two$scratch - one$output - one$scratch
     intercept <- one$output + one$scratch - slope
@@ -1276,7 +1294,14 @@ cp04_retained_if_phase_reserve <- function(backend, links, phase = c("covariance
 # Only the unused raw producer output/scratch is retired in this phase; the
 # caller retains covariance results, GMM consumers, diagnostics and all owners.
 cp04_retained_if_covariance_to_gmm <- function(store, backend, links, chunk_rows, retained, work, control) {
-  if (is.null(store) || !cp04_retained_if_phase_static_augmented(backend)) return(NULL)
+  if (is.null(store)) return(NULL)
+  # Dated augmentation has already folded all recipe rows back to the
+  # original units. The retained store verifies both the layout and its
+  # selection reader, and GMM still consumes its original row partition.
+  dated <- inherits(backend, "cdid_augmented_backend") &&
+    !is.null(backend$reference_ref) && !is.null(backend$layout) &&
+    reconstruction_separate(backend$shared_or) && is.null(backend$pair_outcomes)
+  if (!dated && !cp04_retained_if_phase_static_augmented(backend)) return(NULL)
   if (!is.environment(store) || !identical(store$kind, "cp04_retained_if") ||
       !identical(store$phase, "covariance") || !identical(store$state, "filled") ||
       !identical(store$producer_passes, 1L) || !identical(store$slice_passes, 1L))
@@ -1963,22 +1988,177 @@ cp04_stream_plan_legacy <- function(backend, links, retained = 0) {
   L <- length(links); LB <- min(L, ctrl$max_chunk_rows)
   blocks <- split(seq_len(L), ceiling(seq_len(L) / LB))
   B <- min(st$N, ctrl$max_chunk_rows)
+  memo <- cp04_plan_memo_get(backend, links, LB, length(blocks), retained)
+  env_memo <- !is.null(memo) && isTRUE(memo$envelope)
+  k <- 0L
   for (a in seq_along(blocks)) for (b in a:length(blocks)) {
     ids <- unique(c(links[blocks[[a]]], links[blocks[[b]]]))
-    B <- min(B, cp04_plan_rows(backend, list(ids), retained + 4 * L * L))
+    k <- k + 1L
+    # Pair envelopes are evaluated (and stored) only on the row-reduction classes.
+    if (env_memo) cp04_plan_path_count(if (is.na(memo$one_output[k])) "store_pair_misses" else "store_pair_hits")
+    B <- min(B, cp04_plan_rows(backend, list(ids), retained + 4 * L * L, memo = if (env_memo) list(env = memo, k = k)))
   }
   work <- 0; peak <- 0
   use_fast_b <- exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
     identical(environment(sys.function()), environment(cdid_fast_kernel))
   # Complete preflight before replay/allocations, including both Gram buffers.
+  k <- 0L
   for (a in seq_along(blocks)) for (b in a:length(blocks)) {
     ids <- unique(c(links[blocks[[a]]], links[blocks[[b]]]))
-    pre <- if (use_fast_b) cdid_fast_if_budget(backend, B, ids, "full") else chained_full_if_budget(backend, B, ids)
+    k <- k + 1L
+    if (!is.null(memo) && isTRUE(memo$rows[k] == B)) {
+      cp04_plan_path_count("store_budget_hits")
+      pre <- list(work = memo$work[k], output = memo$peak[k], scratch = 0)
+    } else {
+      if (!is.null(memo)) cp04_plan_path_count("store_budget_misses")
+      pre <- if (use_fast_b) cdid_fast_if_budget(backend, B, ids, "full") else chained_full_if_budget(backend, B, ids)
+      if (!is.null(memo)) cp04_plan_memo_set(memo, k, rows = B, work = pre$work, peak = pre$output + pre$scratch)
+    }
     work <- ipw_owner_safe_sum(c(work, 2 * ceiling(st$N / B) * pre$work + 4 * st$N * length(ids)^2),
       ctrl$max_work_ops, "CP04 covariance cumulative work")
     peak <- max(peak, pre$output + pre$scratch)
   }
   list(work = work, peak = peak, blocks = blocks, L = L, chunk_rows = B)
+}
+
+# The legacy covariance plan is built up to four times per fit for the same
+# sealed backend and link vector (pipeline work total, retained moment IF
+# admission, phase admission and the covariance stream), with different
+# retained charges. The envelope values of each block pair do not depend on the
+# retained charge, so the plan keeps, per block pair, the four one- and two-row
+# output and scratch entries used by `cp04_plan_rows` and the work and peak at
+# the last row count. Storage: 7 K (K + 1) / 2 doubles for K link blocks, or 3
+# K (K + 1) / 2 on backends whose row planner does not read the envelopes.
+#
+# The store is optional. It is admitted before it is allocated, at every plan
+# that would use it, against the matrix and retained limits together with the
+# plan's retained charge and the backend's entries (`cp04_plan_memo_admit`).
+# When it does not fit it is dropped and the plan is built without it; the
+# values it holds are the values the plan computes, so a declined store
+# changes no plan, admission, refusal or result, only the time spent planning.
+# A store for another key is dropped before a new one is allocated. The store
+# is dropped on the certified path, before the point IF state is built and
+# when the covariance stream starts, so it is never live in a phase that
+# allocates the fit's own arrays.
+#
+# The store belongs to one pipeline invocation: `cp04_plan_scope_enter()`
+# opens a new, empty scope when the pipeline starts and
+# `cp04_plan_scope_exit()` discards it when the pipeline returns (on every
+# exit, errors included), restoring the scope of an enclosing pipeline. A plan
+# built outside a pipeline has no scope and keeps nothing. Within a scope the
+# key holds the backend itself, compared with `identical()`, the link vector and
+# the block width. A refusal is never stored: the evaluation that refused runs
+# again. The store is also emptied when the covariance stream starts. The scope
+# counts which planning path each covariance plan took and how many block-pair
+# envelopes (row planner) and producer budgets (work and peak) were read from
+# the store or evaluated; the counts of the last completed pipeline are kept in
+# `cp04_plan_path_record` for tests.
+cp04_plan_scope <- new.env(parent = emptyenv())
+cp04_plan_path_record <- new.env(parent = emptyenv())
+cp04_plan_path_names <- c("certified", "complete_single_block", "complete_full_block", "complete_block_pairs",
+  "store_pair_hits", "store_pair_misses", "store_budget_hits", "store_budget_misses", "store_declined")
+cp04_plan_scope_enter <- function() {
+  prev <- cp04_plan_scope$current
+  sc <- new.env(parent = emptyenv())
+  sc$memo <- NULL
+  sc$paths <- numeric(length(cp04_plan_path_names))
+  names(sc$paths) <- cp04_plan_path_names
+  cp04_plan_scope$current <- sc
+  prev
+}
+cp04_plan_scope_exit <- function(prev) {
+  sc <- cp04_plan_scope$current
+  if (is.environment(sc)) cp04_plan_path_record$last <- sc$paths
+  cp04_plan_scope$current <- prev
+  invisible(NULL)
+}
+cp04_plan_path_count <- function(name, n = 1) {
+  sc <- cp04_plan_scope$current
+  if (is.environment(sc)) sc$paths[[name]] <- sc$paths[[name]] + n
+  invisible(NULL)
+}
+cp04_plan_memo_get <- function(backend, links, LB, K, retained = 0) {
+  sc <- cp04_plan_scope$current
+  if (!is.environment(sc)) return(NULL)
+  key <- list(backend, as.integer(links), as.integer(LB))
+  m <- sc$memo
+  # A store for other links, block width or backend is dropped before any new
+  # one is allocated, so two stores never coexist.
+  if (!is.null(m) && !identical(m$key, key)) {
+    sc$memo <- NULL
+    m <- NULL
+  }
+  envelope <- isTRUE(backend$accounting$automatic_chunk_rows) && inherits(backend, cp04_plan_row_classes)
+  need <- cp04_plan_memo_entries(K, length(links), envelope)
+  # `cp04_plan_scope$store_off` (tests only) declines every store.
+  # Arrays live while this plan is built that the retained charge omits (the
+  # covariance stream's bound retained moment IF store).
+  extra <- if (is.null(sc$live_extra)) 0 else sc$live_extra
+  if (isTRUE(cp04_plan_scope$store_off) || !cp04_plan_memo_admit(backend, retained + extra, need)) {
+    # Declined: the plan is built without a store, exactly as without one.
+    sc$memo <- NULL
+    cp04_plan_path_count("store_declined")
+    return(NULL)
+  }
+  if (is.null(m)) {
+    P <- K * (K + 1) / 2
+    m <- new.env(parent = emptyenv())
+    m$key <- key
+    m$envelope <- envelope
+    m$entries <- need
+    # Separate vectors: no field shares storage with another, so a write never
+    # copies one.
+    if (envelope) {
+      m$one_output <- rep(NA_real_, P); m$one_scratch <- rep(NA_real_, P)
+      m$two_output <- rep(NA_real_, P); m$two_scratch <- rep(NA_real_, P)
+    }
+    m$rows <- rep(NA_real_, P); m$work <- rep(NA_real_, P); m$peak <- rep(NA_real_, P)
+    sc$memo <- m
+  }
+  m
+}
+# Backends whose row planner reads the stored one- and two-row envelopes.
+cp04_plan_row_classes <- c("cdid_or_corollary1", "cdid_dr_corollary1", "cdid_dr_baseline", "cdid_imputation_backend",
+  "cdid_augmented_backend")
+# Worst-case entries of a store for K link blocks and L links: seven (or, when
+# the envelopes are not read, three) vectors of K (K + 1) / 2 doubles, one
+# further vector for a copy made while a field is written, the integer key
+# (counted as L doubles) and a fixed allowance for the environment and headers.
+cp04_plan_memo_entries <- function(K, L, envelope) {
+  P <- K * (K + 1) / 2
+  (if (envelope) 7 else 3) * P + P + L + 256
+}
+# The store is live only while covariance plans are built and between them
+# (it is dropped before the point IF state is built and when the covariance
+# stream starts). It is admitted only if, with everything the plan's own
+# simultaneous checks charge as live besides it (the retained charge and the
+# backend's owned and borrowed entries), it fits the matrix and retained limits.
+# Any non-finite or missing quantity declines it.
+cp04_plan_memo_admit <- function(backend, retained, need) {
+  ctrl <- backend$control
+  own <- c(backend$accounting$owned_entries, backend$accounting$borrowed_entries)
+  cap <- c(ctrl$max_matrix_entries, ctrl$max_retained_entries)
+  if (!is.numeric(retained) || length(retained) != 1L || !is.numeric(own) || length(own) != 2L ||
+      !is.numeric(cap) || length(cap) != 2L || !is.numeric(need) || length(need) != 1L) return(FALSE)
+  total <- retained + sum(own) + need
+  isTRUE(is.finite(total) && all(is.finite(cap)) && total <= min(cap))
+}
+# Write one slot of each named field in place. A field is unbound from the
+# store while it is written, so the write does not copy the vector.
+cp04_plan_memo_set <- function(m, k, ...) {
+  v <- list(...)
+  for (f in names(v)) {
+    x <- m[[f]]
+    m[[f]] <- NULL
+    x[k] <- v[[f]]
+    m[[f]] <- x
+  }
+  invisible(NULL)
+}
+cp04_plan_memo_clear <- function() {
+  sc <- cp04_plan_scope$current
+  if (is.environment(sc)) sc$memo <- NULL
+  invisible(NULL)
 }
 
 # Prospective single full-width covariance block for supported sealed CP04
@@ -2025,10 +2205,10 @@ cp04_stream_plan_full_block <- function(backend, links, retained = 0, legacy = N
       "CP04 full-width covariance consumer workspace")
     ret_gram <- ipw_owner_safe_sum(c(retained, gram_entries, consumer), ctrl$max_matrix_entries,
       "CP04 covariance retained, Gram and consumer entries")
-    # Test the issued legacy partition explicitly. Automatic replanning of a
-    # different width is unnecessary when this exact B is safely admitted.
-    B_exp <- cp04_plan_rows(backend, list(links), ret_gram, chunk_rows = B)
-    if (!isTRUE(B_exp == B)) return(NULL)
+    # The row count B is fixed here (validated against N and the row cap
+    # above). Its admission is decided by the producer budget and the
+    # simultaneous-entries checks below; the automatic row planner would
+    # return a fixed row count unchanged.
     pre <- if (exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
                identical(environment(sys.function()), environment(cdid_fast_kernel))) {
       cdid_fast_if_budget(backend, B, links, "full")
@@ -2054,24 +2234,106 @@ cp04_stream_plan_full_block <- function(backend, links, retained = 0, legacy = N
   }, cdid_ipw_owner_bound_error = cp04_capacity_decline)
 }
 
+# For these backends the affine row-planning charges and fixed-batch
+# output, scratch and work bounds do not decrease when links are added.
+# Each bound uses non-negative combinations of counts or
+# maxima over the requested links and the cells, groups, supports, OR blocks,
+# treatment models and selection blocks they reach, plus constants of the
+# backend. Separate-pooling DR baseline without selection models (the R
+# envelope and its native twin share one formula) and the separate-pooling
+# reconstruction envelope of imputation and augmented backends, including the
+# selection envelope it adds. Pooled reconstruction, conditional DR and the
+# Corollary 1 envelopes choose between two envelopes and are not listed.
+cp04_stream_plan_monotone_envelope <- function(backend) {
+  if (!is.list(backend) || inherits(backend, c("cdid_ipw_raw_backend", "cdid_reference_ipw_backend",
+      "cdid_cp04_custom_backend", "cdid_dr_corollary1", "cdid_or_corollary1"))) return(FALSE)
+  if (inherits(backend, c("cdid_augmented_backend", "cdid_imputation_backend")))
+    return(reconstruction_separate(backend$shared_or))
+  inherits(backend, "cdid_dr_baseline") && dr_separate(backend) && !isTRUE(backend$uses_selection_models)
+}
+
+# Decide the full-width covariance block without the block-pair envelopes
+# when the decision of the complete plan is certain. The legacy row count is
+# the minimum of the row cap and of the planner's rows for every block pair;
+# with a monotone envelope a pair, being a subset of all links, admits at least
+# the rows admitted for all links, so the legacy row count is the cap whenever
+# the planner admits the cap for all links. The legacy work is the sum over
+# block pairs of 2 ceiling(N / B) w(pair) + 4 N |pair|^2. With a monotone
+# work envelope w(pair {a, b}) lies between max(w(a), w(b)), evaluated on the
+# K blocks alone, and w(all links), which gives a lower and an upper bound.
+# The full block is taken only if its work is at most the lower bound (so the
+# complete plan would take it too) and the upper bound passes the work limit
+# (so the complete plan's cumulative work check cannot refuse). Otherwise, or
+# on any error, NULL: the complete plan runs.
+cp04_stream_plan_certified <- function(backend, links, retained = 0, full_block = cp04_stream_plan_full_block) {
+  if (!cp04_stream_plan_monotone_envelope(backend)) return(NULL)
+  tryCatch({
+    st <- cp04_backend_domain(backend); ctrl <- backend$control
+    L <- length(links); LB <- min(L, ctrl$max_chunk_rows)
+    if (LB >= L) return(NULL)
+    blocks <- split(seq_len(L), ceiling(seq_len(L) / LB))
+    B <- min(st$N, ctrl$max_chunk_rows)
+    if (!isTRUE(cp04_plan_rows(backend, list(links), retained + 4 * L * L) >= B)) return(NULL)
+    use_fast_b <- exists("cdid_fast_if_budget", mode = "function", inherits = TRUE) &&
+      identical(environment(sys.function()), environment(cdid_fast_kernel))
+    pre_work <- function(ids) (if (use_fast_b) cdid_fast_if_budget(backend, B, ids, "full") else
+      chained_full_if_budget(backend, B, ids))$work
+    passes <- 2 * ceiling(st$N / B)
+    sz <- lengths(blocks); K <- length(blocks)
+    gram <- 0
+    for (a in seq_len(K)) for (b in a:K) gram <- gram + 4 * st$N * (if (a == b) sz[a] else sz[a] + sz[b])^2
+    w_block <- vapply(seq_len(K), function(a) pre_work(links[blocks[[a]]]), numeric(1L))
+    pair_floor <- 0
+    for (a in seq_len(K)) for (b in a:K) pair_floor <- pair_floor + max(w_block[a], w_block[b])
+    upper <- gram + (K * (K + 1) / 2) * passes * pre_work(links)
+    if (!is.finite(upper) || upper > ctrl$max_work_ops) return(NULL)
+    lower <- gram + passes * pair_floor
+    full_block(backend, links, retained,
+      list(work = lower, peak = 0, blocks = blocks, L = L, chunk_rows = B))
+  }, error = function(e) NULL)
+}
+
 cp04_stream_plan <- function(backend, links, retained = 0) {
+  # The full-block plan is looked up here and passed on, so that the
+  # certificate uses the same full-block plan as the complete plan below.
+  full_block_plan <- cp04_stream_plan_full_block
+  certified <- cp04_stream_plan_certified(backend, links, retained, full_block_plan)
+  if (!is.null(certified)) {
+    cp04_plan_path_count("certified")
+    # A store left by an earlier complete plan is not read on this path.
+    cp04_plan_memo_clear()
+    return(certified)
+  }
   legacy <- cp04_stream_plan_legacy(backend, links, retained)
   if (length(legacy$blocks) <= 1L &&
       exists("cdid_are_default_fns", mode = "function", inherits = TRUE) &&
       cdid_are_default_fns("cp04_stream_plan_full_block")) {
+    cp04_plan_path_count("complete_single_block")
     return(legacy)
   }
   full <- cp04_stream_plan_full_block(backend, links, retained, legacy)
+  cp04_plan_path_count(if (is.null(full)) "complete_block_pairs" else "complete_full_block")
   if (is.null(full)) legacy else full
 }
 
-cp04_stream_covariance <- function(backend, links, retained = 0) {
+cp04_stream_covariance <- function(backend, links, retained = 0, empirical = TRUE) {
   bound <- cp04_retained_if_unbind(backend); backend <- bound$backend; store <- bound$store
   completed <- FALSE
   on.exit(if (!completed && is.environment(store) && identical(store$kind, "cp04_retained_if"))
     cp04_retained_if_release(store), add = TRUE)
   st <- cp04_backend_domain(backend); ctrl <- backend$control
+  # A bound retained moment IF store is live while the plan is built (and may
+  # be filled): the admission of the plan store charges its reserved entries
+  # in addition to the retained entries. The plan itself is unchanged; its own
+  # checks keep the caller's charge, and the store joins the check below.
+  sc <- cp04_plan_scope$current
+  if (is.environment(sc)) {
+    sc$live_extra <- if (is.null(store)) 0 else store$entries
+    on.exit(sc$live_extra <- NULL, add = TRUE)
+  }
   plan <- cp04_stream_plan(backend, links, retained)
+  if (is.environment(sc)) sc$live_extra <- NULL
+  cp04_plan_memo_clear()
   work <- plan$work; peak <- plan$peak; blocks <- plan$blocks; L <- plan$L
   # CP08 retained moment IF: a bound store must describe this one link block and
   # the original row partition; its reserved entries join the concurrent check.
@@ -2135,7 +2397,11 @@ cp04_stream_covariance <- function(backend, links, retained = 0) {
       }
     }
   }
-  if (is.null(V)) {
+  # The within criterion uses its working covariance. Its multiblock
+  # augmented path still needs these moments and column means, but it can
+  # leave the empirical Gram unused and form inference from projected IFs.
+  # Keep the original planning checks and the single-block store lifecycle.
+  if (is.null(V) && (empirical || length(blocks) == 1L)) {
     V <- matrix(0, L, L)
     for (a in seq_along(blocks)) for (b in a:length(blocks)) {
       ia <- blocks[[a]]; ib <- blocks[[b]]; ids <- unique(c(ia, ib)); gram <- matrix(0, length(ia), length(ib))
@@ -2200,8 +2466,7 @@ cp04_public_diagnostics_route <- function(res, control, public_object = NULL) {
   # Reserve the compact copy before constructing lists; source factors are
   # borrowed, without owner/design/IF copies. Conservative header allowance.
   bound <- 4 * b$accounting$owned_entries + 4096
-  cp04_budget(control$owner_control, c(max(c(0, res$resource_accounting$simultaneous_entries,
-    res$resource_accounting$initial_envelope_entries)), bound),
+  cp04_budget(control$owner_control, c(cp04_public_diagnostic_retained(res, public_object), bound),
     4 * bound, 8 * bound, bound, "CP04 public diagnostic copy")
   records <- list(selection = lapply(seq_along(b$selections), function(j)
     c(list(id = j, spec = b$selection_specs[[j]]), b$selections[[j]])),

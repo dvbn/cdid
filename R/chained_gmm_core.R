@@ -77,10 +77,16 @@ gmm_safe_product <- function(a, b, max_entries = NULL, label = "allocation") {
   prod_val <- da * db
   if (!is.finite(prod_val) || prod_val > limit) cdid_gmm_abort("Allocation product exceeds exact integer range.", "cdid_gmm_bound_error")
   if (!is.null(max_entries) && prod_val > max_entries) {
+    # Optional record of the governing control (R/chained_resource_refusal.R): the bound's
+    # expression and the caller are captured in this frame, then resolved under protection,
+    # so that a missing or failing resolver leaves the original condition unchanged.
+    bound_expr <- substitute(max_entries); caller_frame <- sys.parent()
+    kind <- tryCatch(resource_bound_kind(bound_expr, resource_caller(caller_frame)), error = function(e) NA_character_)
     cdid_gmm_abort(
       paste0("Allocation for ", label, " (", prod_val, " entries) exceeds explicit `max_matrix_entries` (", max_entries, ")."),
       "cdid_gmm_bound_error",
-      diagnostics = list(label = label, requested_entries = prod_val, max_matrix_entries = max_entries)
+      diagnostics = list(label = label, requested_entries = prod_val, max_matrix_entries = max_entries,
+        limit_kind = kind)
     )
   }
   prod_val
@@ -1356,7 +1362,8 @@ preflight_gmm_allocations <- function(
              ") exceed `bounds$max_matrix_entries` (", max_e, ")."),
       "cdid_gmm_bound_error",
       diagnostics = list(payload = payload, scratch = scratch, extra_payload_entries = extra,
-        total_payload_entries = total_payload_entries, max_matrix_entries = max_e)
+        total_payload_entries = total_payload_entries, max_matrix_entries = max_e,
+        label = "GMM simultaneous double payload entries", limit_kind = "workspace")
     )
   }
 
@@ -2837,6 +2844,49 @@ gmm_cholesky_refusal_state <- function(V, mhat_R, W_G, gauge, design, provenance
 # Main private exact-GMM computation core entrypoint
 # ---------------------------------------------------------------------------
 
+# Workspace checks the retained solve performs before any dense allocation.
+# They depend only on the retained design, targets, replay dimensions, bounds
+# and covariance strategy, never on the covariance values.
+gmm_core_preallocation_checks <- function(design, targets, weighting, if_replay, accuracy, bounds,
+                                          request_param_cov, materialize_target_if, cov_strategy,
+                                          eff_red, project_influence) {
+  if (!inherits(design, "cdid_chained_design")) cdid_gmm_abort("Invalid design.", "cdid_gmm_design_error")
+  m_pre <- gmm_int_bound(design$incidence$n_links, "design links")
+  p_pre <- gmm_int_bound(design$incidence$n_parameters, "design parameters")
+  k_pre <- gmm_int_bound(design$rank_diagnostics$rank, "design rank")
+  gmm_safe_product(20, m_pre + p_pre, bounds$max_matrix_entries, "gauge/design validation vectors")
+  gmm_safe_product(m_pre, m_pre, bounds$max_matrix_entries, "V validation buffers")
+  n_input_rows <- if (project_influence) if_replay$n_input_rows else 0L
+  n_output_rows <- if (project_influence) if_replay$n_output_rows else 0L
+  gmm_safe_product(8, n_input_rows + n_output_rows, bounds$max_matrix_entries, "replay IDs/weights/count buffers")
+  J_pre <- if (is.matrix(targets)) ncol(targets) else if (is.data.frame(targets)) min(nrow(targets),bounds$max_targets) else length(targets)
+  if (J_pre < 1 || J_pre > bounds$max_targets) cdid_gmm_abort("Invalid target count/budget.", "cdid_gmm_bound_error")
+  n_trip_pre <- if (!is.null(eff_red$class_certificate$E$i)) length(eff_red$class_certificate$E$i) else if (!is.null(eff_red$E$i)) length(eff_red$E$i) else 0L
+  alloc <- preflight_gmm_allocations(m_pre, k_pre, J_pre, weighting, bounds,
+    n_out_rows = n_output_rows, n_input_rows = n_input_rows,
+    n_parameters = p_pre, request_param_cov = request_param_cov, materialize_target_if = materialize_target_if,
+    certify_error = !identical(accuracy$method, "conventional_chol_qr"),
+    covariance_strategy = cov_strategy, n_dropped_triplets = n_trip_pre,
+    project_influence = project_influence)
+  list(n_input_rows = n_input_rows, n_output_rows = n_output_rows, eff_red = eff_red,
+    n_trip_pre = n_trip_pre, allocations = alloc)
+}
+
+# The same checks for a caller that forms the covariance only after them
+# (default solve arguments: no explicit covariance override or tuning).
+gmm_core_workspace_preflight <- function(design, targets, weighting, if_replay, accuracy, bounds,
+                                         request_param_cov = FALSE, materialize_target_if = FALSE,
+                                         reduction_spec = NULL, provenance_reduction = NULL,
+                                         project_influence = TRUE) {
+  w_choice <- resolve_gmm_weighting_choice(weighting, arg = "weighting")
+  bounds <- validate_gmm_bounds_control(bounds)
+  accuracy <- validate_gmm_accuracy_control(accuracy, w_choice$canonical)
+  if_replay <- validate_gmm_if_replay_spec(if_replay)
+  gmm_core_preallocation_checks(design, targets, w_choice$canonical, if_replay, accuracy, bounds,
+    request_param_cov, materialize_target_if, accuracy$covariance_strategy,
+    if (!is.null(reduction_spec)) reduction_spec else provenance_reduction, project_influence)
+}
+
 solve_chained_gmm_core <- function(
   design,
   mhat,
@@ -2923,25 +2973,13 @@ solve_chained_gmm_core <- function(
   }
   if_replay <- validate_gmm_if_replay_spec(if_replay)
 
-  if (!inherits(design, "cdid_chained_design")) cdid_gmm_abort("Invalid design.", "cdid_gmm_design_error")
-  m_pre <- gmm_int_bound(design$incidence$n_links, "design links")
-  p_pre <- gmm_int_bound(design$incidence$n_parameters, "design parameters")
-  k_pre <- gmm_int_bound(design$rank_diagnostics$rank, "design rank")
-  gmm_safe_product(20, m_pre + p_pre, bounds$max_matrix_entries, "gauge/design validation vectors")
-  gmm_safe_product(m_pre, m_pre, bounds$max_matrix_entries, "V validation buffers")
-  n_input_rows <- if (project_influence) if_replay$n_input_rows else 0L
-  n_output_rows <- if (project_influence) if_replay$n_output_rows else 0L
-  gmm_safe_product(8, n_input_rows + n_output_rows, bounds$max_matrix_entries, "replay IDs/weights/count buffers")
-  J_pre <- if (is.matrix(targets)) ncol(targets) else if (is.data.frame(targets)) min(nrow(targets),bounds$max_targets) else length(targets)
-  if (J_pre < 1 || J_pre > bounds$max_targets) cdid_gmm_abort("Invalid target count/budget.", "cdid_gmm_bound_error")
-  eff_red <- if (!is.null(reduction_spec)) reduction_spec else provenance$reduction
-  n_trip_pre <- if (!is.null(eff_red$class_certificate$E$i)) length(eff_red$class_certificate$E$i) else if (!is.null(eff_red$E$i)) length(eff_red$E$i) else 0L
-  preflight_gmm_allocations(m_pre, k_pre, J_pre, weighting, bounds,
-    n_out_rows = n_output_rows, n_input_rows = n_input_rows,
-    n_parameters = p_pre, request_param_cov = request_param_cov, materialize_target_if = materialize_target_if,
-    certify_error = !identical(accuracy$method, "conventional_chol_qr"),
-    covariance_strategy = cov_strategy, n_dropped_triplets = n_trip_pre,
-    project_influence = project_influence)
+  pre <- gmm_core_preallocation_checks(design, targets, weighting, if_replay, accuracy, bounds,
+    request_param_cov, materialize_target_if, cov_strategy,
+    if (!is.null(reduction_spec)) reduction_spec else provenance$reduction, project_influence)
+  n_input_rows <- pre$n_input_rows
+  n_output_rows <- pre$n_output_rows
+  eff_red <- pre$eff_red
+  n_trip_pre <- pre$n_trip_pre
 
   # 1. Gauge construction and exact target estimability
   gauge <- build_gmm_gauge(design, gauge_rule = gauge_rule, custom_roots = custom_gauge_roots)

@@ -11,10 +11,11 @@
 # by element name, or by position for unnamed elements; duplicate names share a
 # path. Returns a single TRUE/FALSE.
 roundoff_identical <- function(x, y, leaves = character(), num.eq = TRUE,
-                               abs_tolerance = 1e-12) {
+                               abs_tolerance = 1e-12, rel_tolerance = 1e-12) {
   stopifnot(is.character(leaves), !anyNA(leaves), all(startsWith(leaves, "$")),
             is.logical(num.eq), length(num.eq) == 1L, !is.na(num.eq),
-            length(abs_tolerance) == 1L, is.finite(abs_tolerance), abs_tolerance >= 0)
+            length(abs_tolerance) == 1L, is.finite(abs_tolerance), abs_tolerance >= 0,
+            length(rel_tolerance) == 1L, is.finite(rel_tolerance), rel_tolerance >= 0)
   same_attr <- function(a, b) {
     aa <- attributes(a); ab <- attributes(b)
     if (length(aa)) aa <- aa[order(names(aa))]
@@ -28,7 +29,8 @@ roundoff_identical <- function(x, y, leaves = character(), num.eq = TRUE,
     fin <- is.finite(a); za <- fin & a == 0
     identical(fin, is.finite(b)) && identical(a[!fin], b[!fin], num.eq = num.eq) &&
       identical(za, fin & b == 0) && identical(1 / a[za], 1 / b[za]) &&
-      all(abs(a[fin] - b[fin]) <= pmax(abs_tolerance, 1e-12 * abs(a[fin]), 1e-12 * abs(b[fin])))
+      all(abs(a[fin] - b[fin]) <= pmax(abs_tolerance, rel_tolerance * abs(a[fin]),
+                                       rel_tolerance * abs(b[fin])))
   }
   walk <- function(a, b, path) {
     if (identical(a, b, num.eq = FALSE)) return(TRUE)
@@ -42,4 +44,10 @@ roundoff_identical <- function(x, y, leaves = character(), num.eq = TRUE,
     TRUE
   }
   walk(x, y, "$")
+}
+
+# Changing the row block can select a different BLAS accumulation order.
+expect_blas_agreement <- function(actual, expected, leaves = "$") {
+  testthat::expect_true(roundoff_identical(actual, expected, leaves,
+    abs_tolerance = 1e-10, rel_tolerance = 1e-10))
 }

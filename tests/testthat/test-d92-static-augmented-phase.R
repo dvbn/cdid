@@ -261,7 +261,8 @@ testthat::test_that("static augmented pipeline funds its actual diagnostic and r
   d <- aps_public$d92_route_panel()
   formula <- ~x
   run <- function(e) aps_public$d92_run_public(d, chunk = 11L, ns = e,
-    xformla = formula, weightsname = "w", est_method = "dr", selection = "conditional_mtar",
+    xformla = formula, weightsname = "w", est_method = "dr", gmm_weighting = "optimal",
+    selection = "conditional_mtar",
     selection_est_method = "dr", selection_model = "pair_logit", selection_pooling = "within_cohort",
     imputation_pooling = "across_cohorts")
   retained <- aps_pipeline_ns(); streamed <- aps_pipeline_ns(stream = TRUE)

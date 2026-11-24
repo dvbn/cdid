@@ -552,10 +552,10 @@ testthat::test_that("clustering, multiplier bands, aggregation and the pretest u
   testthat::expect_true(is.finite(fit$W) && is.finite(fit$Wpval))
 })
 
-testthat::test_that("default feasible two-step weighting and its explicit alias run the augmented consumers", {
+testthat::test_that("feasible two-step weighting and its explicit alias run the augmented consumers", {
   testthat::skip_if_not(augp_has_installed_cdid(), "Installed cdid namespace required.")
   # Consumer smoke/self-consistency only: the independent oracle is identity-GMM.
-  def <- augp_fit(gmm_weighting = NULL)
+  def <- augp_fit(gmm_weighting = "optimal")
   alias <- augp_fit(gmm_weighting = "two_step", gmm_covariance = "tikhonov")
   for (nm in c("att", "se", "V_analytical", "inffunc")) testthat::expect_identical(alias[[nm]], def[[nm]])
   testthat::expect_identical(def$chained$request$gmm_weighting, "optimal")

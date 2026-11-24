@@ -2,7 +2,7 @@
 rap_ns <- function(name) getFromNamespace(name, "cdid")
 rap_gc <- list(epsilon = 1e-13, maxit = 60L, trace = FALSE)
 
-rap_case <- function(universe = "F", intercept = TRUE, slopes = TRUE, dated = FALSE, route_kind = "corollary1", extra_reference = FALSE) {
+rap_case <- function(universe = "F", intercept = TRUE, slopes = TRUE, dated = FALSE, route_kind = "corollary1", extra_reference = FALSE, max_chunk_rows = 11L) {
   grid <- expand.grid(R3 = 0:1, R2 = 0:1, R1 = 0:1, z = c(-1, 1),
     u = c(-1, 1), k = 1:3)
   N <- nrow(grid); id <- seq_len(N); calendar <- c(2, 5, 11)
@@ -27,7 +27,7 @@ rap_case <- function(universe = "F", intercept = TRUE, slopes = TRUE, dated = FA
   if (intercept) X <- cbind(`(Intercept)` = rep(1, N))
   if (slopes) X <- cbind(X, x = x)
   Q <- cbind(`(Intercept)` = 1, z = z)
-  ctrl <- rap_ns("ipw_owner_control")(11L, 1e8, 2e8, 1e13, 1e8)
+  ctrl <- rap_ns("ipw_owner_control")(max_chunk_rows, 1e8, 2e8, 1e13, 1e8)
   long <- data.frame(id = rep(id, each = 3), time = rep(calendar, N),
     y = as.vector(t(Y)), g = rep(g, each = 3))
   panel <- rap_ns("construct_ipw_panel_owner")(long, "id", "time", "y", "g", ctrl)
@@ -320,6 +320,44 @@ testthat::test_that("augmented local bases handle no intercept, intercept-only, 
   testthat::expect_equal(unname(together$phi), actual[, c(3L, 1L), drop = FALSE], tolerance = 1e-10)
   core <- rap_ns("evaluate_augmented_if_chunk")(fit, wanted, c(3L, 1L), scale = "core")
   testthat::expect_equal(core$phi, (sum(a$A) / N) * together$phi, tolerance = 1e-10)
+  # A chunk that crosses several reference-date layouts keeps the full row
+  # map and folded output, while one selection/OR core is live at a time.
+  env <- rap_ns("reconstruction_if_envelope")
+  B <- fit$control$max_chunk_rows
+  stopifnot(max(fit$layout$by_orig$count) > 1L)
+  affine <- env(fit, B, 1:3, FALSE, augmented = TRUE, plan_rows = TRUE)
+  actual_peak <- env(fit, B, 1:3, FALSE, augmented = TRUE)
+  testthat::expect_identical(actual_peak$output, affine$output)
+  testthat::expect_lt(actual_peak$scratch, affine$scratch)
+  testthat::expect_gte(actual_peak$work, affine$work)
+  folded <- rap_ns("evaluate_augmented_if_chunk")(fit, seq_len(B), 1:3)
+  testthat::expect_equal(folded$phi[wanted[1:2], , drop = FALSE],
+    rap_ns("evaluate_augmented_if_chunk")(fit, wanted[1:2], 1:3)$phi, tolerance = 1e-12)
+})
+
+testthat::test_that("a dated batch just above the core size preserves the previous workspace admission", {
+  a <- rap_case(dated = TRUE, route_kind = "augmented", max_chunk_rows = 63L)
+  fit <- rap_fit(a, imp = "separate", model = "pair_logit", mode = "separate")
+  links <- seq_along(fit$links)
+  copies <- max(fit$layout$by_orig$count)
+  n <- as.integer(ceiling((fit$control$max_chunk_rows + 1L) / copies))
+  env <- rap_ns("reconstruction_if_envelope")
+  old <- env(fit, n, links, FALSE, augmented = TRUE, plan_rows = TRUE)
+  current <- env(fit, n, links, FALSE, augmented = TRUE)
+  testthat::expect_identical(current$scratch, old$scratch)
+  testthat::expect_equal(current$layout_batch_rows, 62)
+  testthat::expect_equal(ceiling(n * copies / current$layout_batch_rows), 2)
+  evaluate <- rap_ns("evaluate_augmented_if_chunk")
+  full <- evaluate(fit, seq_len(n), links)$phi
+  split <- rbind(evaluate(fit, 1:16, links)$phi, evaluate(fit, 17:32, links)$phi)
+  testthat::expect_equal(full, split, tolerance = 1e-12)
+  spare <- fit$control$max_matrix_entries - fit$accounting$owned_entries -
+    fit$accounting$borrowed_entries - old$output - old$scratch
+  pre <- rap_ns("cp04_preflight_links")(fit, links, retained = spare, chunk_rows = n)
+  testthat::expect_identical(pre$chunk_rows, as.double(n))
+  testthat::expect_equal(spare + pre$producer_workspace_entries, fit$control$max_matrix_entries)
+  testthat::expect_error(rap_ns("cp04_preflight_links")(fit, links,
+    retained = spare + 1, chunk_rows = n), class = "cdid_ipw_owner_bound_error")
 })
 
 # V35 stores the scalar adjoint result compactly. V39 reuses only successful

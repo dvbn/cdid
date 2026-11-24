@@ -3,9 +3,12 @@
 # log-weight gradient run on R/chained_custom_selection.R (O15).
 # All factors/partials use N (raw frame count); weights are already in scores.
 
+# "bound" marks a failed internal reservation invariant (an actual size above
+# the reservation counted for it), not a failed model fit.
 cp04_abort <- function(message, class = "input", diagnostics = list()) {
   stop(structure(list(message = message, call = NULL, diagnostics = diagnostics),
-    class = c(paste0("cdid_cp04_", class, "_error"), "cdid_ipw_fit_error",
+    class = c(paste0("cdid_cp04_", class, "_error"),
+              if (identical(class, "bound")) "cdid_internal_error" else "cdid_ipw_fit_error",
               "cdid_error", "error", "condition")))
 }
 

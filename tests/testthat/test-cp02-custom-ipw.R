@@ -749,7 +749,7 @@ test_that("CP02 installed public rotating80 pipeline matches built-in IPW with c
       weightsname = "sample_weight", clustervars = "cluster")
     common <- c(list(yname = "y", tname = "t", idname = "id", gname = "g", xformla = ~x,
       data = d, base_period = bp, bstrap = FALSE, cband = bp == "universal"), extra_args)
-    mp_ipw <- do.call(cdid::att_gt, c(common, list(est_method = "ipw")))
+    mp_ipw <- do.call(cdid::att_gt, c(common, list(est_method = "ipw", gmm_weighting = "optimal")))
     mp_cus <- do.call(cdid::att_gt, c(common, list(est_method = custom_cb, tag_val = 42L)))
     expect_gt(length(seen_extra), 0L)
     expect_true(all(seen_extra == 42L))

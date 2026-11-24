@@ -555,11 +555,10 @@ testthat::test_that("a single never-treated control pool makes the pooled imputa
 
 # Consumer smoke/self-consistency only: the independent public oracle is identity-GMM.
 # No independent truth for estimated weighting or bootstrap is asserted here.
-testthat::test_that("default two-step and explicit alias retain the imputation consumers", {
+testthat::test_that("two-step and its explicit alias retain the imputation consumers", {
   testthat::skip_if_not(impp_has_installed_cdid(), "Installed cdid namespace required.")
   fx <- impp_fixture()
-  # NULL removes the helper's identity override, exposing the public default.
-  def <- impp_imputation(fx, "dr", "separate", gmm_weighting = NULL)
+  def <- impp_imputation(fx, "dr", "separate", gmm_weighting = "optimal")
   alias <- impp_imputation(fx, "dr", "separate", gmm_weighting = "two_step",
     gmm_covariance = "tikhonov")
   for (nm in c("att", "se", "V_analytical", "inffunc"))
