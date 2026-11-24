@@ -1105,9 +1105,11 @@ test_that("multiplier bootstrap, cband, RNG discipline, pretrend Wald test, cond
   )
   expect_identical(pub_cpt1$chained$status, "available")
   expect_identical(.Random.seed, cpt_seed_after)
-  expect_identical(pub_cpt1$CvM, pub_cpt2$CvM)
+  # Serial MKL can round the statistic differently on repeated fits.
+  expect_equal(pub_cpt1$CvM, pub_cpt2$CvM, tolerance = 4 * .Machine$double.eps)
   expect_identical(pub_cpt1$CvMpval, pub_cpt2$CvMpval)
   expect_true(roundoff_identical(pub_cpt1$CvMb, pub_cpt2$CvMb, leaves = "$", num.eq = FALSE))
+  expect_identical(pub_cpt1$CvMb > pub_cpt1$CvM, pub_cpt2$CvMb > pub_cpt2$CvM)
 
   # Preserve the accepted ordinary conditional-pretest delegation witness
   # (test-chained-conditional-pretest.R:345-359), including lazy chained args.

@@ -267,7 +267,7 @@ SEXP C_cdid_pair_support_scan(
     }
 
     const void *vmax = vmaxget();
-    long double *chunk_sum = (m > 0) ? (long double *) R_alloc((size_t) m, sizeof(long double)) : NULL;
+    long double *chunk_sum = (m > 0) ? R_allocLD((size_t) m) : NULL;
     int *chunk_cnt = (m > 0) ? (int *) R_alloc((size_t) m, sizeof(int)) : NULL;
     int *active = (m > 0) ? (int *) R_alloc((size_t) m, sizeof(int)) : NULL;
     for (int j = 0; j < m; ++j) chunk_cnt[j] = 0;
@@ -3310,7 +3310,7 @@ SEXP C_cdid_ipw_raw_pair_summary(
 
   if (has_pair) {
     const void *vmax = vmaxget();
-    long double *ch_mass = (long double *) R_alloc((size_t) c_a, sizeof(long double));
+    long double *ch_mass = R_allocLD((size_t) c_a);
     int *ch_touched = (int *) R_alloc((size_t) c_a, sizeof(int));
     int64_t *s1 = (int64_t *) R_alloc((size_t) c_a, sizeof(int64_t));
     int64_t *s2 = (int64_t *) R_alloc((size_t) c_a, sizeof(int64_t));
@@ -3672,7 +3672,7 @@ SEXP C_cdid_ipw_glm_fit(
     double *rates = REAL(rates_s);
     memset(pcount, 0, (size_t) m_cohorts * sizeof(int));
     const void *vm_pm = vmaxget();
-    long double *pmass_ld = (long double *) R_alloc((size_t) m_cohorts, sizeof(long double));
+    long double *pmass_ld = R_allocLD((size_t) m_cohorts);
     for (int j = 0; j < m_cohorts; ++j) pmass_ld[j] = 0.0L;
     for (int i = 0; i < n; ++i) {
       int g = rgi[i];
@@ -4506,7 +4506,7 @@ SEXP C_cdid_ipw_hessian(
 
   const double clip_eps = 1e-6;
   double *rc2 = (double *) R_alloc((size_t) m_cohorts, sizeof(double));
-  long double *A_ld = (long double *) R_alloc((size_t) p * (size_t) m_cohorts, sizeof(long double));
+  long double *A_ld = R_allocLD((size_t) p * (size_t) m_cohorts);
   for (int j = 0; j < m_cohorts; ++j) {
     if (rates[j] > clip_eps) {
       double rc = (rates[j] > clip_eps) ? rates[j] : clip_eps;
@@ -5065,7 +5065,7 @@ SEXP C_cdid_incomplete_or_supports(
   double *vn = (double *) R_alloc((size_t) k_aug, sizeof(double));
 
   double *sumZ = (p > 0) ? (double *) R_alloc((size_t) p, sizeof(double)) : NULL;
-  long double *ch_sumZ = (p > 0) ? (long double *) R_alloc((size_t) p, sizeof(long double)) : NULL;
+  long double *ch_sumZ = (p > 0) ? R_allocLD((size_t) p) : NULL;
   double *colmax = (p > 0) ? (double *) R_alloc((size_t) p, sizeof(double)) : NULL;
   double *anchor = (p > 0) ? (double *) R_alloc((size_t) p, sizeof(double)) : NULL;
   double *ch_anchor = (p > 0) ? (double *) R_alloc((size_t) p, sizeof(double)) : NULL;
@@ -5854,9 +5854,9 @@ SEXP C_cdid_incomplete_dr_trt_fit(
   memset(Vdr, 0, (size_t) 4 * (size_t) p_trt * sizeof(double));
   memset(Vipw, 0, (size_t) 4 * (size_t) p_trt * sizeof(double));
 
-  long double *C_ld = (long double *) R_alloc((size_t) p_trt * (size_t) m, sizeof(long double));
-  long double *Udr_ld = (long double *) R_alloc((size_t) 4 * (size_t) m, sizeof(long double));
-  long double *Uipw_ld = (long double *) R_alloc((size_t) 4 * (size_t) m, sizeof(long double));
+  long double *C_ld = R_allocLD((size_t) p_trt * (size_t) m);
+  long double *Udr_ld = R_allocLD((size_t) 4 * (size_t) m);
+  long double *Uipw_ld = R_allocLD((size_t) 4 * (size_t) m);
   for (int idx = 0; idx < p_trt * m; ++idx) C_ld[idx] = 0.0L;
   for (int idx = 0; idx < 4 * m; ++idx) { Udr_ld[idx] = 0.0L; Uipw_ld[idx] = 0.0L; }
 

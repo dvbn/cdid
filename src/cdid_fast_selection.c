@@ -3113,8 +3113,8 @@ SEXP C_cdid_sel_trt_fit(
     d_bar_minus = (p_or > 0) ? (double *) R_alloc((size_t) p_or, sizeof(double)) : NULL;
     d_bar_diff = (p_or > 0) ? (double *) R_alloc((size_t) p_or, sizeof(double)) : NULL;
     double *lin_or_vec = (double *) R_alloc((size_t) n_exp, sizeof(double));
-    long double *dbp_ld = (p_or > 0) ? (long double *) R_alloc((size_t) p_or, sizeof(long double)) : NULL;
-    long double *dbm_ld = (p_or > 0) ? (long double *) R_alloc((size_t) p_or, sizeof(long double)) : NULL;
+    long double *dbp_ld = (p_or > 0) ? R_allocLD((size_t) p_or) : NULL;
+    long double *dbm_ld = (p_or > 0) ? R_allocLD((size_t) p_or) : NULL;
     if (p_or > 0) {
       double *D_or = (double *) R_alloc((size_t) n_exp * (size_t) p_or, sizeof(double));
       for (size_t idx = 0; idx < (size_t) n_exp * (size_t) p_or; ++idx) D_or[idx] = reg_L * Z_or[idx];
@@ -3590,7 +3590,7 @@ SEXP C_cdid_sel_support_collect(
   double *vn = (double *) R_alloc((size_t) k_aug, sizeof(double));
 
   double *sumZ = (p_slope > 0) ? (double *) R_alloc((size_t) p_slope, sizeof(double)) : NULL;
-  long double *ch_sumZ = (p_slope > 0) ? (long double *) R_alloc((size_t) p_slope, sizeof(long double)) : NULL;
+  long double *ch_sumZ = (p_slope > 0) ? R_allocLD((size_t) p_slope) : NULL;
   double *colmax = (p_slope > 0) ? (double *) R_alloc((size_t) p_slope, sizeof(double)) : NULL;
   double *anchor = (p_slope > 0) ? (double *) R_alloc((size_t) p_slope, sizeof(double)) : NULL;
   double *ch_anchor = (p_slope > 0) ? (double *) R_alloc((size_t) p_slope, sizeof(double)) : NULL;
