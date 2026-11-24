@@ -247,6 +247,7 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
   scratch <- maps + output + 2 * operator_peak + core_rows * core_width +
     64 * nc_all * (p + 2) + 128 * ((p + 2)^2 + (pt + 2)^2)
   forward_funding <- NULL
+  batch_rows <- core_rows
   work <- 128 * maps + 128 * B * ((nc + 1) * (p + 2)^2 *
     (1 + ceiling(log2(st$n_A + 1))) + (sum(local_p + 1) + 2 * nl) * (adjoint + nc * (p + 2)) +
     nt * (pt + 2) * (pt + J + 4) + J + nl * (p + pt + 8) + (nz + nb + 2 * nl) * (nu + 4))
@@ -259,19 +260,29 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
       # strategy charges every extra row at the full per-row rate. The
       # batched strategy reserves the fold and extra cache instead. Near
       # the boundary even a single extra row must remain admissible.
-      old_extra <- (B - core_rows) * (core_width + sp$peak_per_row)
+      row_peak <- core_width + sp$peak_per_row
+      old_extra <- (B - core_rows) * row_peak
+      fold_extra <- 8 * B * (nl + 16)
       extra_cache <- 32 * core_rows * nl
-      batch_extra <- 8 * B * (nl + 16) + extra_cache
+      batch_extra <- fold_extra + extra_cache
       scratch <- scratch + min(old_extra, batch_extra)
-      if (batch_extra <= old_extra) forward_funding <- 32 * core_rows * nl + extra_cache
+      if (batch_extra <= old_extra) {
+        forward_funding <- 32 * core_rows * nl + extra_cache
+      } else if (fold_extra > old_extra) {
+        # Shrink the actual inner batch enough to fund the live fold even
+        # without the optional cache. The per-row rate is at least three
+        # times the fold rate, so this still takes at most two batches.
+        batch_rows <- core_rows - ceiling((fold_extra - old_extra) / row_peak)
+      }
     }
   }
-  stage1_forward <- reconstruction_stage1_forward_plan(backend, B, sets$gids, X_F, nl, details,
+  stage1_forward <- reconstruction_stage1_forward_plan(backend, batch_rows, sets$gids, X_F, nl, details,
     funding_entries = forward_funding)
-  score_cache <- reconstruction_score_cache_plan(backend, B, sets$cids, X_F, nl,
+  score_cache <- reconstruction_score_cache_plan(backend, batch_rows, sets$cids, X_F, nl,
     reserved_entries = stage1_forward$entries, funding_entries = forward_funding)
   pre <- c(sets, list(output = output, scratch = scratch, work = work, score_cache = score_cache,
     stage1_forward = stage1_forward))
+  if (layout_batches) pre$layout_batch_rows <- batch_rows
   if (can_cache) {
     cdid_set_if_chunk_meta(backend, B, links, pre, isTRUE(augmented), cache_tag)
     if (!is.null(c_env) && !is.null(env_key)) assign(env_key, pre, envir = c_env)

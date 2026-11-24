@@ -2670,7 +2670,7 @@ evaluate_augmented_layout_if_chunk <- function(backend, reader, rows, links, sca
   lay <- backend$layout; st <- reader$state
   pre <- augmented_if_budget(backend, length(rows), links, FALSE)
   map <- chained_reference_layout_rows(lay, as.integer(rows))
-  BL <- backend$control$max_chunk_rows
+  BL <- if (is.null(pre$layout_batch_rows)) backend$control$max_chunk_rows else pre$layout_batch_rows
   pair_reader <- function(r_sub, pair, read_outcomes = TRUE) cp04_pair_rows(reader, r_sub, pair, read_outcomes)
   phi_l <- matrix(0, length(map$rows), length(links))
   if (length(map$rows)) for (s0 in seq.int(1L, length(map$rows), by = BL)) {

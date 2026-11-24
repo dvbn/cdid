@@ -345,8 +345,12 @@ testthat::test_that("a dated batch just above the core size preserves the previo
   old <- env(fit, n, links, FALSE, augmented = TRUE, plan_rows = TRUE)
   current <- env(fit, n, links, FALSE, augmented = TRUE)
   testthat::expect_identical(current$scratch, old$scratch)
-  testthat::expect_identical(current$stage1_forward, old$stage1_forward)
-  testthat::expect_identical(current$score_cache, old$score_cache)
+  testthat::expect_equal(current$layout_batch_rows, 62)
+  testthat::expect_equal(ceiling(n * copies / current$layout_batch_rows), 2)
+  evaluate <- rap_ns("evaluate_augmented_if_chunk")
+  full <- evaluate(fit, seq_len(n), links)$phi
+  split <- rbind(evaluate(fit, 1:16, links)$phi, evaluate(fit, 17:32, links)$phi)
+  testthat::expect_equal(full, split, tolerance = 1e-12)
   spare <- fit$control$max_matrix_entries - fit$accounting$owned_entries -
     fit$accounting$borrowed_entries - old$output - old$scratch
   pre <- rap_ns("cp04_preflight_links")(fit, links, retained = spare, chunk_rows = n)
