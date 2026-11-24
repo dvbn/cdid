@@ -1573,8 +1573,10 @@ selection_if_budget <- function(backend, B, pair_cohort_ids, probes = NULL, deta
   max_bytes <- frame$id_byte_metadata$max
   metadata <- 8192 + 1024 * (length(backend$blocks) + length(backend$cells) + n_a) +
     n_probes * (backend$design_spec$d_s + 1024) + B * max_bytes
-  output <- B * (widths + 16) + metadata
-  scratch <- 32 * B * (widths + backend$design_spec$d + 8) +
+  output_width <- widths + 16
+  scratch_width <- 32 * (widths + backend$design_spec$d + 8)
+  output <- B * output_width + metadata
+  scratch <- B * scratch_width +
     64 * (backend$design_spec$d_s + 2)^2 + metadata
   retained <- backend$accounting$owned_entries + backend$accounting$borrowed_entries
   log_b <- 1 + ceiling(log2(st$N + 1))
@@ -1585,6 +1587,7 @@ selection_if_budget <- function(backend, B, pair_cohort_ids, probes = NULL, deta
   work <- B * per_row_work + target_scan + 64 * metadata
   cp04_budget(ctrl, retained, scratch, work, output, "selection IF chunk")
   list(output = output, scratch = scratch, work = work,
+       peak_per_row = output_width + scratch_width + 2 * max_bytes,
        active_blocks = active_blocks, active_cells = active_cells)
 }
 

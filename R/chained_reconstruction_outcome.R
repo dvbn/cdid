@@ -242,15 +242,11 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
   # A dated reader folds every layout row, but runs only one core batch at
   # a time. The outer map, full phi and fold copies remain live. Charge a
   # separate allowance for a forward solve in addition to the core scratch.
-  extra_cache <- if (layout_batches) 32 * core_rows * nl else 0
-  forward_funding <- if (layout_batches) 32 * core_rows * nl + extra_cache else NULL
-  stage1_forward <- reconstruction_stage1_forward_plan(backend, B, sets$gids, X_F, nl, details,
-    funding_entries = forward_funding)
-  score_cache <- reconstruction_score_cache_plan(backend, B, sets$cids, X_F, nl,
-    reserved_entries = stage1_forward$entries, funding_entries = forward_funding)
-  scratch <- maps + output + 2 * operator_peak + 16 * core_rows * (3 * J + length(backend$design_columns) +
-    5 * nt * pt + 4 * nl + 12 * (max(c(0, local_p)) + 1) + nu + nz + 24) +
+  core_width <- 16 * (3 * J + length(backend$design_columns) + 5 * nt * pt +
+    4 * nl + 12 * (max(c(0, local_p)) + 1) + nu + nz + 24)
+  scratch <- maps + output + 2 * operator_peak + core_rows * core_width +
     64 * nc_all * (p + 2) + 128 * ((p + 2)^2 + (pt + 2)^2)
+  forward_funding <- NULL
   work <- 128 * maps + 128 * B * ((nc + 1) * (p + 2)^2 *
     (1 + ceiling(log2(st$n_A + 1))) + (sum(local_p + 1) + 2 * nl) * (adjoint + nc * (p + 2)) +
     nt * (pt + 2) * (pt + J + 4) + J + nl * (p + pt + 8) + (nz + nb + 2 * nl) * (nu + 4))
@@ -259,9 +255,21 @@ reconstruction_if_envelope <- function(backend, B, links, details, augmented = F
     scratch <- scratch + sp$output + sp$scratch
     work <- work + sp$work * ceiling(B / core_rows)
     if (layout_batches) {
-      scratch <- scratch + 8 * B * (nl + 16) + extra_cache
+      # Compare two valid reservations above the same core. The original
+      # strategy charges every extra row at the full per-row rate. The
+      # batched strategy reserves the fold and extra cache instead. Near
+      # the boundary even a single extra row must remain admissible.
+      old_extra <- (B - core_rows) * (core_width + sp$peak_per_row)
+      extra_cache <- 32 * core_rows * nl
+      batch_extra <- 8 * B * (nl + 16) + extra_cache
+      scratch <- scratch + min(old_extra, batch_extra)
+      if (batch_extra <= old_extra) forward_funding <- 32 * core_rows * nl + extra_cache
     }
   }
+  stage1_forward <- reconstruction_stage1_forward_plan(backend, B, sets$gids, X_F, nl, details,
+    funding_entries = forward_funding)
+  score_cache <- reconstruction_score_cache_plan(backend, B, sets$cids, X_F, nl,
+    reserved_entries = stage1_forward$entries, funding_entries = forward_funding)
   pre <- c(sets, list(output = output, scratch = scratch, work = work, score_cache = score_cache,
     stage1_forward = stage1_forward))
   if (can_cache) {
