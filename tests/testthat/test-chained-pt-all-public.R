@@ -119,6 +119,17 @@ pt_post_equal <- function(a,b) {
     for (nm in c("if_fixed_full","if_share_full","se_fixed_shares_only")) {
       if (nyt_simple && identical(nm, "if_fixed_full")) {
         expect_true(pt_simple_leaf_num_ok(x$chained[[nm]], y$chained[[nm]]), info=type)
+      } else if (nyt_simple && identical(nm, "se_fixed_shares_only")) {
+        # The norm of the fixed-share influence vector can round differently
+        # when changing the reporting baseline changes the matrix layout.
+        expect_true(pt_simple_leaf_num_ok(x$chained[[nm]], y$chained[[nm]],
+                                          tol = 1e-10, entries = 1L))
+        for (agg in list(x, y)) {
+          u <- as.vector(agg$chained$if_fixed_full)
+          reference_se <- sqrt(sum((u - mean(u))^2)) / length(u)
+          expect_true(pt_simple_leaf_num_ok(unname(agg$chained[[nm]]), reference_se,
+                                            tol = 1e-10, entries = 1L))
+        }
       } else {
         expect_identical(x$chained[[nm]],y$chained[[nm]],info=type)
       }
